@@ -829,7 +829,19 @@ function renderSupplierTable() {
 
 async function deleteSupplier(id) {
     if (!confirm('确定要删除该供应商吗？')) return;
-    alert('功能开发中');
+
+    try {
+        const res = await fetch(`/api/suppliers/${id}`, {method: 'DELETE'});
+        const data = await res.json();
+        if (data.success) {
+            alert('删除成功');
+            loadSuppliers();
+        } else {
+            alert(data.message);
+        }
+    } catch (e) {
+        alert('删除失败');
+    }
 }
 
 document.getElementById('supplierForm').addEventListener('submit', async (e) => {

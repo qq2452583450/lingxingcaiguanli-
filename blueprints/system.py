@@ -177,6 +177,28 @@ def create_supplier():
     return jsonify({'success': True, 'id': supplier_id})
 
 
+@system_bp.route('/suppliers/<int:supplier_id>', methods=['DELETE'])
+def delete_supplier(supplier_id):
+    """删除供应商"""
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # 检查是否有材料引用该供应商
+    cursor.execute("SELECT COUNT(*) FROM materials WHERE default_supplier_id = ?", (supplier_id,))
+    if cursor.fetchone()[0] > 0:
+        conn.close()
+        return jsonify({'success': False, 'message': '该供应商已被材料引用，无法删除'})
+
+    cursor.execute("DELETE FROM suppliers WHERE id = ?", (supplier_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
 # ==================== 客户管理 ====================
 
 @system_bp.route('/customers', methods=['GET'])
