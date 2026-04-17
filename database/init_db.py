@@ -497,10 +497,11 @@ def insert_default_data(conn):
     cursor.execute("SELECT id FROM roles WHERE role_name = '系统管理员'")
     admin_role_id = cursor.fetchone()[0]
 
-    # 插入管理员账号
+    # 插入管理员账号（如果未设置环境变量密码，使用临时密码）
+    admin_password = config.DEFAULT_ADMIN["password"] or "admin123"  # 临时密码，登录后必须修改
     cursor.execute(
         "INSERT INTO users (username, password, real_name, role_id, is_active, create_time) VALUES (?, ?, ?, ?, ?, ?)",
-        (config.DEFAULT_ADMIN["username"], hash_password(config.DEFAULT_ADMIN["password"]),
+        (config.DEFAULT_ADMIN["username"], hash_password(admin_password),
          config.DEFAULT_ADMIN["real_name"], admin_role_id, 1, now)
     )
 

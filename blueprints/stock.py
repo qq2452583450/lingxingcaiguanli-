@@ -5,6 +5,7 @@ from flask import Blueprint, request, jsonify, session
 import sqlite3
 import config
 from datetime import datetime
+from html import escape
 
 stock_bp = Blueprint('stock', __name__, url_prefix='/api')
 
@@ -80,9 +81,9 @@ def create_stock_in():
                 warehouse_id, operator_id, in_time, status, create_time, remark
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            order_no, data.get('source_type', '采购入库'), data.get('related_order_no', ''),
+            order_no, escape(data.get('source_type', '采购入库')), escape(data.get('related_order_no', '')),
             data.get('supplier_id'), data.get('warehouse_id', 1),
-            user['id'], now, '已入库', now, data.get('remark', '')
+            user['id'], now, '已入库', now, escape(data.get('remark', ''))
         ))
         order_id = cursor.lastrowid
 
@@ -164,8 +165,8 @@ def create_stock_out():
                 operator_id, out_time, create_time, remark
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            order_no, data.get('out_type', '领用'), data.get('customer_name', ''),
-            data.get('warehouse_id', 1), user['id'], now, now, data.get('remark', '')
+            order_no, escape(data.get('out_type', '领用')), escape(data.get('customer_name', '')),
+            data.get('warehouse_id', 1), user['id'], now, now, escape(data.get('remark', ''))
         ))
         order_id = cursor.lastrowid
 
@@ -177,11 +178,14 @@ def create_stock_out():
             """, (order_id, d.get('material_id'), d.get('quantity', 0),
                   d.get('unit_price', 0), amount))
 
-            # 扣减库存
+            # 扣减库存（防止负数）
             cursor.execute("""
                 UPDATE inventory SET quantity = quantity - ?, update_time = ?
-                WHERE material_id = ? AND warehouse_id = ?
-            """, (d.get('quantity', 0), now, d.get('material_id'), data.get('warehouse_id', 1)))
+                WHERE material_id = ? AND warehouse_id = ? AND quantity >= ?
+            """, (d.get('quantity', 0), now, d.get('material_id'), data.get('warehouse_id', 1), d.get('quantity', 0)))
+            if cursor.rowcount == 0:
+                # 库存不足，回滚
+                raise Exception(f"库存不足：材料ID {d.get('material_id')} 在仓库 {data.get('warehouse_id', 1)} 库存不足")
 
         conn.commit()
         conn.close()

@@ -5,6 +5,7 @@ from flask import Blueprint, request, jsonify, session
 import sqlite3
 import config
 from datetime import datetime
+from html import escape
 
 material_bp = Blueprint('materials', __name__, url_prefix='/api')
 
@@ -90,9 +91,9 @@ def create_material():
             default_supplier_id, inventory_min, inventory_max, create_time
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        material_code, data.get('material_name'), data.get('specification'),
+        material_code, escape(data.get('material_name', '')), escape(data.get('specification', '')),
         data.get('unit_id'), tax_price, tax_exempt_price, data.get('freight', 0),
-        data.get('remark', ''), data.get('default_supplier_id'),
+        escape(data.get('remark', '')), data.get('default_supplier_id'),
         data.get('inventory_min', 0), data.get('inventory_max', 0), now
     ))
 
@@ -120,8 +121,8 @@ def update_material(material_id):
             default_supplier_id = ?, inventory_min = ?, inventory_max = ?
         WHERE id = ?
     """, (
-        data.get('material_name'), data.get('specification'), data.get('unit_id'),
-        tax_price, tax_exempt_price, data.get('freight', 0), data.get('remark', ''),
+        escape(data.get('material_name', '')), escape(data.get('specification', '')), data.get('unit_id'),
+        tax_price, tax_exempt_price, data.get('freight', 0), escape(data.get('remark', '')),
         data.get('default_supplier_id'), data.get('inventory_min', 0),
         data.get('inventory_max', 0), material_id
     ))

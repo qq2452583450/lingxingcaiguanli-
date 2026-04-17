@@ -6,4 +6,4 @@ from .order_no_generator import (
     generate_material_code
 )
 from .password_helper import hash_password, verify_password
-from .chinese_currency_helper import number_to_chinese_currency
+from .chinese_currency_helper import number_to_chinese_currency, amount_to_chinese

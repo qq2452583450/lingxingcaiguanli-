@@ -37,10 +37,10 @@ DEFAULT_ROLES = [
     {"name": "销售员", "permissions": "material.view,sales.add,sales.view,customer.view"},
 ]
 
-# 预置账号
+# 预置账号（密码通过环境变量 ADMIN_PASSWORD 设置，默认为空，首次登录需修改）
 DEFAULT_ADMIN = {
     "username": "admin",
-    "password": "888888",
+    "password": os.environ.get('ADMIN_PASSWORD', ''),
     "real_name": "系统管理员",
     "role": "系统管理员"
 }

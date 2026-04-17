@@ -3,8 +3,53 @@
 """
 from flask import Blueprint, request, jsonify, session
 from helpers import verify_password
+from datetime import datetime, timedelta
+import threading
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api')
+
+# 登录尝试追踪（线程安全）
+_login_attempts = {}
+_attempts_lock = threading.Lock()
+MAX_ATTEMPTS = 5
+LOCKOUT_MINUTES = 15
+
+
+def _check_rate_limit(ip):
+    """检查IP是否被锁定"""
+    with _attempts_lock:
+        if ip in _login_attempts:
+            attempts, lock_until = _login_attempts[ip]
+            if attempts >= MAX_ATTEMPTS:
+                if datetime.now() < lock_until:
+                    remaining = (lock_until - datetime.now()).seconds // 60 + 1
+                    return False, remaining
+                else:
+                    # 锁定已过期，重置
+                    del _login_attempts[ip]
+        return True, 0
+
+
+def _record_failed_attempt(ip):
+    """记录失败尝试"""
+    with _attempts_lock:
+        if ip not in _login_attempts:
+            _login_attempts[ip] = (1, None)
+        else:
+            attempts, _ = _login_attempts[ip]
+            _login_attempts[ip] = (attempts + 1, None)
+
+            # 如果达到最大尝试次数，锁定账号
+            if attempts + 1 >= MAX_ATTEMPTS:
+                lock_until = datetime.now() + timedelta(minutes=LOCKOUT_MINUTES)
+                _login_attempts[ip] = (MAX_ATTEMPTS, lock_until)
+
+
+def _reset_attempts(ip):
+    """重置登录尝试（成功登录后）"""
+    with _attempts_lock:
+        if ip in _login_attempts:
+            del _login_attempts[ip]
 
 
 def get_db():
@@ -21,6 +66,14 @@ def get_db():
 @auth_bp.route('/login', methods=['POST'])
 def login():
     """用户登录"""
+    # 获取客户端IP
+    ip = request.remote_addr or 'unknown'
+
+    # 检查是否被锁定
+    allowed, remaining = _check_rate_limit(ip)
+    if not allowed:
+        return jsonify({'success': False, 'message': f'登录失败次数过多，请 {remaining} 分钟后再试'})
+
     data = request.json
     username = data.get('username', '')
     password = data.get('password', '')
@@ -41,13 +94,21 @@ def login():
     row = cursor.fetchone()
 
     if not row:
+        _record_failed_attempt(ip)
         return jsonify({'success': False, 'message': '用户名或密码错误'})
 
     if not row['is_active']:
         return jsonify({'success': False, 'message': '账号已被禁用'})
 
     if not verify_password(password, row['password']):
+        _record_failed_attempt(ip)
+        allowed, remaining = _check_rate_limit(ip)
+        if not allowed:
+            return jsonify({'success': False, 'message': f'登录失败次数过多，请 {remaining} 分钟后再试'})
         return jsonify({'success': False, 'message': '用户名或密码错误'})
+
+    # 登录成功，重置尝试次数
+    _reset_attempts(ip)
 
     user = {
         'id': row['id'],

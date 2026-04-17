@@ -6,6 +6,7 @@ import sqlite3
 import config
 from datetime import datetime
 from html import escape
+from helpers import amount_to_chinese
 
 
 def get_db():
@@ -27,50 +28,6 @@ def generate_reconciliation_no():
     count = cursor.fetchone()[0] + 1
     conn.close()
     return f'DZD-{year}.{count}'
-
-
-def amount_to_chinese(amount):
-    """金额转大写"""
-    if amount is None:
-        amount = 0
-    amount = round(float(amount), 2)
-    integer_part = int(amount)
-    decimal_part = round((amount - integer_part) * 100)
-
-    chinese_digits = ['零', '壹', '贰', '叁', '肆', '伍', '陆', '柒', '捌', '玖']
-    chinese_units = ['', '拾', '佰', '仟', '万', '拾', '佰', '仟', '亿']
-
-    if integer_part == 0:
-        result = '零'
-    else:
-        result = ''
-        str_int = str(integer_part)
-        length = len(str_int)
-        for i, digit in enumerate(str_int):
-            digit_int = int(digit)
-            unit_index = length - i - 1
-            if digit_int != 0:
-                result += chinese_digits[digit_int] + chinese_units[unit_index]
-            else:
-                if unit_index % 4 == 0 and result and result[-1] != '零' and result[-1] != '万' and result[-1] != '亿':
-                    if length > 4 and (length - i) <= length % 4 or result.endswith('亿'):
-                        pass
-                    else:
-                        result += '零'
-                elif result and result[-1] != '零' and result[-1] != '万' and result[-1] != '亿':
-                    result += '零'
-
-        result = result.rstrip('零')
-        if result.endswith('零'):
-            result = result[:-1]
-
-    if decimal_part == 0:
-        return f"{result}元整"
-    else:
-        result += f"元{chinese_digits[decimal_part // 10] if decimal_part >= 10 else '零'}{chinese_digits[decimal_part % 10 if decimal_part >= 10 else decimal_part]}角"
-        if decimal_part % 10 == 0:
-            result = result.rstrip('零角') + '整'
-        return result
 
 
 reconciliation_bp = Blueprint('reconciliation', __name__, url_prefix='/api')

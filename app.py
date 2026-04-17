@@ -9,7 +9,9 @@ import config
 
 app = Flask(__name__, static_folder='static')
 CORS(app, supports_credentials=True)
-app.secret_key = os.environ.get('SECRET_KEY', 'lingxingcai_secret_key_2024')
+app.secret_key = os.environ.get('SECRET_KEY')
+if not app.secret_key:
+    raise ValueError("必须设置 SECRET_KEY 环境变量")
 
 # ==================== 注册蓝图 ====================
 from blueprints import (
@@ -68,4 +70,4 @@ if __name__ == '__main__':
     print("零星材管理系统 Web版")
     print("访问地址: http://localhost:5000")
     print("=" * 50)
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=os.environ.get('FLASK_DEBUG', 'False').lower() == 'true')

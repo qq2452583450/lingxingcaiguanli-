@@ -6,6 +6,7 @@ import sqlite3
 import config
 from datetime import datetime
 from helpers import hash_password
+from html import escape
 
 system_bp = Blueprint('system', __name__, url_prefix='/api')
 
@@ -44,6 +45,10 @@ def create_user():
     if not user:
         return jsonify({'success': False, 'message': '未登录'})
 
+    # 仅管理员可创建用户
+    if user.get('role_name') != '系统管理员':
+        return jsonify({'success': False, 'message': '仅管理员可创建用户'})
+
     conn = get_db()
     cursor = conn.cursor()
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -63,7 +68,7 @@ def create_user():
             INSERT INTO users (username, password, real_name, role_id, is_active, create_time)
             VALUES (?, ?, ?, ?, ?, ?)
         """, (
-            data.get('username'), hashed, data.get('real_name'),
+            escape(data.get('username', '')), hashed, escape(data.get('real_name', '')),
             data.get('role_id'), data.get('is_active', 1), now
         ))
         user_id = cursor.lastrowid
@@ -80,6 +85,12 @@ def create_user():
 def update_user(user_id):
     """更新用户"""
     data = request.json
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+    if user.get('role_name') != '系统管理员':
+        return jsonify({'success': False, 'message': '仅管理员可修改用户'})
+
     conn = get_db()
     cursor = conn.cursor()
 
@@ -89,13 +100,13 @@ def update_user(user_id):
         cursor.execute("""
             UPDATE users SET username = ?, real_name = ?, role_id = ?,
             is_active = ?, password = ? WHERE id = ?
-        """, (data.get('username'), data.get('real_name'), data.get('role_id'),
+        """, (escape(data.get('username', '')), escape(data.get('real_name', '')), data.get('role_id'),
               data.get('is_active', 1), hashed, user_id))
     else:
         cursor.execute("""
             UPDATE users SET username = ?, real_name = ?, role_id = ?,
             is_active = ? WHERE id = ?
-        """, (data.get('username'), data.get('real_name'), data.get('role_id'),
+        """, (escape(data.get('username', '')), escape(data.get('real_name', '')), data.get('role_id'),
               data.get('is_active', 1), user_id))
 
     conn.commit()
@@ -106,6 +117,12 @@ def update_user(user_id):
 @system_bp.route('/users/<int:user_id>', methods=['DELETE'])
 def delete_user(user_id):
     """删除用户"""
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+    if user.get('role_name') != '系统管理员':
+        return jsonify({'success': False, 'message': '仅管理员可删除用户'})
+
     conn = get_db()
     cursor = conn.cursor()
 
@@ -148,6 +165,10 @@ def get_suppliers():
 @system_bp.route('/suppliers', methods=['POST'])
 def create_supplier():
     """创建供应商"""
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
     data = request.json
     conn = get_db()
     cursor = conn.cursor()
@@ -156,9 +177,9 @@ def create_supplier():
     cursor.execute("""
         INSERT INTO suppliers (supplier_name, contact, phone, address, remark, create_time)
         VALUES (?, ?, ?, ?, ?, ?)
-    """, (data.get('supplier_name'), data.get('contact', ''),
-          data.get('phone', ''), data.get('address', ''),
-          data.get('remark', ''), now))
+    """, (escape(data.get('supplier_name', '')), escape(data.get('contact', '')),
+          escape(data.get('phone', '')), escape(data.get('address', '')),
+          escape(data.get('remark', '')), now))
     supplier_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -181,6 +202,10 @@ def get_customers():
 @system_bp.route('/customers', methods=['POST'])
 def create_customer():
     """创建客户"""
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
     data = request.json
     conn = get_db()
     cursor = conn.cursor()
@@ -194,9 +219,9 @@ def create_customer():
     cursor.execute("""
         INSERT INTO customers (customer_code, customer_name, address, phone, contact, initial_balance, remark, create_time)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (customer_code, data.get('customer_name'), data.get('address', ''),
-          data.get('phone', ''), data.get('contact', ''),
-          data.get('initial_balance', 0), data.get('remark', ''), now))
+    """, (customer_code, escape(data.get('customer_name', '')), escape(data.get('address', '')),
+          escape(data.get('phone', '')), escape(data.get('contact', '')),
+          data.get('initial_balance', 0), escape(data.get('remark', '')), now))
     customer_id = cursor.lastrowid
     conn.commit()
     conn.close()
