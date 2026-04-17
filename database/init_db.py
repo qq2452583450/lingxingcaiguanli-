@@ -96,6 +96,11 @@ def init_database():
             FOREIGN KEY (default_supplier_id) REFERENCES suppliers(id)
         )
     """)
+    # 添加税率列（如果不存在）- 使用try-except处理已存在列的情况
+    try:
+        cursor.execute("ALTER TABLE materials ADD COLUMN tax_rate REAL DEFAULT 0.01")
+    except Exception:
+        pass  # 列已存在，忽略错误
 
     # 材料价格历史表
     cursor.execute("""

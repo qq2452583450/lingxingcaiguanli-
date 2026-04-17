@@ -2,20 +2,11 @@
 系统设置蓝图（用户/角色/供应商/客户/单位/项目）
 """
 from flask import Blueprint, request, jsonify, session
-import sqlite3
-import config
 from datetime import datetime
-from helpers import hash_password
+from helpers import hash_password, get_db
 from html import escape
 
 system_bp = Blueprint('system', __name__, url_prefix='/api')
-
-
-def get_db():
-    """获取数据库连接"""
-    conn = sqlite3.connect(config.DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 # ==================== 用户管理 ====================

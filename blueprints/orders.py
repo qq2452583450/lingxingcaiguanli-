@@ -2,11 +2,9 @@
 采购订单蓝图
 """
 from flask import Blueprint, request, jsonify, session, make_response
-import sqlite3
-import config
 from datetime import datetime
 from html import escape
-from helpers import amount_to_chinese
+from helpers import amount_to_chinese, get_db
 
 order_bp = Blueprint('orders', __name__, url_prefix='/api')
 

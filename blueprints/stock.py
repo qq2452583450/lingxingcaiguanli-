@@ -2,19 +2,11 @@
 库存蓝图（入库/出库）
 """
 from flask import Blueprint, request, jsonify, session
-import sqlite3
-import config
 from datetime import datetime
 from html import escape
+from helpers import get_db
 
 stock_bp = Blueprint('stock', __name__, url_prefix='/api')
-
-
-def get_db():
-    """获取数据库连接"""
-    conn = sqlite3.connect(config.DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 def generate_stock_in_no():

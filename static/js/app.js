@@ -2,11 +2,20 @@
 let currentUser = null;
 let materials = [];
 let suppliers = [];
-let customers = [];
 let units = [];
 let inquiryDetails = [];
-let saleDetails = [];
 let stockInDetails = [];
+
+// ==================== 材料列表分页/虚拟滚动状态 ====================
+const MATERIAL_PAGE_SIZE = 50;
+let materialState = {
+    keyword: '',
+    page: 1,
+    total: 0,
+    totalPages: 0,
+    loading: false,
+    allLoaded: false
+};
 
 // ==================== 初始化 ====================
 
@@ -15,6 +24,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (typeof lucide !== 'undefined') {
         lucide.createIcons();
     }
+    // 绑定材料搜索防抖
+    bindMaterialSearch();
+    // 初始化材料列表虚拟滚动
+    initMaterialVirtualScroll();
     checkLogin();
 });
 
@@ -47,6 +60,11 @@ async function login() {
             if (typeof lucide !== 'undefined') {
                 lucide.createIcons();
             }
+            // 登录后清除字典缓存，确保获取最新数据
+            clearDictCache();
+            // 绑定材料搜索和虚拟滚动
+            bindMaterialSearch();
+            initMaterialVirtualScroll();
             loadHome();
         } else {
             alert(data.message);
@@ -97,8 +115,6 @@ function showModule(module) {
         case 'stock_in': loadStockIn(); break;
         case 'stock_out': loadStockOut(); break;
         case 'inventory': loadInventory(); break;
-        case 'sales': loadSales(); break;
-        case 'customer': loadCustomers(); break;
         case 'supplier': loadSuppliers(); break;
         case 'reconciliation': loadReconciliation(); break;
         case 'system': loadUsers(); break;
@@ -115,10 +131,8 @@ async function loadHome() {
             document.getElementById('statPending').textContent = data.data.pending;
             document.getElementById('statWarning').textContent = data.data.warning;
             document.getElementById('statTodayIn').textContent = data.data.today_in;
-            document.getElementById('statTodayOut').textContent = data.data.today_out;
             document.getElementById('statMaterials').textContent = data.data.total_materials;
             document.getElementById('statSuppliers').textContent = data.data.total_suppliers;
-            document.getElementById('statCustomers').textContent = data.data.total_customers;
         }
     } catch (e) {
         console.error('加载首页数据失败', e);
@@ -127,30 +141,102 @@ async function loadHome() {
 
 // ==================== 材料管理 ====================
 
+// 防抖函数
+function debounce(fn, delay = 300) {
+    let timer = null;
+    return function(...args) {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => fn.apply(this, args), delay);
+    };
+}
+
+// 初始化材料列表虚拟滚动
+function initMaterialVirtualScroll() {
+    const container = document.getElementById('materialTableContainer');
+    if (!container) return;
+
+    container.addEventListener('scroll', debounce(function() {
+        const { scrollTop, scrollHeight, clientHeight } = container;
+        // 滚动到底部附近（距离底部100px）时加载更多
+        if (scrollHeight - scrollTop - clientHeight < 100 && !materialState.loading && !materialState.allLoaded) {
+            loadMoreMaterials();
+        }
+    }, 200));
+}
+
+// 加载材料（首次或搜索）
 async function loadMaterials() {
     const keyword = document.getElementById('materialSearch')?.value || '';
+    materialState.keyword = keyword;
+    materialState.page = 1;
+    materialState.allLoaded = false;
+    materials = [];
+
+    const tbody = document.getElementById('materialTable');
+    if (tbody) {
+        tbody.innerHTML = '<tr><td colspan="9" class="loading">加载中...</td></tr>';
+    }
+
     try {
-        const res = await fetch(`/api/materials?keyword=${encodeURIComponent(keyword)}`);
+        const res = await fetch(`/api/materials?keyword=${encodeURIComponent(keyword)}&page=1&page_size=${MATERIAL_PAGE_SIZE}`);
         const data = await res.json();
         if (data.success) {
-            materials = data.data;
+            materials = data.data || [];
+            materialState.total = data.total || 0;
+            materialState.totalPages = data.total_pages || 1;
+            materialState.allLoaded = materials.length >= materialState.total;
+            renderMaterialTable();
+            updateMaterialStats();
+        }
+    } catch (e) {
+        console.error('加载材料失败', e);
+        if (tbody) {
+            tbody.innerHTML = '<tr><td colspan="9" class="loading">加载失败</td></tr>';
+        }
+    }
+}
+
+// 加载更多材料（触底懒加载）
+async function loadMoreMaterials() {
+    if (materialState.loading || materialState.allLoaded) return;
+    materialState.loading = true;
+
+    const nextPage = materialState.page + 1;
+    try {
+        const res = await fetch(`/api/materials?keyword=${encodeURIComponent(materialState.keyword)}&page=${nextPage}&page_size=${MATERIAL_PAGE_SIZE}`);
+        const data = await res.json();
+        if (data.success && data.data) {
+            materials = materials.concat(data.data || []);
+            materialState.page = nextPage;
+            materialState.allLoaded = materials.length >= data.total;
             renderMaterialTable();
         }
     } catch (e) {
-        alert('加载材料失败');
+        console.error('加载更多材料失败', e);
+    } finally {
+        materialState.loading = false;
     }
 }
 
 function renderMaterialTable() {
     const tbody = document.getElementById('materialTable');
+    if (!tbody) return;
+
+    if (materials.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="11" class="loading">暂无数据</td></tr>';
+        return;
+    }
+
     tbody.innerHTML = materials.map(m => `
         <tr>
-            <td>${m.material_code}</td>
-            <td>${m.material_name}</td>
-            <td>${m.specification || '-'}</td>
-            <td>${m.unit_name || '-'}</td>
+            <td>${escapeHtml(m.material_code)}</td>
+            <td>${escapeHtml(m.material_name)}</td>
+            <td>${escapeHtml(m.specification || '-')}</td>
+            <td>${escapeHtml(m.unit_name || '-')}</td>
+            <td>${((m.tax_rate || 0.01) * 100).toFixed(0)}%</td>
             <td>¥${(m.tax_price || 0).toFixed(2)}</td>
             <td>¥${(m.tax_exempt_price || 0).toFixed(2)}</td>
+            <td>${escapeHtml(m.supplier_name || '-')}</td>
             <td>${m.inventory_min || 0}</td>
             <td>${m.inventory_max || 0}</td>
             <td>
@@ -159,6 +245,37 @@ function renderMaterialTable() {
             </td>
         </tr>
     `).join('');
+
+    // 如果还有更多数据，添加加载提示
+    if (!materialState.allLoaded) {
+        tbody.insertAdjacentHTML('beforeend', '<tr class="load-more-trigger"><td colspan="9" style="text-align:center;padding:10px;color:#999;">滚动加载更多...</td></tr>');
+    }
+}
+
+function updateMaterialStats() {
+    const statsEl = document.getElementById('materialStats');
+    if (statsEl) {
+        statsEl.textContent = `共 ${materialState.total} 条，当前显示 ${materials.length} 条`;
+    }
+}
+
+// HTML转义防止XSS
+function escapeHtml(str) {
+    if (str == null) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+// 带防抖的搜索
+const debouncedSearch = debounce(() => loadMaterials(), 300);
+
+// 搜索事件绑定（在DOMContentLoaded后调用）
+function bindMaterialSearch() {
+    const searchInput = document.getElementById('materialSearch');
+    if (searchInput) {
+        searchInput.addEventListener('input', debouncedSearch);
+    }
 }
 
 async function openMaterialModal(id = null) {
@@ -171,6 +288,7 @@ async function openMaterialModal(id = null) {
             document.getElementById('materialName').value = m.material_name;
             document.getElementById('materialSpec').value = m.specification || '';
             document.getElementById('materialTaxPrice').value = m.tax_price || 0;
+            document.getElementById('materialTaxRate').value = m.tax_rate || 0.01;
             document.getElementById('materialFreight').value = m.freight || 0;
             document.getElementById('materialMin').value = m.inventory_min || 0;
             document.getElementById('materialMax').value = m.inventory_max || 0;
@@ -218,6 +336,7 @@ document.getElementById('materialForm').addEventListener('submit', async (e) => 
         specification: document.getElementById('materialSpec').value,
         unit_id: document.getElementById('materialUnit').value || null,
         tax_price: parseFloat(document.getElementById('materialTaxPrice').value) || 0,
+        tax_rate: parseFloat(document.getElementById('materialTaxRate').value) || 0.01,
         freight: parseFloat(document.getElementById('materialFreight').value) || 0,
         default_supplier_id: document.getElementById('materialSupplier').value || null,
         inventory_min: parseFloat(document.getElementById('materialMin').value) || 0,
@@ -499,13 +618,7 @@ async function printOrderApproval(id) {
 
 // 打开订单模态框
 async function openOrderModal() {
-    await loadUnitsAndSuppliers();
-    // 加载材料数据
-    try {
-        const matRes = await fetch('/api/materials');
-        const matData = await matRes.json();
-        materials = matData.success ? matData.data : [];
-    } catch (e) {}
+    await loadUnitsAndSuppliers();  // loadUnitsAndSuppliers already loads first 500 materials
     orderDetails = [];
     renderOrderDetails();
     openModal('modal-order');
@@ -602,36 +715,6 @@ document.getElementById('orderForm').addEventListener('submit', async (e) => {
     }
 });
 
-// ==================== 销售单 ====================
-
-async function loadSales() {
-    try {
-        const res = await fetch('/api/sales');
-        const data = await res.json();
-        if (data.success) {
-            renderSalesTable(data.data);
-        }
-    } catch (e) {
-        alert('加载销售单失败');
-    }
-}
-
-function renderSalesTable(sales) {
-    const tbody = document.getElementById('salesTable');
-    tbody.innerHTML = sales.map(s => `
-        <tr>
-            <td>${s.order_no}</td>
-            <td>${s.order_type}</td>
-            <td>${s.customer_name || '-'}</td>
-            <td>¥${(s.total_amount || 0).toFixed(2)}</td>
-            <td>¥${(s.received_amount || 0).toFixed(2)}</td>
-            <td><span class="status ${s.payment_status === '已结清' ? 'approved' : 'pending'}">${s.payment_status}</span></td>
-            <td><button class="btn btn-secondary" onclick="viewSale(${s.id})">查看</button>
-                <button class="btn btn-primary" onclick="printSale(${s.id})">打印</button></td>
-        </tr>
-    `).join('');
-}
-
 // ==================== 入库管理 ====================
 
 async function loadStockIn() {
@@ -715,69 +798,6 @@ function renderInventoryTable(inventory) {
         </tr>
     `).join('') || '<tr><td colspan="7" class="loading">暂无数据</td></tr>';
 }
-
-// ==================== 客户管理 ====================
-
-async function loadCustomers() {
-    try {
-        const res = await fetch('/api/customers');
-        const data = await res.json();
-        if (data.success) {
-            customers = data.data;
-            renderCustomerTable();
-        }
-    } catch (e) {
-        alert('加载客户失败');
-    }
-}
-
-function renderCustomerTable() {
-    const tbody = document.getElementById('customerTable');
-    tbody.innerHTML = customers.map(c => `
-        <tr>
-            <td>${c.customer_code}</td>
-            <td>${c.customer_name}</td>
-            <td>${c.contact || '-'}</td>
-            <td>${c.phone || '-'}</td>
-            <td>${c.address || '-'}</td>
-            <td><button class="btn btn-danger" onclick="deleteCustomer(${c.id})">删除</button></td>
-        </tr>
-    `).join('');
-}
-
-async function deleteCustomer(id) {
-    if (!confirm('确定要删除该客户吗？')) return;
-    alert('功能开发中');
-}
-
-document.getElementById('customerForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const body = {
-        customer_name: document.getElementById('customerName').value,
-        contact: document.getElementById('customerContact').value,
-        phone: document.getElementById('customerPhone').value,
-        address: document.getElementById('customerAddress').value,
-        initial_balance: parseFloat(document.getElementById('customerBalance').value) || 0
-    };
-
-    try {
-        const res = await fetch('/api/customers', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(body)
-        });
-        const data = await res.json();
-        if (data.success) {
-            alert('创建成功');
-            closeModal('modal-customer');
-            loadCustomers();
-        } else {
-            alert(data.message);
-        }
-    } catch (e) {
-        alert('创建失败');
-    }
-});
 
 // ==================== 供应商管理 ====================
 
@@ -930,67 +950,101 @@ async function printReconciliation(id) {
     window.open(`/api/reconciliation/${id}/print`, '_blank');
 }
 
+// ==================== 字典数据本地缓存 ====================
+
+const CACHE_TTL = 30 * 60 * 1000; // 30分钟缓存
+
+function getCache(key) {
+    try {
+        const cached = localStorage.getItem(key);
+        if (!cached) return null;
+        const { data, timestamp } = JSON.parse(cached);
+        if (Date.now() - timestamp > CACHE_TTL) {
+            localStorage.removeItem(key);
+            return null;
+        }
+        return data;
+    } catch {
+        return null;
+    }
+}
+
+function setCache(key, data) {
+    try {
+        localStorage.setItem(key, JSON.stringify({ data, timestamp: Date.now() }));
+    } catch (e) {
+        console.warn('缓存写入失败', e);
+    }
+}
+
+function loadCacheOrFetch(key, url) {
+    const cached = getCache(key);
+    if (cached) {
+        return Promise.resolve({ success: true, data: cached, fromCache: true });
+    }
+    return fetch(url).then(res => res.json()).then(data => {
+        if (data.success) {
+            setCache(key, data.data);
+        }
+        return { ...data, fromCache: false };
+    });
+}
+
+// 清除字典缓存（登录后、增删改后调用）
+function clearDictCache() {
+    const keys = ['dict_units', 'dict_suppliers', 'dict_customers', 'dict_roles'];
+    keys.forEach(k => localStorage.removeItem(k));
+}
+
 // ==================== 辅助函数 ====================
 
 async function loadUnitsAndSuppliers() {
     try {
-        const [unitsRes, supRes] = await Promise.all([
-            fetch('/api/units'),
-            fetch('/api/suppliers')
+        // 先加载单位、供应商（走缓存，小数据字典）
+        const [unitsCached, supCached] = await Promise.all([
+            loadCacheOrFetch('dict_units', '/api/units'),
+            loadCacheOrFetch('dict_suppliers', '/api/suppliers')
         ]);
-        const unitsData = await unitsRes.json();
-        const supData = await supRes.json();
 
-        units = unitsData.success ? unitsData.data : [];
-        suppliers = supData.success ? supData.data : [];
+        units = unitsCached.success ? unitsCached.data : [];
+        suppliers = supCached.success ? supCached.data : [];
+
+        // 单独加载材料（不走缓存，确保获取最新数据）
+        let matData = { success: false, data: [] };
+        try {
+            const matRes = await fetch('/api/materials?page=1&page_size=2000');
+            matData = await matRes.json();
+        } catch (e) {
+            console.error('加载材料失败', e);
+        }
+        if (matData.success && matData.data) {
+            materials = matData.data;
+        }
 
         // 填充单位下拉框
         const unitSelect = document.getElementById('materialUnit');
         if (unitSelect) {
-            unitSelect.innerHTML = '<option value="">--请选择--' + units.map(u => `<option value="${u.id}">${u.unit_name}</option>`).join('') + '</option>';
+            unitSelect.innerHTML = '<option value="">--请选择--</option>' + units.map(u => `<option value="${u.id}">${u.unit_name}</option>`).join('');
         }
 
         // 填充供应商下拉框
         const supSelect = document.getElementById('materialSupplier');
         if (supSelect) {
-            supSelect.innerHTML = '<option value="">--请选择--' + suppliers.map(s => `<option value="${s.id}">${s.supplier_name}</option>`).join('') + '</option>';
+            supSelect.innerHTML = '<option value="">--请选择--</option>' + suppliers.map(s => `<option value="${s.id}">${s.supplier_name}</option>`).join('');
         }
 
         const stockInSup = document.getElementById('stockInSupplier');
         if (stockInSup) {
-            stockInSup.innerHTML = '<option value="">--请选择--' + suppliers.map(s => `<option value="${s.id}">${s.supplier_name}</option>`).join('') + '</option>';
+            stockInSup.innerHTML = '<option value="">--请选择--</option>' + suppliers.map(s => `<option value="${s.id}">${s.supplier_name}</option>`).join('');
         }
 
         const orderSup = document.getElementById('orderSupplier');
         if (orderSup) {
-            orderSup.innerHTML = '<option value="">--请选择--' + suppliers.map(s => `<option value="${s.id}">${s.supplier_name}</option>`).join('') + '</option>';
+            orderSup.innerHTML = '<option value="">--请选择--</option>' + suppliers.map(s => `<option value="${s.id}">${s.supplier_name}</option>`).join('');
         }
 
     } catch (e) {
         console.error('加载下拉数据失败', e);
-    }
-}
-
-async function loadMaterialsAndCustomers() {
-    try {
-        const [matRes, custRes] = await Promise.all([
-            fetch('/api/materials'),
-            fetch('/api/customers')
-        ]);
-        const matData = await matRes.json();
-        const custData = await custRes.json();
-
-        materials = matData.success ? matData.data : [];
-        customers = custData.success ? custData.data : [];
-
-        // 填充客户下拉框
-        const custSelect = document.getElementById('saleCustomer');
-        if (custSelect) {
-            custSelect.innerHTML = '<option value="">--请选择--' + customers.map(c => `<option value="${c.id}">${c.customer_name}</option>`).join('') + '</option>';
-        }
-
-    } catch (e) {
-        console.error('加载数据失败', e);
     }
 }
 
@@ -1096,77 +1150,6 @@ document.getElementById('inquiryForm').addEventListener('submit', async (e) => {
     }
 });
 
-// 打开询价模态框时加载数据
-document.getElementById('modal-inquiry').addEventListener('click', async (e) => {
-    if (e.target.id === 'modal-inquiry' || !document.getElementById('inquiryDetails').children.length) {
-        await loadUnitsAndSuppliers();
-        if (inquiryDetails.length === 0) {
-            addInquiryDetail();
-        }
-    }
-});
-
-// ==================== 销售单明细操作 ====================
-
-async function openSaleModal() {
-    await loadMaterialsAndCustomers();
-    openModal('modal-sale');
-}
-
-function addSaleDetail() {
-    saleDetails.push({
-        material_id: '',
-        unit_price: 0,
-        quantity: 1
-    });
-    renderSaleDetails();
-}
-
-function renderSaleDetails() {
-    const tbody = document.getElementById('saleDetails');
-    tbody.innerHTML = saleDetails.map((d, i) => `
-        <tr>
-            <td>
-                <select onchange="updateSaleDetail(${i}, 'material_id', this.value)">
-                    <option value="">--请选择--</option>
-                    ${materials.map(m => `<option value="${m.id}" ${d.material_id == m.id ? 'selected' : ''}>${m.material_code} - ${m.material_name}</option>`).join('')}
-                </select>
-            </td>
-            <td><input type="number" step="0.01" value="${d.unit_price}" onchange="updateSaleDetail(${i}, 'unit_price', this.value)"></td>
-            <td><input type="number" step="0.01" value="${d.quantity}" onchange="updateSaleDetail(${i}, 'quantity', this.value)"></td>
-            <td>¥${((d.unit_price || 0) * (d.quantity || 0)).toFixed(2)}</td>
-            <td><button class="btn btn-danger" onclick="removeSaleDetail(${i})">删除</button></td>
-        </tr>
-    `).join('');
-    updateSaleTotal();
-}
-
-function updateSaleDetail(index, field, value) {
-    if (field === 'material_id') {
-        const m = materials.find(x => x.id == value);
-        saleDetails[index].material_id = value;
-        saleDetails[index].unit_price = m ? m.tax_price : 0;
-    } else {
-        saleDetails[index][field] = parseFloat(value) || 0;
-    }
-    renderSaleDetails();
-}
-
-function removeSaleDetail(index) {
-    saleDetails.splice(index, 1);
-    renderSaleDetails();
-}
-
-function updateSaleTotal() {
-    const total = saleDetails.reduce((sum, d) => sum + (d.unit_price || 0) * (d.quantity || 0), 0);
-    document.getElementById('saleTotal').textContent = total.toFixed(2);
-}
-
-document.getElementById('saleForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    alert('销售功能开发中');
-});
-
 // ==================== 入库单明细操作 ====================
 
 async function openStockInModal() {
@@ -1260,7 +1243,23 @@ document.getElementById('stockInForm').addEventListener('submit', async (e) => {
 // ==================== 模态框控制 ====================
 
 function openModal(id) {
-    document.getElementById(id).classList.add('show');
+    const modal = document.getElementById(id);
+    modal.classList.add('show');
+
+    // 打开询价单模态框时加载数据（只加载一次）
+    if (id === 'modal-inquiry' && !modal.dataset.loaded) {
+        loadUnitsAndSuppliers().then(() => {
+            if (inquiryDetails.length === 0) {
+                addInquiryDetail();
+            }
+        });
+        modal.dataset.loaded = 'true';
+    }
+    // 打开入库单模态框时加载数据
+    if (id === 'modal-stock-in' && !modal.dataset.loaded) {
+        loadUnitsAndSuppliers();
+        modal.dataset.loaded = 'true';
+    }
 }
 
 function closeModal(id) {
@@ -1276,61 +1275,6 @@ document.querySelectorAll('.modal').forEach(modal => {
     });
 });
 
-// ==================== 视图销售/入库详情 ====================
-
-async function viewSale(id) {
-    try {
-        const res = await fetch(`/api/sales/${id}`);
-        const data = await res.json();
-        if (data.success) {
-            const s = data.data;
-            const details = data.details || [];
-            document.getElementById('detailTitle').textContent = `销售单详情 - ${s.order_no}`;
-            document.getElementById('detailContent').innerHTML = `
-                <div class="card">
-                    <p><strong>单号:</strong> ${s.order_no}</p>
-                    <p><strong>类型:</strong> ${s.order_type}</p>
-                    <p><strong>客户:</strong> ${s.customer_name || '-'}</p>
-                    <p><strong>总金额:</strong> ¥${(s.total_amount || 0).toFixed(2)}</p>
-                    <p><strong>已收款:</strong> ¥${(s.received_amount || 0).toFixed(2)}</p>
-                    <p><strong>付款状态:</strong> <span class="status ${s.payment_status === '已结清' ? 'approved' : 'pending'}">${s.payment_status}</span></p>
-                    <p><strong>销售员:</strong> ${s.salesperson_name || '-'}</p>
-                    <p><strong>备注:</strong> ${s.remark || '-'}</p>
-                </div>
-                <h4 style="margin:15px 0;">销售明细</h4>
-                <div class="table-container">
-                    <table>
-                        <thead><tr>
-                            <th>材料编码</th><th>材料名称</th><th>规格</th>
-                            <th>单位</th><th>单价</th><th>数量</th><th>金额</th>
-                        </tr></thead>
-                        <tbody>
-                            ${details.map(d => `
-                                <tr>
-                                    <td>${d.material_code}</td>
-                                    <td>${d.material_name}</td>
-                                    <td>${d.specification || '-'}</td>
-                                    <td>${d.unit_name || '-'}</td>
-                                    <td>¥${(d.unit_price || 0).toFixed(2)}</td>
-                                    <td>${d.quantity}</td>
-                                    <td>¥${(d.amount || 0).toFixed(2)}</td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                </div>
-            `;
-            openModal('modal-detail');
-        }
-    } catch (e) {
-        alert('加载详情失败');
-    }
-}
-
-async function printSale(id) {
-    window.open(`/api/sales/${id}/print`, '_blank');
-}
-
 // ==================== 系统设置 ====================
 
 let allUsers = [];
@@ -1338,12 +1282,12 @@ let allRoles = [];
 
 async function loadUsers() {
     try {
-        const [usersRes, rolesRes] = await Promise.all([
+        const [usersRes, rolesCached] = await Promise.all([
             fetch('/api/users'),
-            fetch('/api/roles')
+            loadCacheOrFetch('dict_roles', '/api/roles')
         ]);
         const usersData = await usersRes.json();
-        const rolesData = await rolesRes.json();
+        const rolesData = rolesCached;
 
         allUsers = usersData.success ? usersData.data : [];
         allRoles = rolesData.success ? rolesData.data : [];
@@ -1459,7 +1403,5 @@ document.querySelectorAll('.shortcut-btn').forEach(btn => {
     const text = btn.querySelector('.text')?.textContent;
     if (text === '新建入库') {
         btn.onclick = () => openStockInModal();
-    } else if (text === '新建销售') {
-        btn.onclick = () => openSaleModal();
     }
 });

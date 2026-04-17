@@ -2,18 +2,10 @@
 仪表盘蓝图
 """
 from flask import Blueprint, jsonify
-import sqlite3
-import config
 from datetime import datetime
+from helpers import get_db
 
 dashboard_bp = Blueprint('dashboard', __name__, url_prefix='/api')
-
-
-def get_db():
-    """获取数据库连接"""
-    conn = sqlite3.connect(config.DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 @dashboard_bp.route('/dashboard', methods=['GET'])

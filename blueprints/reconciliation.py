@@ -2,18 +2,9 @@
 对账蓝图
 """
 from flask import Blueprint, request, jsonify, session, make_response
-import sqlite3
-import config
 from datetime import datetime
 from html import escape
-from helpers import amount_to_chinese
-
-
-def get_db():
-    """获取数据库连接"""
-    conn = sqlite3.connect(config.DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+from helpers import amount_to_chinese, get_db
 
 
 def generate_reconciliation_no():
