@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>零星材管理系统</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+</head>
+<body>
+    <!-- 登录页面 -->
+    <div id="loginPage" class="login-container">
+        <div class="login-box">
+            <h1>零星材管理系统</h1>
+            <input type="text" id="username" placeholder="用户名" />
+            <input type="password" id="password" placeholder="密码" />
+            <button onclick="login()">登 录</button>
+        </div>
+    </div>
+
+    <!-- 主页面 -->
+    <div id="mainPage" class="main-layout hidden">
+        <!-- 左侧导航 -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h2>零星材管理</h2>
+                <span>v1.0.0</span>
+            </div>
+            <div class="sidebar-nav">
+                <div class="nav-item active" onclick="showModule('home')"><i data-lucide="home"></i> 首页</div>
+                <div class="nav-item" onclick="showModule('material')"><i data-lucide="package"></i> 材料信息</div>
+                <div class="nav-item" onclick="showModule('purchase_inquiry')"><i data-lucide="file-text"></i> 采购询比价</div>
+                <div class="nav-item" onclick="showModule('purchase_order')"><i data-lucide="clipboard-list"></i> 集采订单</div>
+                <div class="nav-item" onclick="showModule('stock_in')"><i data-lucide="package-plus"></i> 入库管理</div>
+                <div class="nav-item" onclick="showModule('stock_out')"><i data-lucide="package-minus"></i> 出库管理</div>
+                <div class="nav-item" onclick="showModule('inventory')"><i data-lucide="bar-chart-2"></i> 库存管理</div>
+                <div class="nav-item" onclick="showModule('sales')"><i data-lucide="shopping-cart"></i> 销售管理</div>
+                <div class="nav-item" onclick="showModule('customer')"><i data-lucide="users"></i> 客户管理</div>
+                <div class="nav-item" onclick="showModule('supplier')"><i data-lucide="building"></i> 供应商</div>
+                <div class="nav-item" onclick="showModule('reconciliation')"><i data-lucide="file-check"></i> 对账管理</div>
+                <div class="nav-item" onclick="showModule('report')"><i data-lucide="pie-chart"></i> 报表统计</div>
+                <div class="nav-item" onclick="showModule('system')"><i data-lucide="settings"></i> 系统设置</div>
+            </div>
+            <div class="sidebar-footer">
+                <div class="user-info" id="userInfo">用户: -</div>
+                <div>角色: <span id="userRole">-</span></div>
+                <button onclick="logout()" style="margin-top:10px;padding:5px 10px;background:#e74c3c;color:white;border:none;border-radius:4px;cursor:pointer;">退出</button>
+            </div>
+        </div>
+
+        <!-- 主内容区 -->
+        <div class="main-content">
+            <!-- 首页 -->
+            <div id="homeModule" class="module">
+                <div class="page-header">
+                    <h1>工作台</h1>
+                </div>
+                <div class="stat-cards">
+                    <div class="stat-card">
+                        <h3>待审批</h3>
+                        <div class="value" id="statPending">0</div>
+                    </div>
+                    <div class="stat-card warning">
+                        <h3>库存预警</h3>
+                        <div class="value" id="statWarning">0</div>
+                    </div>
+                    <div class="stat-card success">
+                        <h3>今日入库</h3>
+                        <div class="value" id="statTodayIn">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>今日销售</h3>
+                        <div class="value" id="statTodayOut">0</div>
+                    </div>
+                </div>
+                <div class="shortcuts">
+                    <button class="shortcut-btn" onclick="showModule('purchase_inquiry');openModal('modal-inquiry')">
+                        <div class="icon"><i data-lucide="file-plus"></i></div>
+                        <div class="text">新建询价</div>
+                    </button>
+                    <button class="shortcut-btn" onclick="showModule('stock_in');openModal('modal-stock-in')">
+                        <div class="icon"><i data-lucide="package-plus"></i></div>
+                        <div class="text">新建入库</div>
+                    </button>
+                    <button class="shortcut-btn" onclick="showModule('sales');openModal('modal-sale')">
+                        <div class="icon"><i data-lucide="shopping-cart"></i></div>
+                        <div class="text">新建销售</div>
+                    </button>
+                    <button class="shortcut-btn" onclick="showModule('reconciliation')">
+                        <div class="icon"><i data-lucide="file-check"></i></div>
+                        <div class="text">对账管理</div>
+                    </button>
+                    <button class="shortcut-btn" onclick="showModule('material')">
+                        <div class="icon"><i data-lucide="package"></i></div>
+                        <div class="text">材料管理</div>
+                    </button>
+                    <button class="shortcut-btn" onclick="showModule('inventory')">
+                        <div class="icon"><i data-lucide="bar-chart-2"></i></div>
+                        <div class="text">库存查询</div>
+                    </button>
+                </div>
+                <div class="stat-cards">
+                    <div class="stat-card">
+                        <h3>材料总数</h3>
+                        <div class="value" id="statMaterials">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>供应商总数</h3>
+                        <div class="value" id="statSuppliers">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <h3>客户总数</h3>
+                        <div class="value" id="statCustomers">0</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 材料管理 -->
+            <div id="materialModule" class="module hidden">
+                <div class="page-header">
+                    <h1>材料信息管理</h1>
+                    <div>
+                        <button class="btn btn-primary" onclick="openModal('modal-material')">新建材料</button>
+                    </div>
+                </div>
+                <div class="toolbar">
+                    <div class="search-box">
+                        <input type="text" id="materialSearch" placeholder="搜索材料名称、编码或规格">
+                        <button onclick="loadMaterials()">搜索</button>
+                    </div>
+                    <button class="btn btn-secondary" onclick="loadMaterials()">刷新</button>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>编码</th>
+                                <th>名称</th>
+                                <th>规格</th>
+                                <th>单位</th>
+                                <th>含税价</th>
+                                <th>不含税价</th>
+                                <th>库存下限</th>
+                                <th>库存上限</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="materialTable"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 采购询比价 -->
+            <div id="purchase_inquiryModule" class="module hidden">
+                <div class="page-header">
+                    <h1>采购管理 - 询比价</h1>
+                    <div>
+                        <button class="btn btn-primary" onclick="openModal('modal-inquiry')">新建询价单</button>
+                    </div>
+                </div>
+                <div class="toolbar">
+                    <button class="btn btn-secondary" onclick="loadInquiries()">刷新</button>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>单号</th>
+                                <th>日期</th>
+                                <th>申请人</th>
+                                <th>总金额</th>
+                                <th>低于库内价</th>
+                                <th>审批状态</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="inquiryTable"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 集采订单 -->
+            <div id="purchase_orderModule" class="module hidden">
+                <div class="page-header">
+                    <h1>集中采购订单</h1>
+                    <div>
+                        <button class="btn btn-primary" onclick="openOrderModal()">新建订单</button>
+                    </div>
+                </div>
+                <div class="toolbar">
+                    <button class="btn btn-secondary" onclick="loadOrders()">刷新</button>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>单号</th>
+                                <th>类型</th>
+                                <th>供应商</th>
+                                <th>总金额</th>
+                                <th>采购状态</th>
+                                <th>审批状态</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="orderTable"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 入库管理 -->
+            <div id="stock_inModule" class="module hidden">
+                <div class="page-header">
+                    <h1>入库管理</h1>
+                    <div>
+                        <button class="btn btn-primary" onclick="openModal('modal-stock-in')">新建入库单</button>
+                    </div>
+                </div>
+                <div class="toolbar">
+                    <button class="btn btn-secondary" onclick="loadStockIn()">刷新</button>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>单号</th>
+                                <th>类型</th>
+                                <th>供应商</th>
+                                <th>仓库</th>
+                                <th>入库时间</th>
+                                <th>状态</th>
+                            </tr>
+                        </thead>
+                        <tbody id="stockInTable"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 出库管理 -->
+            <div id="stock_outModule" class="module hidden">
+                <div class="page-header">
+                    <h1>出库管理</h1>
+                </div>
+                <div class="toolbar">
+                    <button class="btn btn-secondary" onclick="loadStockOut()">刷新</button>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>单号</th>
+                                <th>类型</th>
+                                <th>客户</th>
+                                <th>出库时间</th>
+                                <th>操作员</th>
+                            </tr>
+                        </thead>
+                        <tbody id="stockOutTable"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 库存管理 -->
+            <div id="inventoryModule" class="module hidden">
+                <div class="page-header">
+                    <h1>库存管理</h1>
+                </div>
+                <div class="toolbar">
+                    <button class="btn btn-secondary" onclick="loadInventory()">刷新</button>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>材料编码</th>
+                                <th>材料名称</th>
+                                <th>规格</th>
+                                <th>仓库</th>
+                                <th>数量</th>
+                                <th>单价</th>
+                                <th>金额</th>
+                            </tr>
+                        </thead>
+                        <tbody id="inventoryTable"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 销售管理 -->
+            <div id="salesModule" class="module hidden">
+                <div class="page-header">
+                    <h1>销售管理</h1>
+                    <div>
+                        <button class="btn btn-primary" onclick="openModal('modal-sale')">新建销售单</button>
+                    </div>
+                </div>
+                <div class="toolbar">
+                    <button class="btn btn-secondary" onclick="loadSales()">刷新</button>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>单号</th>
+                                <th>类型</th>
+                                <th>客户</th>
+                                <th>总金额</th>
+                                <th>已收款</th>
+                                <th>付款状态</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="salesTable"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 客户管理 -->
+            <div id="customerModule" class="module hidden">
+                <div class="page-header">
+                    <h1>客户管理</h1>
+                    <div>
+                        <button class="btn btn-primary" onclick="openModal('modal-customer')">新建客户</button>
+                    </div>
+                </div>
+                <div class="toolbar">
+                    <button class="btn btn-secondary" onclick="loadCustomers()">刷新</button>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>编码</th>
+                                <th>名称</th>
+                                <th>联系人</th>
+                                <th>电话</th>
+                                <th>地址</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="customerTable"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 供应商管理 -->
+            <div id="supplierModule" class="module hidden">
+                <div class="page-header">
+                    <h1>供应商管理</h1>
+                    <div>
+                        <button class="btn btn-primary" onclick="openModal('modal-supplier')">新建供应商</button>
+                    </div>
+                </div>
+                <div class="toolbar">
+                    <button class="btn btn-secondary" onclick="loadSuppliers()">刷新</button>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>名称</th>
+                                <th>联系人</th>
+                                <th>电话</th>
+                                <th>地址</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="supplierTable"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 对账管理 -->
+            <div id="reconciliationModule" class="module hidden">
+                <div class="page-header">
+                    <h1>对账管理</h1>
+                </div>
+                <div class="toolbar">
+                    <button class="btn btn-primary" onclick="openModal('modal-reconciliation')">新建对账单</button>
+                    <button class="btn btn-secondary" onclick="loadReconciliation()">刷新</button>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>单号</th>
+                                <th>供应商/客户</th>
+                                <th>期间</th>
+                                <th>结算金额</th>
+                                <th>状态</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="reconciliationTable"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 报表统计 -->
+            <div id="reportModule" class="module hidden">
+                <div class="page-header">
+                    <h1>报表统计</h1>
+                </div>
+                <div class="card">
+                    <h3>功能开发中...</h3>
+                    <p>报表统计功能即将上线</p>
+                </div>
+            </div>
+
+            <!-- 系统设置 -->
+            <div id="systemModule" class="module hidden">
+                <div class="page-header">
+                    <h1>系统设置</h1>
+                </div>
+                <div class="card">
+                    <h3>用户管理</h3>
+                    <div style="margin: 15px 0;">
+                        <button class="btn btn-primary" onclick="openModal('modal-user')">新建用户</button>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>用户名</th>
+                                    <th>姓名</th>
+                                    <th>角色</th>
+                                    <th>状态</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="userTable"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 材料模态框 -->
+    <div id="modal-material" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="materialModalTitle">新建材料</h2>
+                <button class="modal-close" onclick="closeModal('modal-material')"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+            </div>
+            <form id="materialForm">
+                <input type="hidden" id="materialId">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>材料名称 *</label>
+                        <input type="text" id="materialName" required>
+                    </div>
+                    <div class="form-group">
+                        <label>规格</label>
+                        <input type="text" id="materialSpec">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>单位</label>
+                        <select id="materialUnit"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>含税价 *</label>
+                        <input type="number" step="0.01" id="materialTaxPrice" required>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>运费</label>
+                        <input type="number" step="0.01" id="materialFreight" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label>默认供应商</label>
+                        <select id="materialSupplier"></select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>库存下限</label>
+                        <input type="number" step="0.01" id="materialMin" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label>库存上限</label>
+                        <input type="number" step="0.01" id="materialMax" value="0">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>备注</label>
+                    <textarea id="materialRemark"></textarea>
+                </div>
+                <div style="text-align:right;margin-top:20px;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-material')">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 询价单模态框 -->
+    <div id="modal-inquiry" class="modal">
+        <div class="modal-content" style="max-width:900px;">
+            <div class="modal-header">
+                <h2>新建询价单</h2>
+                <button class="modal-close" onclick="closeModal('modal-inquiry')">&times;</button>
+            </div>
+            <form id="inquiryForm">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>询价日期</label>
+                        <input type="date" id="inquiryDate">
+                    </div>
+                    <div class="form-group">
+                        <label>备注</label>
+                        <input type="text" id="inquiryRemark">
+                    </div>
+                </div>
+                <h4 style="margin:15px 0;">询价明细</h4>
+                <div class="table-container" style="margin-bottom:15px;">
+                    <table class="detail-table">
+                        <thead>
+                            <tr>
+                                <th>材料</th>
+                                <th>供应商</th>
+                                <th>库内价</th>
+                                <th>本次报价</th>
+                                <th>数量</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="inquiryDetails"></tbody>
+                    </table>
+                </div>
+                <button type="button" class="btn btn-success" onclick="addInquiryDetail()">+ 添加明细</button>
+                <div style="text-align:right;margin-top:20px;">
+                    <strong>总金额: ¥<span id="inquiryTotal">0.00</span></strong>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-inquiry')" style="margin-left:20px;">取消</button>
+                    <button type="submit" class="btn btn-primary">提交询价</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 销售单模态框 -->
+    <div id="modal-sale" class="modal">
+        <div class="modal-content" style="max-width:900px;">
+            <div class="modal-header">
+                <h2>新建销售单</h2>
+                <button class="modal-close" onclick="closeModal('modal-sale')">&times;</button>
+            </div>
+            <form id="saleForm">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>销售类型</label>
+                        <select id="saleType">
+                            <option value="零售">零售</option>
+                            <option value="批发">批发</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>客户</label>
+                        <select id="saleCustomer"></select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>备注</label>
+                    <input type="text" id="saleRemark">
+                </div>
+                <h4 style="margin:15px 0;">销售明细</h4>
+                <div class="table-container" style="margin-bottom:15px;">
+                    <table class="detail-table">
+                        <thead>
+                            <tr>
+                                <th>材料</th>
+                                <th>单价</th>
+                                <th>数量</th>
+                                <th>金额</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="saleDetails"></tbody>
+                    </table>
+                </div>
+                <button type="button" class="btn btn-success" onclick="addSaleDetail()">+ 添加明细</button>
+                <div style="text-align:right;margin-top:20px;">
+                    <strong>总金额: ¥<span id="saleTotal">0.00</span></strong>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-sale')" style="margin-left:20px;">取消</button>
+                    <button type="submit" class="btn btn-primary">提交</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 入库单模态框 -->
+    <div id="modal-stock-in" class="modal">
+        <div class="modal-content" style="max-width:900px;">
+            <div class="modal-header">
+                <h2>新建入库单</h2>
+                <button class="modal-close" onclick="closeModal('modal-stock-in')">&times;</button>
+            </div>
+            <form id="stockInForm">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>入库类型</label>
+                        <select id="stockInType">
+                            <option value="采购入库">采购入库</option>
+                            <option value="退货入库">退货入库</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>供应商</label>
+                        <select id="stockInSupplier"></select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>备注</label>
+                    <input type="text" id="stockInRemark">
+                </div>
+                <h4 style="margin:15px 0;">入库明细</h4>
+                <div class="table-container" style="margin-bottom:15px;">
+                    <table class="detail-table">
+                        <thead>
+                            <tr>
+                                <th>材料</th>
+                                <th>单价</th>
+                                <th>数量</th>
+                                <th>金额</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="stockInDetails"></tbody>
+                    </table>
+                </div>
+                <button type="button" class="btn btn-success" onclick="addStockInDetail()">+ 添加明细</button>
+                <div style="text-align:right;margin-top:20px;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-stock-in')">取消</button>
+                    <button type="submit" class="btn btn-primary">提交</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 客户模态框 -->
+    <div id="modal-customer" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>新建客户</h2>
+                <button class="modal-close" onclick="closeModal('modal-customer')">&times;</button>
+            </div>
+            <form id="customerForm">
+                <div class="form-group">
+                    <label>客户名称 *</label>
+                    <input type="text" id="customerName" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>联系人</label>
+                        <input type="text" id="customerContact">
+                    </div>
+                    <div class="form-group">
+                        <label>电话</label>
+                        <input type="text" id="customerPhone">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>地址</label>
+                    <input type="text" id="customerAddress">
+                </div>
+                <div class="form-group">
+                    <label>期初余额</label>
+                    <input type="number" step="0.01" id="customerBalance" value="0">
+                </div>
+                <div style="text-align:right;margin-top:20px;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-customer')">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 供应商模态框 -->
+    <div id="modal-supplier" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>新建供应商</h2>
+                <button class="modal-close" onclick="closeModal('modal-supplier')">&times;</button>
+            </div>
+            <form id="supplierForm">
+                <div class="form-group">
+                    <label>供应商名称 *</label>
+                    <input type="text" id="supplierName" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>联系人</label>
+                        <input type="text" id="supplierContact">
+                    </div>
+                    <div class="form-group">
+                        <label>电话</label>
+                        <input type="text" id="supplierPhone">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>地址</label>
+                    <input type="text" id="supplierAddress">
+                </div>
+                <div style="text-align:right;margin-top:20px;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-supplier')">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 集采订单模态框 -->
+    <div id="modal-order" class="modal">
+        <div class="modal-content" style="max-width:900px;">
+            <div class="modal-header">
+                <h2>新建集采订单</h2>
+                <button class="modal-close" onclick="closeModal('modal-order')">&times;</button>
+            </div>
+            <form id="orderForm">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>订单类型</label>
+                        <select id="orderType">
+                            <option value="集采">集采</option>
+                            <option value="零采">零采</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>供应商</label>
+                        <select id="orderSupplier"></select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>备注</label>
+                    <input type="text" id="orderRemark">
+                </div>
+                <h4 style="margin:15px 0;">订单明细</h4>
+                <div class="table-container" style="margin-bottom:15px;">
+                    <table class="detail-table">
+                        <thead>
+                            <tr>
+                                <th>材料</th>
+                                <th>单价</th>
+                                <th>数量</th>
+                                <th>金额</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="orderDetails"></tbody>
+                    </table>
+                </div>
+                <button type="button" class="btn btn-success" onclick="addOrderDetail()">+ 添加明细</button>
+                <div style="text-align:right;margin-top:20px;">
+                    <strong>总金额: ¥<span id="orderTotal">0.00</span></strong>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-order')" style="margin-left:20px;">取消</button>
+                    <button type="submit" class="btn btn-primary">提交</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 用户模态框 -->
+    <div id="modal-user" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="userModalTitle">新建用户</h2>
+                <button class="modal-close" onclick="closeModal('modal-user')">&times;</button>
+            </div>
+            <form id="userForm">
+                <input type="hidden" id="userId">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>用户名 *</label>
+                        <input type="text" id="userUsername" required>
+                    </div>
+                    <div class="form-group">
+                        <label>姓名 *</label>
+                        <input type="text" id="userRealName" required>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>密码</label>
+                        <input type="password" id="userPassword" placeholder="留空则不修改">
+                    </div>
+                    <div class="form-group">
+                        <label>角色</label>
+                        <select id="userRole"></select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>状态</label>
+                    <select id="userActive">
+                        <option value="1">启用</option>
+                        <option value="0">禁用</option>
+                    </select>
+                </div>
+                <div style="text-align:right;margin-top:20px;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-user')">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 详情模态框 -->
+    <div id="modal-detail" class="modal">
+        <div class="modal-content" style="max-width:800px;">
+            <div class="modal-header">
+                <h2 id="detailTitle">详情</h2>
+                <button class="modal-close" onclick="closeModal('modal-detail')">&times;</button>
+            </div>
+            <div id="detailContent"></div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
