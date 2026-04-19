@@ -129,8 +129,6 @@
                                 <th>含税价</th>
                                 <th>不含税价</th>
                                 <th>供应商</th>
-                                <th>库存下限</th>
-                                <th>库存上限</th>
                                 <th>操作</th>
                             </tr>
                         </thead>
@@ -450,7 +448,7 @@
                 <div class="form-row">
                     <div class="form-group">
                         <label>询价日期</label>
-                        <input type="date" id="inquiryDate">
+                        <input type="date" id="inquiryDate" value="">
                     </div>
                     <div class="form-group">
                         <label>备注</label>
@@ -466,6 +464,7 @@
                                 <th>供应商</th>
                                 <th>库内价</th>
                                 <th>本次报价</th>
+                                <th>税率</th>
                                 <th>数量</th>
                                 <th>操作</th>
                             </tr>
@@ -669,6 +668,38 @@
             </div>
             <div id="detailContent"></div>
         </div>
+    </div>
+
+    <!-- 采购购物车悬浮组件 -->
+    <div id="cartOverlay" class="modal" style="background:rgba(0,0,0,0.3);" onclick="closeCartDrawer()"></div>
+    <div id="cartDrawer" class="drawer">
+        <div class="drawer-header">
+            <h2>采购询比价清单</h2>
+            <button class="modal-close" onclick="closeCartDrawer()">&times;</button>
+        </div>
+        <div class="drawer-body">
+            <table class="detail-table">
+                <thead>
+                    <tr>
+                        <th>编码</th>
+                        <th>名称</th>
+                        <th>规格</th>
+                        <th>库内价</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="cartItems"></tbody>
+            </table>
+        </div>
+        <div class="drawer-footer">
+            <button class="btn btn-secondary" onclick="closeCartDrawer()">继续添加</button>
+            <button class="btn btn-primary" onclick="generateInquiryFromCart()">生成询价比价单</button>
+        </div>
+    </div>
+
+    <div id="cartFab" class="cart-fab" onclick="openCartDrawer()">
+        <i data-lucide="shopping-cart"></i>
+        <span id="cartBadge" class="cart-badge" style="display:none;">0</span>
     </div>
 
     <script src="/static/js/app.js"></script>

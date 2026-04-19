@@ -4,23 +4,9 @@
 from flask import Blueprint, request, jsonify, session, make_response
 from datetime import datetime
 from html import escape
-from helpers import amount_to_chinese, get_db
+from helpers import amount_to_chinese, get_db, generate_inquiry_no
 
 inquiry_bp = Blueprint('inquiries', __name__, url_prefix='/api')
-
-
-def generate_inquiry_no():
-    """生成询价单号"""
-    conn = get_db()
-    cursor = conn.cursor()
-    today = datetime.now().strftime('%Y%m%d')
-    cursor.execute("""
-        SELECT COUNT(*) FROM purchase_inquiries
-        WHERE inquiry_no LIKE ?
-    """, (f'CGXJ-{today[:2]}-{today[2:]}%',))
-    count = cursor.fetchone()[0] + 1
-    conn.close()
-    return f'CGXJ-{today[2:]}-{str(count).zfill(3)}'
 
 
 @inquiry_bp.route('/purchase-inquiries', methods=['GET'])
@@ -71,45 +57,89 @@ def get_inquiry(inquiry_id):
 @inquiry_bp.route('/purchase-inquiries', methods=['POST'])
 def create_inquiry():
     """创建询价单"""
+    print("=== create_inquiry called ===")
     data = request.json
+    print("Received data:", data)
+
+    # 验证必填字段
+    if not data:
+        return jsonify({'success': False, 'message': '请求数据为空'})
+
     user = session.get('user')
+    print("User from session:", user)
     if not user:
         return jsonify({'success': False, 'message': '未登录'})
 
     conn = get_db()
     cursor = conn.cursor()
 
+    # 验证details
+    details = data.get('details', [])
+    if not isinstance(details, list):
+        return jsonify({'success': False, 'message': '明细数据格式错误：应该为数组'})
+    if len(details) == 0:
+        return jsonify({'success': False, 'message': '明细数据不能为空'})
+
+    # 预处理数据（只做一次）
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    total_amount = sum(float(d.get('this_price', 0) or 0) * float(d.get('quantity', 1) or 1) for d in details)
+    is_below = 1 if any(float(d.get('this_price', 0) or 0) < float(d.get('library_price', 0) or 0) for d in details) else 0
+
+    inquiry_no = None
+    inquiry_id = None
+
+    # 重试循环：处理并发场景下的UNIQUE约束冲突
+    for attempt in range(5):
+        try:
+            inquiry_no = generate_inquiry_no()
+            cursor.execute("""
+                INSERT INTO purchase_inquiries (
+                    inquiry_no, inquiry_date, applicant_id, total_amount,
+                    is_below_library_price, approval_status, create_time, remark
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                inquiry_no, data.get('inquiry_date', now[:10]),
+                user['id'], total_amount, is_below, '待审批', now, data.get('remark', '')
+            ))
+            inquiry_id = cursor.lastrowid
+            break  # 插入成功，跳出重试循环
+        except Exception as insert_err:
+            err_str = str(insert_err)
+            if 'UNIQUE constraint failed' in err_str and attempt < 4:
+                print(f"inquiry_no冲突，第{attempt + 1}次重试")
+                conn.rollback()
+                continue
+            conn.close()
+            return jsonify({'success': False, 'message': f'创建失败: {err_str}'})
+
+    if inquiry_id is None:
+        conn.close()
+        return jsonify({'success': False, 'message': '无法生成唯一单号，请稍后重试'})
+
+    # 写入子表
     try:
-        inquiry_no = generate_inquiry_no()
-        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        details = data.get('details', [])
+        for i, d in enumerate(details):
+            material_id = d.get('material_id')
+            supplier_id = d.get('supplier_id')
+            this_price = float(d.get('this_price', 0) or 0)
+            library_price = float(d.get('library_price', 0) or 0)
+            quantity = int(d.get('quantity', 1) or 1)
+            tax_rate = float(d.get('tax_rate', 0.13) or 0.13)
 
-        total_amount = sum(d.get('this_price', 0) * d.get('quantity', 1) for d in details)
-        is_below = 1 if any(d.get('this_price', 0) < d.get('library_price', 0) for d in details) else 0
+            is_lowest = 1 if this_price <= library_price else 0
+            price_diff = this_price - library_price
 
-        cursor.execute("""
-            INSERT INTO purchase_inquiries (
-                inquiry_no, inquiry_date, applicant_id, total_amount,
-                is_below_library_price, approval_status, create_time, remark
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            inquiry_no, data.get('inquiry_date', now[:10]),
-            user['id'], total_amount, is_below, '待审批', now, data.get('remark', '')
-        ))
-        inquiry_id = cursor.lastrowid
-
-        for d in details:
-            is_lowest = 1 if d.get('this_price', 0) <= d.get('library_price', 0) else 0
-            price_diff = d.get('this_price', 0) - d.get('library_price', 0)
             cursor.execute("""
                 INSERT INTO purchase_inquiry_details (
                     inquiry_id, material_id, supplier_id, this_price,
-                    library_price, is_lowest, price_diff, quantity
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    library_price, is_lowest, price_diff, quantity, tax_rate
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                inquiry_id, d.get('material_id'), d.get('supplier_id'),
-                d.get('this_price', 0), d.get('library_price', 0),
-                is_lowest, price_diff, d.get('quantity', 1)
+                inquiry_id,
+                material_id if material_id else None,
+                supplier_id if supplier_id else None,
+                this_price, library_price,
+                is_lowest, price_diff, quantity, tax_rate
             ))
 
         conn.commit()
@@ -117,6 +147,9 @@ def create_inquiry():
         return jsonify({'success': True, 'inquiry_no': inquiry_no, 'id': inquiry_id})
 
     except Exception as e:
+        print("Error:", str(e))
+        import traceback
+        traceback.print_exc()
         conn.rollback()
         conn.close()
         return jsonify({'success': False, 'message': str(e)})
@@ -155,12 +188,22 @@ def approve_inquiry(inquiry_id):
             SET approval_status = '已同意', approver_id = ?, approve_time = ?, approval_remark = ?
             WHERE id = ? AND approval_status = '材料员已审'
         """, (user['id'], now, remark, inquiry_id))
-        cursor.execute("SELECT * FROM purchase_inquiry_details WHERE inquiry_id = ? AND is_lowest = 1", (inquiry_id,))
+        cursor.execute("SELECT * FROM purchase_inquiry_details WHERE inquiry_id = ?", (inquiry_id,))
         for d in cursor.fetchall():
             tax_price = d['this_price']
             tax_exempt = round(tax_price / 1.01, 2)
-            cursor.execute("UPDATE materials SET tax_price = ?, tax_exempt_price = ? WHERE id = ?",
-                          (tax_price, tax_exempt, d['material_id']))
+            supplier_id = d['supplier_id']
+            # 审批通过后：无论价格高低，都同步价格与供应商
+            if supplier_id:
+                cursor.execute(
+                    "UPDATE materials SET tax_price = ?, tax_exempt_price = ?, default_supplier_id = ? WHERE id = ?",
+                    (tax_price, tax_exempt, supplier_id, d['material_id'])
+                )
+            else:
+                cursor.execute(
+                    "UPDATE materials SET tax_price = ?, tax_exempt_price = ? WHERE id = ?",
+                    (tax_price, tax_exempt, d['material_id'])
+                )
         cursor.execute("UPDATE purchase_inquiries SET library_price_updated = 1 WHERE id = ?", (inquiry_id,))
     else:
         conn.close()

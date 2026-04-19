@@ -5,6 +5,7 @@ let suppliers = [];
 let units = [];
 let inquiryDetails = [];
 let stockInDetails = [];
+let cartItems = []; // 采购购物车
 
 // ==================== 材料列表分页/虚拟滚动状态 ====================
 const MATERIAL_PAGE_SIZE = 50;
@@ -237,11 +238,10 @@ function renderMaterialTable() {
             <td>¥${(m.tax_price || 0).toFixed(2)}</td>
             <td>¥${(m.tax_exempt_price || 0).toFixed(2)}</td>
             <td>${escapeHtml(m.supplier_name || '-')}</td>
-            <td>${m.inventory_min || 0}</td>
-            <td>${m.inventory_max || 0}</td>
             <td>
                 <button class="btn btn-secondary" onclick="editMaterial(${m.id})">编辑</button>
                 <button class="btn btn-danger" onclick="deleteMaterial(${m.id})">删除</button>
+                <button class="btn btn-primary" onclick="addToCart(${m.id})">加入询比价</button>
             </td>
         </tr>
     `).join('');
@@ -257,6 +257,140 @@ function updateMaterialStats() {
     if (statsEl) {
         statsEl.textContent = `共 ${materialState.total} 条，当前显示 ${materials.length} 条`;
     }
+}
+
+// ==================== 采购购物车功能 ====================
+
+function addToCart(materialId) {
+    const m = materials.find(x => x.id == materialId);
+    if (!m) return;
+    // 检查是否已在购物车
+    if (cartItems.some(c => c.material_id === materialId)) {
+        alert('该材料已在询比价列表中');
+        return;
+    }
+    cartItems.push({
+        material_id: m.id,
+        material_code: m.material_code,
+        material_name: m.material_name,
+        specification: m.specification,
+        unit_name: m.unit_name,
+        library_price: m.tax_price || 0,
+        supplier_id: m.default_supplier_id || '',
+        this_price: m.tax_price || 0,
+        tax_rate: m.tax_rate || 0.13,
+        quantity: 1
+    });
+    updateCartBadge();
+    alert('已加入询比价列表');
+}
+
+function updateCartBadge() {
+    const badge = document.getElementById('cartBadge');
+    if (badge) {
+        badge.textContent = cartItems.length;
+        badge.style.display = cartItems.length > 0 ? 'flex' : 'none';
+    }
+}
+
+function openCartDrawer() {
+    const drawer = document.getElementById('cartDrawer');
+    const overlay = document.getElementById('cartOverlay');
+    if (!drawer) return;
+    renderCartItems();
+    drawer.classList.add('show');
+    overlay.classList.add('show');
+}
+
+function closeCartDrawer() {
+    const drawer = document.getElementById('cartDrawer');
+    const overlay = document.getElementById('cartOverlay');
+    if (drawer) drawer.classList.remove('show');
+    if (overlay) overlay.classList.remove('show');
+}
+
+function removeFromCart(index) {
+    cartItems.splice(index, 1);
+    updateCartBadge();
+    renderCartItems();
+}
+
+function renderCartItems() {
+    const tbody = document.getElementById('cartItems');
+    if (!tbody) return;
+    const validCart = (cartItems || []).filter(c => c != null);
+    if (validCart.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#999;padding:20px;">购物车是空的，请从材料列表添加</td></tr>';
+        return;
+    }
+    tbody.innerHTML = validCart.map((c, i) => `
+        <tr>
+            <td>${escapeHtml(c?.material_code || c?.['商品编号'] || '无编号')}</td>
+            <td>${escapeHtml(c?.material_name || c?.['商品名'] || '未知材料')}</td>
+            <td>${escapeHtml(c?.specification || '-')}</td>
+            <td>¥${(c?.library_price || c?.['含税价'] || 0).toFixed(2)}</td>
+            <td><button class="btn btn-danger" onclick="removeFromCart(${i})">移除</button></td>
+        </tr>
+    `).join('');
+}
+
+async function generateInquiryFromCart() {
+    const rawCart = cartItems || [];
+    const validCart = rawCart.filter(item => item != null && item != undefined);
+    if (validCart.length === 0) {
+        alert('请先添加材料到购物车');
+        return;
+    }
+
+    console.log('=== generateInquiryFromCart START ===');
+    console.log('validCart count:', validCart.length);
+
+    // 将购物车数据复制到inquiryDetails（先过滤后遍历）
+    inquiryDetails = validCart.map(item => {
+        const materialId = parseInt(item?.material_id || item?.['商品编号'], 10) || '';
+        const supplierIdRaw = item?.supplier_id || item?.['供应商'] || '';
+        let supplierId = supplierIdRaw;
+        if (supplierId === '' || supplierId === null || supplierId === undefined) {
+            supplierId = '';
+        } else {
+            supplierId = parseInt(supplierId, 10);
+            if (isNaN(supplierId)) supplierId = '';
+        }
+
+        return {
+            material_id: materialId,
+            supplier_id: supplierId,
+            this_price: parseFloat(item?.this_price || item?.['含税价'] || item?.['单价'] || 0),
+            library_price: parseFloat(item?.library_price || item?.['含税价'] || 0),
+            quantity: parseInt(item?.quantity || item?.['数量'] || 1, 10) || 1,
+            tax_rate: parseFloat(item?.tax_rate || item?.['税率'] || 0.13)
+        };
+    });
+
+    // 清空购物车
+    cartItems = [];
+    updateCartBadge();
+    closeCartDrawer();
+
+    // 先标记modal已加载，防止openModal重复触发初始化逻辑
+    const modal = document.getElementById('modal-inquiry');
+    if (modal) modal.dataset.loaded = 'true';
+
+    // 设置默认日期
+    document.getElementById('inquiryDate').value = new Date().toISOString().split('T')[0];
+
+    // 等待材料数据加载完成后再渲染
+    await loadUnitsAndSuppliers();
+
+    // 打开模态框
+    modal.classList.add('show');
+
+    // 渲染明细到表格
+    renderInquiryDetails();
+    updateInquiryTotal();
+
+    console.log('=== generateInquiryFromCart END ===');
+    console.log('inquiryDetails:', JSON.stringify(inquiryDetails, null, 2));
 }
 
 // HTML转义防止XSS
@@ -1063,82 +1197,127 @@ async function loadUnitsAndSuppliers() {
 // ==================== 询价单明细操作 ====================
 
 function addInquiryDetail() {
-    inquiryDetails.push({
+    const details = inquiryDetails || [];
+    details.push({
         material_id: '',
         supplier_id: '',
         library_price: 0,
         this_price: 0,
+        tax_rate: 0.13,
         quantity: 1
     });
+    inquiryDetails = details;
     renderInquiryDetails();
 }
 
 function renderInquiryDetails() {
     const tbody = document.getElementById('inquiryDetails');
-    tbody.innerHTML = inquiryDetails.map((d, i) => `
+    if (!tbody) return;
+    const details = (inquiryDetails || []).filter(d => d != null && d != undefined);
+    if (details.length === 0) {
+        tbody.innerHTML = '';
+        updateInquiryTotal();
+        return;
+    }
+    const validMaterials = materials || [];
+    const validSuppliers = suppliers || [];
+    tbody.innerHTML = details.map((d, i) => `
         <tr>
             <td>
-                <select onchange="updateInquiryDetail(${i}, 'material_id', this.value)">
+                <select style="min-width:180px;" onchange="updateInquiryDetail(${i}, 'material_id', this.value)"
+                    oninput="filterSelectOptions(this)"
+                    onclick="this.options[0].text=this.value===''?'--请选择--':this.options[0].text">
                     <option value="">--请选择--</option>
-                    ${materials.map(m => `<option value="${m.id}" ${d.material_id == m.id ? 'selected' : ''}>${m.material_code} - ${m.material_name}</option>`).join('')}
+                    ${validMaterials.map(m => `<option value="${m?.id}" ${d?.material_id == m?.id ? 'selected' : ''}>${escapeHtml(m?.material_code || '')} - ${escapeHtml(m?.material_name || '')}</option>`).join('')}
                 </select>
             </td>
             <td>
                 <select onchange="updateInquiryDetail(${i}, 'supplier_id', this.value)">
                     <option value="">--请选择--</option>
-                    ${suppliers.map(s => `<option value="${s.id}" ${d.supplier_id == s.id ? 'selected' : ''}>${s.supplier_name}</option>`).join('')}
+                    ${validSuppliers.map(s => `<option value="${s?.id}" ${d?.supplier_id == s?.id ? 'selected' : ''}>${escapeHtml(s?.supplier_name || '')}</option>`).join('')}
                 </select>
             </td>
-            <td><input type="number" step="0.01" value="${d.library_price}" readonly></td>
-            <td><input type="number" step="0.01" value="${d.this_price}" onchange="updateInquiryDetail(${i}, 'this_price', this.value)"></td>
-            <td><input type="number" step="0.01" value="${d.quantity}" onchange="updateInquiryDetail(${i}, 'quantity', this.value)"></td>
+            <td><input type="number" step="0.01" value="${d?.library_price || 0}" readonly></td>
+            <td><input type="number" step="0.01" value="${d?.this_price || 0}" onchange="updateInquiryDetail(${i}, 'this_price', this.value)"></td>
+            <td>
+                <select onchange="updateInquiryDetail(${i}, 'tax_rate', this.value)">
+                    <option value="0.01" ${d?.tax_rate == 0.01 ? 'selected' : ''}>1%</option>
+                    <option value="0.06" ${d?.tax_rate == 0.06 ? 'selected' : ''}>6%</option>
+                    <option value="0.09" ${d?.tax_rate == 0.09 ? 'selected' : ''}>9%</option>
+                    <option value="0.13" ${d?.tax_rate == 0.13 ? 'selected' : ''}>13%</option>
+                </select>
+            </td>
+            <td><input type="number" step="0.01" value="${d?.quantity || 1}" onchange="updateInquiryDetail(${i}, 'quantity', this.value)"></td>
             <td><button class="btn btn-danger" onclick="removeInquiryDetail(${i})">删除</button></td>
         </tr>
     `).join('');
     updateInquiryTotal();
 }
 
+function filterSelectOptions(select) {
+    const text = select.value.toLowerCase();
+    const options = select.options;
+    for (let i = 0; i < options.length; i++) {
+        const opt = options[i];
+        if (opt.value === '') {
+            opt.style.display = '';
+            continue;
+        }
+        const content = opt.textContent.toLowerCase();
+        opt.style.display = content.includes(text) ? '' : 'none';
+    }
+}
+
 function updateInquiryDetail(index, field, value) {
+    const details = inquiryDetails || [];
+    if (!details[index]) return;
+    const item = details[index];
     if (field === 'material_id') {
-        const m = materials.find(x => x.id == value);
-        inquiryDetails[index].material_id = value;
-        inquiryDetails[index].library_price = m ? m.tax_price : 0;
-    } else if (field === 'this_price' || field === 'quantity') {
-        inquiryDetails[index][field] = parseFloat(value) || 0;
+        const m = (materials || []).find(x => x?.id == value);
+        item.material_id = value;
+        item.library_price = m ? (m?.tax_price || 0) : 0;
+    } else if (field === 'this_price' || field === 'quantity' || field === 'tax_rate') {
+        item[field] = parseFloat(value) || 0;
     } else {
-        inquiryDetails[index][field] = value;
+        item[field] = value;
     }
     renderInquiryDetails();
 }
 
 function removeInquiryDetail(index) {
-    inquiryDetails.splice(index, 1);
+    const details = inquiryDetails || [];
+    if (details[index]) {
+        details.splice(index, 1);
+    }
     renderInquiryDetails();
 }
 
 function updateInquiryTotal() {
-    const total = inquiryDetails.reduce((sum, d) => sum + (d.this_price || 0) * (d.quantity || 0), 0);
-    document.getElementById('inquiryTotal').textContent = total.toFixed(2);
+    const details = inquiryDetails || [];
+    const total = details.reduce((sum, d) => sum + ((d?.this_price || 0) * (d?.quantity || 0)), 0);
+    const el = document.getElementById('inquiryTotal');
+    if (el) el.textContent = total.toFixed(2);
 }
 
 document.getElementById('inquiryForm').addEventListener('submit', async (e) => {
     e.preventDefault();
 
-    const validDetails = inquiryDetails.filter(d => d.material_id && d.supplier_id && d.this_price > 0);
+    const details = inquiryDetails || [];
+    const validDetails = details.filter(d => d != null && d != undefined && d?.material_id && d?.supplier_id && d?.this_price > 0);
     if (validDetails.length === 0) {
         alert('请添加有效的询价明细');
         return;
     }
 
     const body = {
-        inquiry_date: document.getElementById('inquiryDate').value,
-        remark: document.getElementById('inquiryRemark').value,
+        inquiry_date: document.getElementById('inquiryDate')?.value || '',
+        remark: document.getElementById('inquiryRemark')?.value || '',
         details: validDetails.map(d => ({
-            material_id: parseInt(d.material_id),
-            supplier_id: parseInt(d.supplier_id),
-            this_price: parseFloat(d.this_price),
-            library_price: parseFloat(d.library_price),
-            quantity: parseFloat(d.quantity) || 1
+            material_id: parseInt(d?.material_id, 10) || 0,
+            supplier_id: parseInt(d?.supplier_id, 10) || 0,
+            this_price: parseFloat(d?.this_price) || 0,
+            library_price: parseFloat(d?.library_price) || 0,
+            quantity: parseFloat(d?.quantity) || 1
         }))
     };
 
@@ -1260,6 +1439,8 @@ function openModal(id) {
 
     // 打开询价单模态框时加载数据（只加载一次）
     if (id === 'modal-inquiry' && !modal.dataset.loaded) {
+        // 设置默认日期为今天
+        document.getElementById('inquiryDate').value = new Date().toISOString().split('T')[0];
         loadUnitsAndSuppliers().then(() => {
             if (inquiryDetails.length === 0) {
                 addInquiryDetail();
