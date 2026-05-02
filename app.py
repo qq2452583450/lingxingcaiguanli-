@@ -2,7 +2,7 @@
 零星材管理系统 - Flask后端
 使用蓝图模块化架构
 """
-from flask import Flask, send_from_directory
+from flask import Flask, send_from_directory, jsonify
 from flask_cors import CORS
 import os
 import config
@@ -18,7 +18,6 @@ from blueprints import (
     auth_bp,
     material_bp,
     inquiry_bp,
-    order_bp,
     stock_bp,
     sales_bp,
     reconciliation_bp,
@@ -29,7 +28,6 @@ from blueprints import (
 app.register_blueprint(auth_bp)
 app.register_blueprint(material_bp)
 app.register_blueprint(inquiry_bp)
-app.register_blueprint(order_bp)
 app.register_blueprint(stock_bp)
 app.register_blueprint(sales_bp)
 app.register_blueprint(reconciliation_bp)
@@ -46,6 +44,8 @@ def index():
 @app.route('/<path:path>')
 def static_files(path):
     """静态文件"""
+    if path.startswith('api/'):
+        return jsonify({'success': False, 'message': 'API not found'}), 404
     return send_from_directory('.', path)
 
 # ==================== 启动 ====================
@@ -65,6 +65,10 @@ if __name__ == '__main__':
         conn = db_conn()
         insert_default_data(conn)
         conn.close()
+    
+    # 自动修复数据库表结构（确保与代码定义一致）
+    from database.auto_fix import auto_fix_database
+    auto_fix_database()
 
     print("=" * 50)
     print("零星材管理系统 Web版")

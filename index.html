@@ -18,6 +18,18 @@
         </div>
     </div>
 
+    <!-- 项目选择页面 -->
+    <div id="projectSelectPage" class="login-container hidden">
+        <div class="login-box" style="min-width:400px;">
+            <h1>选择项目</h1>
+            <p style="text-align:center;color:#666;margin-bottom:20px;">请选择要进入的项目</p>
+            <select id="selectProject" style="width:100%;padding:12px;margin-bottom:20px;border:1px solid #ddd;border-radius:6px;font-size:14px;">
+                <option value="">-- 选择项目 --</option>
+            </select>
+            <button onclick="confirmProject()" style="width:100%;padding:12px;background:#3498db;color:white;border:none;border-radius:6px;cursor:pointer;font-size:16px;">进入系统</button>
+        </div>
+    </div>
+
     <!-- 主页面 -->
     <div id="mainPage" class="main-layout hidden">
         <!-- 左侧导航 -->
@@ -30,19 +42,23 @@
                 <div class="nav-item active" onclick="showModule('home')"><i data-lucide="home"></i> 首页</div>
                 <div class="nav-item" onclick="showModule('material')"><i data-lucide="package"></i> 材料信息</div>
                 <div class="nav-item" onclick="showModule('purchase_inquiry')"><i data-lucide="file-text"></i> 采购询比价</div>
-                <div class="nav-item" onclick="showModule('purchase_order')"><i data-lucide="clipboard-list"></i> 集采订单</div>
-                <div class="nav-item" onclick="showModule('stock_in')"><i data-lucide="package-plus"></i> 入库管理</div>
+<div class="nav-item" onclick="showModule('stock_in')"><i data-lucide="package-plus"></i> 入库管理</div>
                 <div class="nav-item" onclick="showModule('stock_out')"><i data-lucide="package-minus"></i> 出库管理</div>
                 <div class="nav-item" onclick="showModule('inventory')"><i data-lucide="bar-chart-2"></i> 库存管理</div>
                 <div class="nav-item" onclick="showModule('supplier')"><i data-lucide="building"></i> 供应商</div>
+                <div class="nav-item admin-only-nav" onclick="showModule('project')"><i data-lucide="folder-kanban"></i> 项目管理</div>
                 <div class="nav-item" onclick="showModule('reconciliation')"><i data-lucide="file-check"></i> 对账管理</div>
                 <div class="nav-item" onclick="showModule('report')"><i data-lucide="pie-chart"></i> 报表统计</div>
-                <div class="nav-item" onclick="showModule('system')"><i data-lucide="settings"></i> 系统设置</div>
+                <div class="nav-item admin-only-nav" onclick="showModule('system')"><i data-lucide="settings"></i> 系统设置</div>
             </div>
             <div class="sidebar-footer">
                 <div class="user-info" id="userInfo">用户: -</div>
-                <div>角色: <span id="userRole">-</span></div>
-                <button onclick="logout()" style="margin-top:10px;padding:5px 10px;background:#e74c3c;color:white;border:none;border-radius:4px;cursor:pointer;">退出</button>
+                <div>角色: <span id="userRoleDisplay">-</span></div>
+                <div id="currentProjectDisplay" style="margin:5px 0;font-size:12px;color:#666;display:none;">项目: <span id="selectedProjectName">-</span></div>
+                <div style="display:flex;gap:5px;margin-top:5px;">
+                    <button id="switchProjectBtn" onclick="openSwitchProjectModal()" style="flex:1;padding:5px 8px;background:#3498db;color:white;border:none;border-radius:4px;cursor:pointer;display:none;">切换项目</button>
+                    <button onclick="logout()" style="flex:1;padding:5px 10px;background:#e74c3c;color:white;border:none;border-radius:4px;cursor:pointer;">退出</button>
+                </div>
             </div>
         </div>
 
@@ -71,10 +87,6 @@
                     <button class="shortcut-btn" onclick="showModule('purchase_inquiry');openModal('modal-inquiry')">
                         <div class="icon"><i data-lucide="file-plus"></i></div>
                         <div class="text">新建询价</div>
-                    </button>
-                    <button class="shortcut-btn" onclick="showModule('stock_in');openModal('modal-stock-in')">
-                        <div class="icon"><i data-lucide="package-plus"></i></div>
-                        <div class="text">新建入库</div>
                     </button>
                     <button class="shortcut-btn" onclick="showModule('reconciliation')">
                         <div class="icon"><i data-lucide="file-check"></i></div>
@@ -106,7 +118,7 @@
                 <div class="page-header">
                     <h1>材料信息管理</h1>
                     <div>
-                        <button class="btn btn-primary" onclick="openModal('modal-material')">新建材料</button>
+                        <button class="btn btn-primary material-manager" onclick="openMaterialModal()">新建材料</button>
                     </div>
                 </div>
                 <div class="toolbar">
@@ -117,19 +129,36 @@
                     <span id="materialStats" style="color:#666;font-size:12px;"></span>
                     <button class="btn btn-secondary" onclick="loadMaterials()">刷新</button>
                 </div>
-                <div class="table-container" id="materialTableContainer" style="max-height:calc(100vh - 280px);overflow-y:auto;">
-                    <table>
+                <div class="table-container" id="materialTableContainer" style="max-height:calc(100vh - 280px);">
+                    <table id="materialTableEl">
+                        <colgroup>
+                            <col style="width:90px">
+                            <col style="width:180px">
+                            <col style="width:130px">
+                            <col style="width:100px">
+                            <col style="width:70px">
+                            <col style="width:80px">
+                            <col style="width:55px">
+                            <col style="width:50px">
+                            <col style="width:90px">
+                            <col style="width:90px">
+                            <col style="width:180px">
+                            <col style="width:180px">
+                        </colgroup>
                         <thead>
                             <tr>
-                                <th>编码</th>
-                                <th>名称</th>
-                                <th>规格</th>
-                                <th>单位</th>
-                                <th>税率</th>
-                                <th>含税价</th>
-                                <th>不含税价</th>
-                                <th>供应商</th>
-                                <th>操作</th>
+                                <th class="col-code">编码</th>
+                                <th class="col-name">名称</th>
+                                <th class="col-spec">规格</th>
+                                <th class="col-detail-spec">详细规格</th>
+                                <th class="col-national-standard">国标</th>
+                                <th class="col-brand">品牌</th>
+                                <th class="col-unit">单位</th>
+                                <th class="col-rate">税率</th>
+                                <th class="col-price">含税价</th>
+                                <th class="col-no-tax">不含税价</th>
+                                <th class="col-supplier">供应商</th>
+                                <th class="col-actions">操作</th>
                             </tr>
                         </thead>
                         <tbody id="materialTable"></tbody>
@@ -150,6 +179,15 @@
                 </div>
                 <div class="table-container">
                     <table>
+                        <colgroup>
+                            <col style="width:180px">
+                            <col style="width:100px">
+                            <col style="width:80px">
+                            <col style="width:100px">
+                            <col style="width:80px">
+                            <col style="width:100px">
+                            <col style="width:250px">
+                        </colgroup>
                         <thead>
                             <tr>
                                 <th>单号</th>
@@ -166,56 +204,40 @@
                 </div>
             </div>
 
-            <!-- 集采订单 -->
-            <div id="purchase_orderModule" class="module hidden">
-                <div class="page-header">
-                    <h1>集中采购订单</h1>
-                    <div>
-                        <button class="btn btn-primary" onclick="openOrderModal()">新建订单</button>
-                    </div>
-                </div>
-                <div class="toolbar">
-                    <button class="btn btn-secondary" onclick="loadOrders()">刷新</button>
-                </div>
-                <div class="table-container">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>单号</th>
-                                <th>类型</th>
-                                <th>供应商</th>
-                                <th>总金额</th>
-                                <th>采购状态</th>
-                                <th>审批状态</th>
-                                <th>操作</th>
-                            </tr>
-                        </thead>
-                        <tbody id="orderTable"></tbody>
-                    </table>
-                </div>
-            </div>
-
             <!-- 入库管理 -->
             <div id="stock_inModule" class="module hidden">
                 <div class="page-header">
                     <h1>入库管理</h1>
-                    <div>
-                        <button class="btn btn-primary" onclick="openModal('modal-stock-in')">新建入库单</button>
-                    </div>
                 </div>
                 <div class="toolbar">
                     <button class="btn btn-secondary" onclick="loadStockIn()">刷新</button>
                 </div>
                 <div class="table-container">
                     <table>
+                        <colgroup>
+                            <col style="width:60px">
+                            <col style="width:150px">
+                            <col style="width:80px">
+                            <col style="width:120px">
+                            <col style="width:90px">
+                            <col style="width:80px">
+                            <col style="width:120px">
+                            <col style="width:150px">
+                            <col style="width:80px">
+                            <col style="width:80px">
+                        </colgroup>
                         <thead>
                             <tr>
-                                <th>单号</th>
-                                <th>类型</th>
+                                <th>序号</th>
+                                <th>商品名</th>
+                                <th>数量</th>
                                 <th>供应商</th>
-                                <th>仓库</th>
+                                <th>单价</th>
+                                <th>当前库存</th>
+                                <th>项目</th>
                                 <th>入库时间</th>
-                                <th>状态</th>
+                                <th class="material-clerk-only">操作</th>
+                                <th class="admin-only">操作</th>
                             </tr>
                         </thead>
                         <tbody id="stockInTable"></tbody>
@@ -235,11 +257,15 @@
                     <table>
                         <thead>
                             <tr>
-                                <th>单号</th>
-                                <th>类型</th>
-                                <th>客户</th>
+                                <th>序号</th>
+                                <th>材料名</th>
+                                <th>规格</th>
+                                <th>数量</th>
                                 <th>出库时间</th>
+                                <th>领用班组</th>
+                                <th>领用人</th>
                                 <th>操作员</th>
+                                <th class="admin-only">操作</th>
                             </tr>
                         </thead>
                         <tbody id="stockOutTable"></tbody>
@@ -259,13 +285,14 @@
                     <table>
                         <thead>
                             <tr>
-                                <th>材料编码</th>
+                                <th>序号</th>
                                 <th>材料名称</th>
                                 <th>规格</th>
                                 <th>仓库</th>
                                 <th>数量</th>
                                 <th>单价</th>
                                 <th>金额</th>
+                                <th class="admin-only">操作</th>
                             </tr>
                         </thead>
                         <tbody id="inventoryTable"></tbody>
@@ -278,7 +305,7 @@
                 <div class="page-header">
                     <h1>供应商管理</h1>
                     <div>
-                        <button class="btn btn-primary" onclick="openModal('modal-supplier')">新建供应商</button>
+                        <button class="btn btn-primary" onclick="resetSupplierModal();openModal('modal-supplier')">新建供应商</button>
                     </div>
                 </div>
                 <div class="toolbar">
@@ -286,13 +313,22 @@
                 </div>
                 <div class="table-container">
                     <table>
+                        <colgroup>
+                            <col style="width:200px">
+                            <col style="width:100px">
+                            <col style="width:120px">
+                            <col style="width:200px">
+                            <col style="width:80px">
+                            <col style="width:80px">
+                        </colgroup>
                         <thead>
                             <tr>
                                 <th>名称</th>
                                 <th>联系人</th>
                                 <th>电话</th>
-                                <th>地址</th>
+                                <th>专票税率</th>
                                 <th>操作</th>
+                                <th class="admin-only">操作</th>
                             </tr>
                         </thead>
                         <tbody id="supplierTable"></tbody>
@@ -311,6 +347,14 @@
                 </div>
                 <div class="table-container">
                     <table>
+                        <colgroup>
+                            <col style="width:180px">
+                            <col style="width:150px">
+                            <col style="width:180px">
+                            <col style="width:100px">
+                            <col style="width:80px">
+                            <col style="width:200px">
+                        </colgroup>
                         <thead>
                             <tr>
                                 <th>单号</th>
@@ -337,6 +381,33 @@
                 </div>
             </div>
 
+            <!-- 项目管理 -->
+            <div id="projectModule" class="module hidden">
+                <div class="page-header">
+                    <h1>项目管理</h1>
+                    <button class="btn btn-primary" onclick="openNewProjectModal()">新建项目</button>
+                </div>
+                <div class="card">
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>项目编号</th>
+                                    <th>项目名称</th>
+                                    <th>合同号</th>
+                                    <th>客户</th>
+                                    <th>开始日期</th>
+                                    <th>结束日期</th>
+                                    <th>备注</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="projectTable"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
             <!-- 系统设置 -->
             <div id="systemModule" class="module hidden">
                 <div class="page-header">
@@ -345,7 +416,7 @@
                 <div class="card">
                     <h3>用户管理</h3>
                     <div style="margin: 15px 0;">
-                        <button class="btn btn-primary" onclick="openModal('modal-user')">新建用户</button>
+                        <button class="btn btn-primary" onclick="openNewUserModal()">新建用户</button>
                     </div>
                     <div class="table-container">
                         <table>
@@ -355,6 +426,7 @@
                                     <th>用户名</th>
                                     <th>姓名</th>
                                     <th>角色</th>
+                                    <th>绑定项目</th>
                                     <th>状态</th>
                                     <th>操作</th>
                                 </tr>
@@ -378,51 +450,58 @@
                 <input type="hidden" id="materialId">
                 <div class="form-row">
                     <div class="form-group">
-                        <label>材料名称 *</label>
-                        <input type="text" id="materialName" required>
+                        <label>材料编码 *</label>
+                        <input type="text" id="materialCode" required>
                     </div>
                     <div class="form-group">
-                        <label>规格</label>
-                        <input type="text" id="materialSpec">
+                        <label>材料名称 *</label>
+                        <input type="text" id="materialName" required>
                     </div>
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>单位</label>
-                        <select id="materialUnit"></select>
+                        <label>规格 *</label>
+                        <input type="text" id="materialSpec" required>
+                    </div>
+                    <div class="form-group">
+                        <label>详细规格 *</label>
+                        <input type="text" id="materialDetailSpec" required placeholder="如自喷漆800毫升/瓶，或一箱12瓶/800毫升">
+                    </div>
+                    <div class="form-group">
+                        <label>是否国标 *</label>
+                        <select id="materialNationalStandard" required>
+                            <option value="0">否</option>
+                            <option value="1">是</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>品牌 *</label>
+                        <input type="text" id="materialBrand" required placeholder="品牌">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>单位 *</label>
+                        <input type="text" id="materialUnit" required placeholder="如：个、根、米">
                     </div>
                     <div class="form-group">
                         <label>含税价 *</label>
                         <input type="number" step="0.01" id="materialTaxPrice" required>
                     </div>
+                </div>
+                <div class="form-row">
                     <div class="form-group">
-                        <label>税率</label>
-                        <select id="materialTaxRate">
+                        <label>税率 *</label>
+                        <select id="materialTaxRate" required>
                             <option value="0.01">1%</option>
                             <option value="0.06">6%</option>
                             <option value="0.09">9%</option>
                             <option value="0.13">13%</option>
                         </select>
                     </div>
-                </div>
-                <div class="form-row">
                     <div class="form-group">
-                        <label>运费</label>
-                        <input type="number" step="0.01" id="materialFreight" value="0">
-                    </div>
-                    <div class="form-group">
-                        <label>默认供应商</label>
-                        <select id="materialSupplier"></select>
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>库存下限</label>
-                        <input type="number" step="0.01" id="materialMin" value="0">
-                    </div>
-                    <div class="form-group">
-                        <label>库存上限</label>
-                        <input type="number" step="0.01" id="materialMax" value="0">
+                        <label>供应商 *</label>
+                        <select id="materialSupplier" required></select>
                     </div>
                 </div>
                 <div class="form-group">
@@ -437,9 +516,9 @@
         </div>
     </div>
 
-    <!-- 询价单模态框 -->
+    <!-- 询价单模态框 - 嵌套比价结构 -->
     <div id="modal-inquiry" class="modal">
-        <div class="modal-content" style="max-width:900px;">
+        <div class="modal-content" style="max-width:1100px;">
             <div class="modal-header">
                 <h2>新建询价单</h2>
                 <button class="modal-close" onclick="closeModal('modal-inquiry')">&times;</button>
@@ -451,32 +530,23 @@
                         <input type="date" id="inquiryDate" value="">
                     </div>
                     <div class="form-group">
+                        <label>所属项目</label>
+                        <select id="inquiryProject">
+                            <option value="">--选择项目--</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
                         <label>备注</label>
                         <input type="text" id="inquiryRemark">
                     </div>
                 </div>
                 <h4 style="margin:15px 0;">询价明细</h4>
-                <div class="table-container" style="margin-bottom:15px;">
-                    <table class="detail-table">
-                        <thead>
-                            <tr>
-                                <th>材料</th>
-                                <th>供应商</th>
-                                <th>库内价</th>
-                                <th>本次报价</th>
-                                <th>税率</th>
-                                <th>数量</th>
-                                <th>操作</th>
-                            </tr>
-                        </thead>
-                        <tbody id="inquiryDetails"></tbody>
-                    </table>
-                </div>
-                <button type="button" class="btn btn-success" onclick="addInquiryDetail()">+ 添加明细</button>
+                <button type="button" class="btn btn-success" onclick="addInquiryItem()">+ 添加询价材料</button>
+                <div id="inquiryItemsContainer" style="margin-top:15px;"></div>
                 <div style="text-align:right;margin-top:20px;">
                     <strong>总金额: ¥<span id="inquiryTotal">0.00</span></strong>
                     <button type="button" class="btn btn-secondary" onclick="closeModal('modal-inquiry')" style="margin-left:20px;">取消</button>
-                    <button type="submit" class="btn btn-primary">提交询价</button>
+                    <button type="button" class="btn btn-primary" onclick="submitInquiryForm()">提交询价</button>
                 </div>
             </form>
         </div>
@@ -531,14 +601,95 @@
         </div>
     </div>
 
+    <!-- 出库弹窗（从入库明细出库） -->
+    <div id="modal-stock-out" class="modal">
+        <div class="modal-content" style="max-width:500px;">
+            <div class="modal-header">
+                <h2>材料出库</h2>
+                <button class="modal-close" onclick="closeModal('modal-stock-out')">&times;</button>
+            </div>
+            <form id="stockOutForm" onsubmit="submitStockOut(event)">
+                <div class="form-group">
+                    <label>材料名称</label>
+                    <input type="text" id="stockOutMaterialName" readonly style="background:#f5f5f5;">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>规格</label>
+                        <input type="text" id="stockOutSpec" readonly style="background:#f5f5f5;">
+                    </div>
+                    <div class="form-group">
+                        <label>库存数量</label>
+                        <input type="text" id="stockOutStockQty" readonly style="background:#f5f5f5;">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>出库数量 <span style="color:red;">*</span></label>
+                        <input type="number" id="stockOutQuantity" min="1" step="1" required placeholder="请输入出库数量">
+                    </div>
+                    <div class="form-group">
+                        <label>单价</label>
+                        <input type="text" id="stockOutPrice" readonly style="background:#f5f5f5;">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>领用班组 <span style="color:red;">*</span></label>
+                        <input type="text" id="stockOutTeam" required placeholder="如：水电班组">
+                    </div>
+                    <div class="form-group">
+                        <label>领用人 <span style="color:red;">*</span></label>
+                        <input type="text" id="stockOutReceiver" required placeholder="如：张三">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>备注</label>
+                    <input type="text" id="stockOutRemark" placeholder="选填">
+                </div>
+                <div style="text-align:right;margin-top:20px;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-stock-out')">取消</button>
+                    <button type="submit" class="btn btn-primary">确认出库</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 出库记录弹窗 -->
+    <div id="modal-stock-out-records" class="modal">
+        <div class="modal-content" style="max-width:700px;">
+            <div class="modal-header">
+                <h2 id="stockOutRecordsTitle">出库记录</h2>
+                <button class="modal-close" onclick="closeModal('modal-stock-out-records')">&times;</button>
+            </div>
+            <div class="table-container" style="max-height:400px;overflow-y:auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>序号</th>
+                            <th>出库单号</th>
+                            <th>数量</th>
+                            <th>出库时间</th>
+                            <th>领用班组</th>
+                            <th>领用人</th>
+                            <th>操作员</th>
+                        </tr>
+                    </thead>
+                    <tbody id="stockOutRecordsTable"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
     <!-- 供应商模态框 -->
     <div id="modal-supplier" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h2>新建供应商</h2>
+                <h2 id="supplierModalTitle">新建供应商</h2>
                 <button class="modal-close" onclick="closeModal('modal-supplier')">&times;</button>
             </div>
             <form id="supplierForm">
+                <input type="hidden" id="supplierId">
                 <div class="form-group">
                     <label>供应商名称 *</label>
                     <input type="text" id="supplierName" required>
@@ -554,8 +705,19 @@
                     </div>
                 </div>
                 <div class="form-group">
-                    <label>地址</label>
-                    <input type="text" id="supplierAddress">
+                    <label>专票税率</label>
+                    <select id="supplierTaxRate">
+                        <option value="">--请选择--</option>
+                        <option value="0.01">1%</option>
+                        <option value="0.03">3%</option>
+                        <option value="0.06">6%</option>
+                        <option value="0.09">9%</option>
+                        <option value="0.13">13%</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>备注</label>
+                    <input type="text" id="supplierRemark">
                 </div>
                 <div style="text-align:right;margin-top:20px;">
                     <button type="button" class="btn btn-secondary" onclick="closeModal('modal-supplier')">取消</button>
@@ -565,53 +727,25 @@
         </div>
     </div>
 
-    <!-- 集采订单模态框 -->
-    <div id="modal-order" class="modal">
-        <div class="modal-content" style="max-width:900px;">
+    <!-- 切换项目模态框 -->
+    <div id="modal-switch-project" class="modal">
+        <div class="modal-content" style="max-width:400px;">
             <div class="modal-header">
-                <h2>新建集采订单</h2>
-                <button class="modal-close" onclick="closeModal('modal-order')">&times;</button>
+                <h2>切换项目</h2>
+                <button class="modal-close" onclick="closeModal('modal-switch-project')">&times;</button>
             </div>
-            <form id="orderForm">
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>订单类型</label>
-                        <select id="orderType">
-                            <option value="集采">集采</option>
-                            <option value="零采">零采</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>供应商</label>
-                        <select id="orderSupplier"></select>
-                    </div>
-                </div>
+            <div style="padding:10px 0;">
+                <p style="color:#666;margin-bottom:15px;">当前项目：<strong id="switchProjectCurrent"></strong></p>
                 <div class="form-group">
-                    <label>备注</label>
-                    <input type="text" id="orderRemark">
+                    <label>选择新项目</label>
+                    <select id="switchProjectSelect" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-size:14px;">
+                    </select>
                 </div>
-                <h4 style="margin:15px 0;">订单明细</h4>
-                <div class="table-container" style="margin-bottom:15px;">
-                    <table class="detail-table">
-                        <thead>
-                            <tr>
-                                <th>材料</th>
-                                <th>单价</th>
-                                <th>数量</th>
-                                <th>金额</th>
-                                <th>操作</th>
-                            </tr>
-                        </thead>
-                        <tbody id="orderDetails"></tbody>
-                    </table>
-                </div>
-                <button type="button" class="btn btn-success" onclick="addOrderDetail()">+ 添加明细</button>
                 <div style="text-align:right;margin-top:20px;">
-                    <strong>总金额: ¥<span id="orderTotal">0.00</span></strong>
-                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-order')" style="margin-left:20px;">取消</button>
-                    <button type="submit" class="btn btn-primary">提交</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-switch-project')">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="doSwitchProject()">确认切换</button>
                 </div>
-            </form>
+            </div>
         </div>
     </div>
 
@@ -645,6 +779,10 @@
                     </div>
                 </div>
                 <div class="form-group">
+                    <label>绑定项目</label>
+                    <div id="userProjectsCheckboxes" class="project-checkboxes" style="display:flex;flex-wrap:wrap;gap:8px 16px;max-height:160px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:10px;"></div>
+                </div>
+                <div class="form-group">
                     <label>状态</label>
                     <select id="userActive">
                         <option value="1">启用</option>
@@ -659,6 +797,169 @@
         </div>
     </div>
 
+    <!-- 项目模态框 -->
+    <div id="modal-project" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="projectModalTitle">新建项目</h2>
+                <button class="modal-close" onclick="closeModal('modal-project')">&times;</button>
+            </div>
+            <form id="projectForm">
+                <input type="hidden" id="projectId">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>项目编号 <span style="font-weight:normal;color:#999;font-size:12px;">（留空自动生成）</span></label>
+                        <input type="text" id="projectCode" placeholder="如: XM-0001，留空自动生成">
+                    </div>
+                    <div class="form-group">
+                        <label>项目名称 *</label>
+                        <input type="text" id="projectName" required>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>合同号</label>
+                        <input type="text" id="projectContract">
+                    </div>
+                    <div class="form-group">
+                        <label>客户</label>
+                        <select id="projectCustomer">
+                            <option value="">--选择客户--</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>开始日期</label>
+                        <input type="date" id="projectStartDate">
+                    </div>
+                    <div class="form-group">
+                        <label>结束日期</label>
+                        <input type="date" id="projectEndDate">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>备注</label>
+                    <textarea id="projectRemark" rows="3"></textarea>
+                </div>
+                <div style="text-align:right;margin-top:20px;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-project')">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 新建对账单模态框 -->
+    <div id="modal-reconciliation" class="modal">
+        <div class="modal-content" style="max-width:1100px;">
+            <div class="modal-header">
+                <h2>新建对账单</h2>
+                <button class="modal-close" onclick="closeModal('modal-reconciliation')">&times;</button>
+            </div>
+            <form id="reconciliationForm" onsubmit="submitReconciliationForm(event)">
+                <!-- 基本信息 -->
+                <div class="recon-info-grid">
+                    <div class="form-group">
+                        <label>供货单位 *</label>
+                        <select id="reconSupplier" required onchange="onReconFilterChange()">
+                            <option value="">--选择供应商--</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>购货单位</label>
+                        <input type="text" id="reconCustomer" value="中天建设集团有限公司" placeholder="购货单位名称">
+                    </div>
+                    <div class="form-group">
+                        <label>项目名称 *</label>
+                        <select id="reconProject" required>
+                            <option value="">--选择项目--</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>合同编号</label>
+                        <input type="text" id="reconContract" placeholder="合同编号">
+                    </div>
+                    <div class="form-group">
+                        <label>对账周期起 *</label>
+                        <input type="date" id="reconPeriodStart" required onchange="onReconFilterChange()">
+                    </div>
+                    <div class="form-group">
+                        <label>对账周期止 *</label>
+                        <input type="date" id="reconPeriodEnd" required onchange="onReconFilterChange()">
+                    </div>
+                </div>
+
+                <!-- 明细表格 -->
+                <h4 style="margin:15px 0 8px;">对账明细</h4>
+                <div class="table-container recon-detail-table">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="width:40px;">序号</th>
+                                <th>日期</th>
+                                <th>原始单号</th>
+                                <th>询价单号</th>
+                                <th>材料名称</th>
+                                <th>规格型号</th>
+                                <th>单位</th>
+                                <th>数量</th>
+                                <th>单价</th>
+                                <th>金额</th>
+                                <th>备注</th>
+                                <th style="width:50px;">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="reconDetailsBody">
+                            <tr><td colspan="12" style="text-align:center;color:#999;">请选择供应商和对账周期，自动填充采购记录</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <button type="button" class="btn btn-outline" onclick="addReconDetailRow()" style="margin-top:8px;">+ 手动添加行</button>
+
+                <!-- 金额汇总 -->
+                <div class="recon-amount-section">
+                    <div class="recon-amount-grid">
+                        <div class="form-group">
+                            <label>税率</label>
+                            <input type="number" id="reconTaxRate" step="0.01" value="0.01" onchange="calcReconAmount()">
+                        </div>
+                        <div class="form-group">
+                            <label>本期对账金额（含税）</label>
+                            <div class="recon-amount-display" id="reconTotalAmount">¥0.00</div>
+                        </div>
+                        <div class="form-group">
+                            <label>本期不含税金额</label>
+                            <div class="recon-amount-display" id="reconTaxExemptAmount">¥0.00</div>
+                        </div>
+                        <div class="form-group">
+                            <label>累计已付款</label>
+                            <input type="number" id="reconTotalPaid" step="0.01" value="0">
+                        </div>
+                        <div class="form-group">
+                            <label>累计已开票</label>
+                            <input type="number" id="reconTotalInvoiced" step="0.01" value="0">
+                        </div>
+                        <div class="form-group">
+                            <label>累计已收款</label>
+                            <input type="number" id="reconTotalReceived" step="0.01" value="0">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-top:12px;">
+                    <label>备注</label>
+                    <textarea id="reconRemark" rows="2" placeholder="备注信息"></textarea>
+                </div>
+
+                <div class="modal-actions">
+                    <button type="submit" class="btn btn-primary">提交对账单</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-reconciliation')">取消</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- 详情模态框 -->
     <div id="modal-detail" class="modal">
         <div class="modal-content" style="max-width:800px;">
@@ -667,6 +968,69 @@
                 <button class="modal-close" onclick="closeModal('modal-detail')">&times;</button>
             </div>
             <div id="detailContent"></div>
+        </div>
+    </div>
+
+    <!-- 审批模态框 -->
+    <div id="modal-approval" class="modal">
+        <div class="modal-content" style="max-width:1000px;">
+            <div class="modal-header">
+                <h2>审批询价单</h2>
+                <button class="modal-close" onclick="closeModal('modal-approval')">&times;</button>
+            </div>
+            <!-- 基本信息 -->
+            <div class="approval-info-grid">
+                <div class="approval-info-item">
+                    <span class="label">单号</span>
+                    <span class="value" id="approvalInquiryNo">-</span>
+                </div>
+                <div class="approval-info-item">
+                    <span class="label">日期</span>
+                    <span class="value" id="approvalInquiryDate">-</span>
+                </div>
+                <div class="approval-info-item">
+                    <span class="label">申请人</span>
+                    <span class="value" id="approvalApplicant">-</span>
+                </div>
+                <div class="approval-info-item">
+                    <span class="label">总金额</span>
+                    <span class="value amount" id="approvalTotalAmount">-</span>
+                </div>
+                <div class="approval-info-item">
+                    <span class="label">当前状态</span>
+                    <span class="value" id="approvalStatus">-</span>
+                </div>
+                <div class="approval-info-item">
+                    <span class="label">低于库内价</span>
+                    <span class="value" id="approvalBelowLib">-</span>
+                </div>
+            </div>
+
+            <!-- 询价明细 -->
+            <div class="approval-section">
+                <h3 class="approval-section-title">询价明细</h3>
+                <div class="table-container" id="approvalDetailTableWrap">
+                </div>
+            </div>
+
+            <!-- 审批操作 -->
+            <div class="approval-section" id="approvalActionSection">
+                <h3 class="approval-section-title">审批操作</h3>
+                <div class="approval-actions" id="approvalActionBtns"></div>
+                <div class="form-group" style="margin-top:15px;">
+                    <label>审批意见</label>
+                    <textarea id="approvalRemark" placeholder="请输入审批意见（驳回时必填）" rows="3"></textarea>
+                </div>
+                <div id="approvalError" class="approval-error" style="display:none;"></div>
+            </div>
+
+            <!-- 审批历史 -->
+            <div class="approval-section">
+                <h3 class="approval-section-title">审批记录</h3>
+                <div class="approval-timeline" id="approvalTimeline">
+                    <div class="approval-timeline-empty">暂无审批记录</div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -702,6 +1066,6 @@
         <span id="cartBadge" class="cart-badge" style="display:none;">0</span>
     </div>
 
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/app.js?v=20260501"></script>
 </body>
 </html>

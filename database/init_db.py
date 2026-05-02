@@ -101,6 +101,29 @@ def init_database():
         cursor.execute("ALTER TABLE materials ADD COLUMN tax_rate REAL DEFAULT 0.01")
     except Exception:
         pass  # 列已存在，忽略错误
+    try:
+        cursor.execute("ALTER TABLE materials ADD COLUMN project_id INTEGER")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_materials_project ON materials(project_id)")
+    except Exception:
+        pass  # 列已存在，忽略错误
+
+    # 添加详细规格列（如果不存在）
+    try:
+        cursor.execute("ALTER TABLE materials ADD COLUMN detail_spec TEXT")
+    except Exception:
+        pass  # 列已存在
+
+    # 添加是否国标列（如果不存在）
+    try:
+        cursor.execute("ALTER TABLE materials ADD COLUMN is_national_standard INTEGER DEFAULT 0")
+    except Exception:
+        pass  # 列已存在
+
+    # 添加品牌列（如果不存在）
+    try:
+        cursor.execute("ALTER TABLE materials ADD COLUMN brand TEXT")
+    except Exception:
+        pass  # 列已存在
 
     # 材料价格历史表
     cursor.execute("""
@@ -170,6 +193,7 @@ def init_database():
             inquiry_no TEXT UNIQUE NOT NULL,
             inquiry_date TEXT,
             applicant_id INTEGER,
+            project_id INTEGER,
             total_amount REAL DEFAULT 0,
             is_below_library_price INTEGER DEFAULT 0,
             approval_status TEXT DEFAULT '待审批',
@@ -179,11 +203,12 @@ def init_database():
             library_price_updated INTEGER DEFAULT 0,
             create_time TEXT,
             remark TEXT,
-            FOREIGN KEY (applicant_id) REFERENCES users(id)
+            FOREIGN KEY (applicant_id) REFERENCES users(id),
+            FOREIGN KEY (project_id) REFERENCES projects(id)
         )
     """)
 
-    # 询价明细表
+    # 询价明细表（旧表，保留用于历史数据兼容）
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS purchase_inquiry_details (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -196,6 +221,39 @@ def init_database():
             price_diff REAL DEFAULT 0,
             FOREIGN KEY (inquiry_id) REFERENCES purchase_inquiries(id),
             FOREIGN KEY (material_id) REFERENCES materials(id),
+            FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
+        )
+    """)
+
+    # 询价材料项分组表（每种材料一行，含采购数量）
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS purchase_inquiry_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inquiry_id INTEGER NOT NULL,
+            material_id INTEGER NOT NULL,
+            quantity REAL DEFAULT 1,
+            library_price REAL DEFAULT 0,
+            selected_quote_id INTEGER,
+            create_time TEXT,
+            FOREIGN KEY (inquiry_id) REFERENCES purchase_inquiries(id) ON DELETE CASCADE,
+            FOREIGN KEY (material_id) REFERENCES materials(id)
+        )
+    """)
+
+    # 询价供应商报价表（每种材料的每家供应商报价一行）
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS purchase_inquiry_quotes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id INTEGER NOT NULL,
+            supplier_id INTEGER NOT NULL,
+            tax_price REAL DEFAULT 0,
+            tax_exempt_price REAL DEFAULT 0,
+            tax_rate REAL DEFAULT 0.13,
+            total_amount REAL DEFAULT 0,
+            is_lowest INTEGER DEFAULT 0,
+            is_selected INTEGER DEFAULT 0,
+            create_time TEXT,
+            FOREIGN KEY (item_id) REFERENCES purchase_inquiry_items(id) ON DELETE CASCADE,
             FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
         )
     """)
@@ -247,6 +305,7 @@ def init_database():
             related_order_no TEXT,
             supplier_id INTEGER,
             warehouse_id INTEGER,
+            project_id INTEGER,
             operator_id INTEGER,
             in_time TEXT,
             status TEXT DEFAULT '已入库',
@@ -254,6 +313,7 @@ def init_database():
             remark TEXT,
             FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
             FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
+            FOREIGN KEY (project_id) REFERENCES projects(id),
             FOREIGN KEY (operator_id) REFERENCES users(id)
         )
     """)
@@ -374,8 +434,10 @@ def init_database():
             original_no TEXT,
             transaction_date TEXT,
             material_id INTEGER,
+            material_name TEXT,
             specification TEXT,
             unit_id INTEGER,
+            unit_name TEXT,
             quantity REAL DEFAULT 0,
             unit_price REAL DEFAULT 0,
             amount REAL DEFAULT 0,
@@ -411,6 +473,18 @@ def init_database():
             detail TEXT,
             create_time TEXT,
             FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+
+    # 用户-项目关联表（多对多）
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            project_id INTEGER NOT NULL,
+            UNIQUE(user_id, project_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
         )
     """)
 

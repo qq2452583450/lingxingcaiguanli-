@@ -4,7 +4,7 @@
 """
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 
 @dataclass
@@ -59,6 +59,9 @@ class Material:
     material_code: str = ""
     material_name: str = ""
     specification: str = ""
+    detail_spec: str = ""  # 详细规格
+    is_national_standard: int = 0  # 是否国标 (0=否, 1=是)
+    brand: str = ""  # 品牌
     unit_id: Optional[int] = None
     tax_price: float = 0.0  # 含税价
     tax_exempt_price: float = 0.0  # 不含税价
@@ -144,6 +147,40 @@ class PurchaseInquiryDetail:
     library_price: float = 0.0  # 库内价（快照）
     is_lowest: int = 0  # 是否为最低价
     price_diff: float = 0.0  # 与库内价差额
+
+
+@dataclass
+class PurchaseInquiryItem:
+    """询价单材料项分组"""
+    id: Optional[int] = None
+    inquiry_id: Optional[int] = None
+    material_id: Optional[int] = None
+    quantity: float = 1.0  # 采购数量
+    library_price: float = 0.0  # 库内价（快照）
+    selected_quote_id: Optional[int] = None  # 选定的报价ID
+    create_time: Optional[str] = None
+    # 关联数据（API返回用，不存库）
+    material_name: str = ""
+    material_code: str = ""
+    specification: str = ""
+    unit_name: str = ""
+
+
+@dataclass
+class PurchaseInquiryQuote:
+    """询价单各家报价"""
+    id: Optional[int] = None
+    item_id: Optional[int] = None
+    supplier_id: Optional[int] = None
+    tax_price: float = 0.0  # 含税单价
+    tax_exempt_price: float = 0.0  # 不含税单价
+    tax_rate: float = 0.13  # 税率
+    total_amount: float = 0.0  # 报价总金额 = tax_price * quantity
+    is_lowest: int = 0  # 是否为最低价（1=是，0=否）
+    is_selected: int = 0  # 是否被选定为推荐供应商
+    create_time: Optional[str] = None
+    # 关联数据
+    supplier_name: str = ""
 
 
 @dataclass
@@ -309,3 +346,11 @@ class OperationLog:
     target_id: Optional[int] = None
     detail: str = ""
     create_time: Optional[str] = None
+
+
+@dataclass
+class UserProject:
+    """用户-项目多对多关联"""
+    id: Optional[int] = None
+    user_id: Optional[int] = None
+    project_id: Optional[int] = None
