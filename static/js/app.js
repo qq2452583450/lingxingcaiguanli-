@@ -781,9 +781,9 @@ function renderInquiryTable(inquiries) {
  */
 function renderMergedDetailTable(flatDetails, options = {}) {
     if (!flatDetails || flatDetails.length === 0) {
-        const cols = 7 + (options.showSelected ? 1 : 0);
+        const cols = 8 + (options.showSelected ? 1 : 0);
         return `<table><thead><tr>
-            <th>材料</th><th>规格</th><th>库内价</th>
+            <th>材料</th><th>规格</th><th>数量</th><th>库内价</th>
             <th>供应商</th><th>本次报价</th><th>价差</th>
             ${options.showSelected ? '<th>拟定</th>' : ''}
             <th>最低价</th>
@@ -798,14 +798,14 @@ function renderMergedDetailTable(flatDetails, options = {}) {
         const key = (d.material_name || '-') + '||' + (d.specification || '-');
         let group = groups.find(g => g.key === key);
         if (!group) {
-            group = { key, material_name: d.material_name || '-', specification: d.specification || '-', library_price: d.library_price || 0, rows: [] };
+            group = { key, material_name: d.material_name || '-', specification: d.specification || '-', library_price: d.library_price || 0, quantity: d.quantity || 1, rows: [] };
             groups.push(group);
         }
         group.rows.push(d);
     });
 
     let html = `<table><thead><tr>
-        <th>材料</th><th>规格</th><th>库内价</th>
+        <th>材料</th><th>规格</th><th>数量</th><th>库内价</th>
         <th>供应商</th><th>本次报价</th><th>价差</th>
         ${options.showSelected ? '<th>拟定</th>' : ''}
         <th>最低价</th>
@@ -821,10 +821,11 @@ function renderMergedDetailTable(flatDetails, options = {}) {
 
             html += '<tr>';
             if (i === 0) {
-                // 第一行：显示合并的材料名/规格/库内价
+                // 第一行：显示合并的材料名/规格/数量/库内价
                 const rowspan = g.rows.length > 1 ? ` rowspan="${g.rows.length}"` : '';
                 html += `<td${rowspan} style="font-weight:500;vertical-align:middle;">${escapeHtml(g.material_name)}</td>`;
                 html += `<td${rowspan} style="vertical-align:middle;">${escapeHtml(g.specification)}</td>`;
+                html += `<td${rowspan} style="vertical-align:middle;">${g.quantity}</td>`;
                 html += `<td${rowspan} style="vertical-align:middle;">¥${g.library_price.toFixed(2)}</td>`;
             }
             html += `<td>${escapeHtml(d.supplier_name || '-')}</td>`;
@@ -868,12 +869,14 @@ async function viewInquiry(id) {
                 const items = data.items || [];
                 items.forEach(item => {
                     const quotes = item.quotes || [];
+                    const quantity = item.quantity || 1;
                     if (quotes.length === 0) {
                         flatDetails.push({
                             material_name: item.material_name || '-',
                             specification: item.specification || '-',
                             supplier_name: '-',
                             library_price: item.library_price || 0,
+                            quantity: quantity,
                             this_price: 0,
                             price_diff: 0,
                             is_lowest: 0
@@ -886,6 +889,7 @@ async function viewInquiry(id) {
                                 specification: item.specification || '-',
                                 supplier_name: q.supplier_name || '-',
                                 library_price: item.library_price || 0,
+                                quantity: quantity,
                                 this_price: q.tax_price || 0,
                                 price_diff: priceDiff,
                                 is_lowest: q.is_lowest || 0,
@@ -1143,7 +1147,7 @@ async function loadStockIn() {
 function renderStockInTable(stockIn) {
     const tbody = document.getElementById('stockInTable');
     if (!stockIn || stockIn.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;">暂无入库记录</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#999;">暂无入库记录</td></tr>';
         return;
     }
     tbody.innerHTML = stockIn.map((s, i) => {
@@ -1160,17 +1164,14 @@ function renderStockInTable(stockIn) {
             stockBadge = '<span style="color:#999;">-</span>';
             outBtnHtml = `<button class="btn btn-warning" style="padding:4px 12px;font-size:12px;" onclick="openStockOutModal(${s.material_id}, '${escapeHtml(s.material_name || '')}', '${escapeHtml(s.specification || '')}', ${s.unit_price || 0})">出库</button>`;
         } else if (currentStock <= 0) {
-            // 库存为0 = 已全部出库
             stockBadge = '<span style="color:#e74c3c;font-weight:600;">0 <span style="font-weight:400;font-size:11px;">(已出完)</span></span>';
             rowStyle = 'style="background:#fff5f5;"';
             outBtnHtml = '<button class="btn" style="padding:4px 12px;font-size:12px;background:#ddd;color:#999;cursor:not-allowed;" disabled>已出完</button>';
         } else if (currentStock < inQty) {
-            // 部分出库
             stockBadge = `<span style="color:#f39c12;font-weight:600;">${currentStock} <span style="font-weight:400;font-size:11px;">(部分出库)</span></span>`;
             rowStyle = 'style="background:#fffcf0;"';
             outBtnHtml = `<button class="btn btn-warning" style="padding:4px 12px;font-size:12px;" onclick="openStockOutModal(${s.material_id}, '${escapeHtml(s.material_name || '')}', '${escapeHtml(s.specification || '')}', ${s.unit_price || 0})">出库</button>`;
         } else {
-            // 未出库，库存充足
             stockBadge = `<span style="color:#27ae60;font-weight:600;">${currentStock}</span>`;
             outBtnHtml = `<button class="btn btn-warning" style="padding:4px 12px;font-size:12px;" onclick="openStockOutModal(${s.material_id}, '${escapeHtml(s.material_name || '')}', '${escapeHtml(s.specification || '')}', ${s.unit_price || 0})">出库</button>`;
         }
@@ -1184,12 +1185,9 @@ function renderStockInTable(stockIn) {
             <td>${stockBadge}</td>
             <td>${escapeHtml(s.project_name || '-')}</td>
             <td>${s.in_time || '-'}</td>
-            <td class="admin-only" style="white-space:nowrap;">
+            <td style="white-space:nowrap;">
                 ${outBtnHtml}
-                <button class="btn btn-danger" style="padding:4px 12px;font-size:12px;" onclick="deleteStockIn(${s.id})">删除</button>
-            </td>
-            <td class="material-clerk-only" style="white-space:nowrap;">
-                ${outBtnHtml}
+                ${isAdmin() ? `<button class="btn btn-danger" style="padding:4px 12px;font-size:12px;" onclick="deleteStockIn(${s.id})">删除</button>` : ''}
             </td>
         </tr>`;
     }).join('');
@@ -1570,6 +1568,7 @@ function renderReconciliationTable(statements) {
         const isAdminUser = isAdmin();
         const canConfirm = s.status === '草稿' && isAdminUser;
         const canDelete = s.status === '草稿' && isAdminUser;
+        const canRollback = (s.status === '已确认' || s.status === '已打印') && isAdminUser;
         const canPrint = s.status === '已确认' || s.status === '已打印';
 
         return `
@@ -1582,11 +1581,41 @@ function renderReconciliationTable(statements) {
             <td>
                 <button class="btn btn-secondary" onclick="viewReconciliation(${s.id})">查看</button>
                 ${canConfirm ? `<button class="btn btn-warning" onclick="confirmReconciliation(${s.id})" style="font-size:12px;padding:4px 10px;">确认</button>` : ''}
+                ${canRollback ? `<button class="btn btn-danger" onclick="rollbackReconciliation(${s.id})" style="font-size:12px;padding:4px 10px;">回退</button>` : ''}
                 ${canPrint ? `<button class="btn btn-primary" onclick="printReconciliation(${s.id})">打印</button>` : ''}
                 ${canDelete ? `<button class="btn btn-danger" onclick="deleteReconciliation(${s.id})" style="font-size:12px;padding:4px 10px;">删除</button>` : ''}
             </td>
         </tr>`;
     }).join('') || '<tr><td colspan="6" class="loading">暂无数据</td></tr>';
+}
+
+async function rollbackReconciliation(id) {
+    if (!confirm('确定要回退该对账单吗？回退后状态将变为"草稿"。')) return;
+    try {
+        const res = await fetch(`/api/reconciliation/${id}/rollback`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include'
+        });
+        const text = await res.text();
+        let data;
+        try {
+            data = JSON.parse(text);
+        } catch (parseErr) {
+            console.error('响应非JSON:', text);
+            showToast('回退失败: 服务器返回了非JSON响应(' + res.status + ')', 'error');
+            return;
+        }
+        if (data.success) {
+            showToast('对账单已回退到草稿状态', 'success');
+            loadReconciliation();
+        } else {
+            showToast(data.message || '回退失败', 'error');
+        }
+    } catch (e) {
+        console.error('回退错误:', e);
+        showToast('回退失败: ' + e.message, 'error');
+    }
 }
 
 async function viewReconciliation(id) {
@@ -1874,6 +1903,12 @@ async function submitReconciliationForm(e) {
         return;
     }
 
+    const reconNo = document.getElementById('reconNo').value.trim();
+    if (!reconNo) {
+        showToast('请输入对账单编号', 'warning');
+        return;
+    }
+
     const supplierId = document.getElementById('reconSupplier').value;
     if (!supplierId) {
         showToast('请选择供货单位', 'warning');
@@ -1890,6 +1925,7 @@ async function submitReconciliationForm(e) {
     const balanceDue = totalAmount - totalPaid;
 
     const payload = {
+        reconciliation_no: reconNo,
         supplier_id: parseInt(supplierId),
         customer_name: document.getElementById('reconCustomer').value,
         project_id: parseInt(document.getElementById('reconProject').value) || null,
@@ -2038,13 +2074,13 @@ async function loadAllMaterialsForSelect() {
 // ==================== 询价单明细操作（嵌套比价结构）====================
 
 function buildDefaultQuotes() {
-    const defaultNames = ['灿宝', '永炜鑫', '蓉心胜'];
+    const defaultNames = ['广发(灿宝)', '永炜鑫', '云南蓉心胜'];
     return defaultNames.map(name => {
         const s = (suppliers || []).find(x => (x.supplier_name || '').includes(name));
         return {
             supplier_id: s ? s.id : '',
             supplier_name: s ? s.supplier_name : '',
-            tax_price: 0, tax_exempt_price: 0, tax_rate: 0.13, total_amount: 0, is_lowest: false, is_selected: false
+            tax_price: 0, tax_exempt_price: 0, tax_rate: 0.01, total_amount: 0, is_lowest: false, is_selected: false
         };
     });
 }
@@ -2085,6 +2121,26 @@ function onMaterialSelect(itemIndex, materialId) {
         item.brand = m.brand || '';
         item.unit_name = m.unit_name || '';
         item.library_price = m.tax_price || 0;
+        
+        const defaultSupplierId = m.default_supplier_id || m.supplier_id;
+        if (defaultSupplierId) {
+            const defaultSupplier = (suppliers || []).find(s => s.id == defaultSupplierId);
+            item.quotes.forEach(q => {
+                q.is_selected = false;
+            });
+            item.quotes.forEach((q, idx) => {
+                if (q.supplier_id == defaultSupplierId) {
+                    q.is_selected = true;
+                    item.selected_quote_id = defaultSupplierId;
+                }
+            });
+            if (!item.selected_quote_id && item.quotes[0]) {
+                item.quotes[0].supplier_id = defaultSupplierId;
+                item.quotes[0].supplier_name = defaultSupplier ? defaultSupplier.supplier_name : '';
+                item.quotes[0].is_selected = true;
+                item.selected_quote_id = defaultSupplierId;
+            }
+        }
     }
     renderInquiryItems();
 }
@@ -2321,28 +2377,6 @@ async function generateInquiryFromCart() {
     console.log('=== generateInquiryFromCart START ===');
     console.log('validCart count:', validCart.length);
 
-    // 将购物车数据转换为新的 items 结构
-    inquiryItems = validCart.map(item => {
-        const materialId = parseInt(item?.material_id || item?.['商品编号'], 10) || '';
-        const m = (materials || []).find(x => x?.id == materialId);
-
-        return {
-            material_id: materialId,
-            material_name: m?.material_name || item?.['商品名称'] || '',
-            material_code: m?.material_code || item?.['商品编码'] || '',
-            specification: m?.specification || '',
-            detail_spec: m?.detail_spec || '',
-            brand: m?.brand || '',
-            unit_name: m?.unit_name || '',
-            quantity: parseFloat(item?.quantity || 1),
-            library_price: m?.tax_price || 0,
-            selected_quote_id: null,
-            quotes: buildDefaultQuotes()
-        };
-    });
-
-    closeCartDrawer();
-
     // 先标记modal已加载，防止openModal重复触发初始化逻辑
     const modal = document.getElementById('modal-inquiry');
     if (modal) modal.dataset.loaded = 'true';
@@ -2350,20 +2384,56 @@ async function generateInquiryFromCart() {
     // 设置默认日期
     document.getElementById('inquiryDate').value = new Date().toISOString().split('T')[0];
 
-    // 等待材料和供应商数据加载完成后再渲染
-    await Promise.all([loadUnitsAndSuppliers(), loadAllMaterialsForSelect()]);
-
-    // 加载项目下拉（购物车生成询价单也需要加载）
-    await loadProjectsToInquirySelect();
-
+    // 立即显示模态框，用户无需等待
     modal.classList.add('show');
 
-    // 渲染明细到表格
+    // 先创建基础结构（不带quotes），等待供应商加载后再填充
+    inquiryItems = validCart.map(item => {
+        const materialId = parseInt(item?.material_id || item?.['商品编号'], 10) || '';
+        return {
+            material_id: materialId,
+            material_name: item?.material_name || item?.['商品名称'] || '',
+            material_code: item?.material_code || item?.['商品编码'] || '',
+            specification: item?.specification || '',
+            detail_spec: item?.detail_spec || '',
+            brand: item?.brand || '',
+            unit_name: item?.unit_name || '',
+            quantity: parseFloat(item?.quantity || 1),
+            library_price: parseFloat(item?.library_price || item?.this_price || 0),
+            selected_quote_id: null,
+            quotes: []  // 先空着，等供应商加载后再填充
+        };
+    });
+
     renderInquiryItems();
     updateInquiryTotal();
 
+    // 等待供应商和项目数据加载完成后再填充 quotes
+    loadUnitsAndSuppliers().then(() => {
+        // 为每个询价项填充默认供应商
+        inquiryItems.forEach(item => {
+            item.quotes = buildDefaultQuotes();
+            
+            // 如果有默认供应商，自动选中
+            const m = (materials || []).find(x => x?.id == item.material_id);
+            if (m) {
+                const defaultSupplierId = m.default_supplier_id || m.supplier_id;
+                if (defaultSupplierId) {
+                    item.quotes.forEach(q => {
+                        if (q.supplier_id == defaultSupplierId) {
+                            q.is_selected = true;
+                            item.selected_quote_id = defaultSupplierId;
+                        }
+                    });
+                }
+            }
+        });
+        renderInquiryItems();
+    });
+
+    loadProjectsToInquirySelect();
+
     console.log('=== generateInquiryFromCart END ===');
-    console.log('inquiryItems:', JSON.stringify(inquiryItems, null, 2));
 }
 
 async function submitInquiryForm() {

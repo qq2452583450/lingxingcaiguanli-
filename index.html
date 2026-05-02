@@ -236,8 +236,7 @@
                                 <th>当前库存</th>
                                 <th>项目</th>
                                 <th>入库时间</th>
-                                <th class="material-clerk-only">操作</th>
-                                <th class="admin-only">操作</th>
+                                <th>操作</th>
                             </tr>
                         </thead>
                         <tbody id="stockInTable"></tbody>
@@ -861,6 +860,10 @@
             <form id="reconciliationForm" onsubmit="submitReconciliationForm(event)">
                 <!-- 基本信息 -->
                 <div class="recon-info-grid">
+                    <div class="form-group">
+                        <label>对账单编号 *</label>
+                        <input type="text" id="reconNo" required placeholder="请输入对账单编号">
+                    </div>
                     <div class="form-group">
                         <label>供货单位 *</label>
                         <select id="reconSupplier" required onchange="onReconFilterChange()">

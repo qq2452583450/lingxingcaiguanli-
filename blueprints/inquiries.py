@@ -134,13 +134,15 @@ def create_inquiry():
 
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        # 计算总金额
+        # 计算总金额（只计算选定的报价）
         total_amount = 0
         for item in items_data:
+            quantity = float(item.get('quantity', 1) or 1)
             for quote in item.get('quotes', []):
-                tax_price = float(quote.get('tax_price', 0) or 0)
-                quantity = float(item.get('quantity', 1) or 1)
-                total_amount += tax_price * quantity
+                if quote.get('is_selected') and float(quote.get('tax_price', 0) or 0) > 0:
+                    tax_price = float(quote.get('tax_price', 0) or 0)
+                    total_amount += tax_price * quantity
+                    break
 
         # 判断是否低于库内价
         is_below = 0
@@ -435,65 +437,86 @@ def delete_inquiry(inquiry_id):
 @inquiry_bp.route('/purchase-inquiries/<int:inquiry_id>/approve', methods=['POST'])
 def approve_inquiry(inquiry_id):
     """审批询价单（支持新的 items/quotes 结构）"""
-    data = request.json
-    user = session.get('user')
-    if not user:
-        return jsonify({'success': False, 'message': '未登录'})
+    try:
+        try:
+            data = request.json or {}
+        except Exception:
+            data = {}
+        user = session.get('user')
+        if not user:
+            return jsonify({'success': False, 'message': '未登录'})
 
-    # 权限校验：只有系统管理员和材料员可以审批
-    conn_check = get_db()
-    cursor_check = conn_check.cursor()
-    cursor_check.execute("SELECT r.role_name FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.id = ?", (user['id'],))
-    role_row = cursor_check.fetchone()
-    conn_check.close()
-    role_name = dict(role_row)['role_name'] if role_row else None
-    if role_name not in ('系统管理员', '材料员'):
-        return jsonify({'success': False, 'message': '您没有审批权限，仅系统管理员或材料员可审批'})
+        # 权限校验：只有系统管理员和材料员可以审批
+        conn_check = get_db()
+        cursor_check = conn_check.cursor()
+        cursor_check.execute("SELECT r.role_name FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.id = ?", (user['id'],))
+        role_row = cursor_check.fetchone()
+        conn_check.close()
+        role_name = dict(role_row)['role_name'] if role_row else None
+        if role_name not in ('系统管理员', '材料员'):
+            return jsonify({'success': False, 'message': '您没有审批权限，仅系统管理员或材料员可审批'})
 
-    action = data.get('action')
-    remark = data.get('remark', '')
+        action = data.get('action')
+        remark = data.get('remark', '')
 
-    conn = get_db()
-    cursor = conn.cursor()
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        conn = get_db()
+        cursor = conn.cursor()
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-    if action == 'reject':
-        cursor.execute("""
-            UPDATE purchase_inquiries
-            SET approval_status = '已驳回', approver_id = ?, approve_time = ?, approval_remark = ?
-            WHERE id = ? AND approval_status IN ('待审批', '材料员已审')
-        """, (user['id'], now, remark, inquiry_id))
-        updated_rows = cursor.rowcount
-    elif action == 'material_clerk':
-        cursor.execute("""
-            UPDATE purchase_inquiries
-            SET approval_status = '材料员已审', approver_id = ?, approve_time = ?, approval_remark = ?
-            WHERE id = ? AND approval_status = '待审批'
-        """, (user['id'], now, remark, inquiry_id))
-        updated_rows = cursor.rowcount
-    elif action == 'manager':
-        # 主管审批：待审批 或 材料员已审 都可直接通过
-        cursor.execute("""
-            UPDATE purchase_inquiries
-            SET approval_status = '已同意', approver_id = ?, approve_time = ?, approval_remark = ?
-            WHERE id = ? AND approval_status IN ('待审批', '材料员已审')
-        """, (user['id'], now, remark, inquiry_id))
-        updated_rows = cursor.rowcount
+        if action == 'reject':
+            cursor.execute("""
+                UPDATE purchase_inquiries
+                SET approval_status = '已驳回', approver_id = ?, approve_time = ?, approval_remark = ?
+                WHERE id = ? AND approval_status IN ('待审批', '材料员已审')
+            """, (user['id'], now, remark, inquiry_id))
+            updated_rows = cursor.rowcount
+        elif action == 'material_clerk':
+            cursor.execute("""
+                UPDATE purchase_inquiries
+                SET approval_status = '材料员已审', approver_id = ?, approve_time = ?, approval_remark = ?
+                WHERE id = ? AND approval_status = '待审批'
+            """, (user['id'], now, remark, inquiry_id))
+            updated_rows = cursor.rowcount
+        elif action == 'manager':
+            # 主管审批：待审批 或 材料员已审 都可直接通过
+            cursor.execute("""
+                UPDATE purchase_inquiries
+                SET approval_status = '已同意', approver_id = ?, approve_time = ?, approval_remark = ?
+                WHERE id = ? AND approval_status IN ('待审批', '材料员已审')
+            """, (user['id'], now, remark, inquiry_id))
+            updated_rows = cursor.rowcount
 
-        # 尝试新的 items 结构
-        cursor.execute("SELECT * FROM purchase_inquiry_items WHERE inquiry_id = ?", (inquiry_id,))
-        items = cursor.fetchall()
+        # 尝试获取新的 items 结构
+        items = []
+        try:
+            cursor.execute("SELECT * FROM purchase_inquiry_items WHERE inquiry_id = ?", (inquiry_id,))
+            items = cursor.fetchall()
+        except Exception as e:
+            print(f"获取询价单明细失败: {e}")
 
         # 获取询价单所属项目的信息（用于生成新编号）
-        cursor.execute("SELECT * FROM purchase_inquiries WHERE id = ?", (inquiry_id,))
-        inq = dict(cursor.fetchone())
-        inquiry_project_id = inq.get('project_id')
+        inq = None
+        try:
+            cursor.execute("SELECT * FROM purchase_inquiries WHERE id = ?", (inquiry_id,))
+            inq_row = cursor.fetchone()
+            inq = dict(inq_row) if inq_row else {}
+        except Exception as e:
+            print(f"获取询价单失败: {e}")
+            inq = {}
+
+        inquiry_project_id = inq.get('project_id') if inq else None
 
         # 获取询价单所在项目的前缀（用于判断是否需要生成新编号）
-        cursor.execute("SELECT project_code FROM projects WHERE id = ?", (inquiry_project_id,))
-        proj_row = cursor.fetchone()
-        inquiry_project_code = proj_row[0] if proj_row else ''
-        inquiry_prefix = inquiry_project_code[:2].upper() if inquiry_project_code else ''
+        inquiry_project_code = ''
+        inquiry_prefix = ''
+        if inquiry_project_id:
+            try:
+                cursor.execute("SELECT project_code FROM projects WHERE id = ?", (inquiry_project_id,))
+                proj_row = cursor.fetchone()
+                inquiry_project_code = proj_row[0] if proj_row else ''
+                inquiry_prefix = inquiry_project_code[:2].upper() if inquiry_project_code else ''
+            except Exception as e:
+                print(f"获取项目信息失败: {e}")
 
         def generate_new_material_code(cursor, project_code):
             """根据项目编码生成新的材料编号"""
@@ -786,6 +809,16 @@ def approve_inquiry(inquiry_id):
     conn.commit()
     conn.close()
     return jsonify({'success': True})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        try:
+            conn.rollback()
+            conn.close()
+        except Exception:
+            pass
+        return jsonify({'success': False, 'message': f'审批失败: {str(e)}'})
 
 
 @inquiry_bp.route('/purchase-inquiries/<int:inquiry_id>/approval-history', methods=['GET'])

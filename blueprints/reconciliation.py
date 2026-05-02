@@ -187,7 +187,7 @@ def create_reconciliation():
     cursor = conn.cursor()
 
     try:
-        statement_no = generate_reconciliation_no(
+        statement_no = data.get('reconciliation_no') or generate_reconciliation_no(
             project_id=data.get('project_id'),
             supplier_id=data.get('supplier_id')
         )
@@ -266,6 +266,38 @@ def confirm_reconciliation(stmt_id):
     conn.commit()
     conn.close()
     return jsonify({'success': True, 'message': '对账单已确认'})
+
+
+@reconciliation_bp.route('/reconciliation/<int:stmt_id>/rollback', methods=['POST'])
+def rollback_reconciliation(stmt_id):
+    """回退对账单（已确认/已打印→草稿）"""
+    try:
+        user = session.get('user')
+        if not user:
+            return jsonify({'success': False, 'message': '未登录'})
+
+        conn = get_db()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT status FROM reconciliation_statements WHERE id = ?", (stmt_id,))
+            row = cursor.fetchone()
+            if not row:
+                return jsonify({'success': False, 'message': '对账单不存在'})
+
+            current_status = dict(row)['status']
+            if current_status not in ('已确认', '已打印'):
+                return jsonify({'success': False, 'message': f'当前状态为"{current_status}"，只有已确认或已打印状态才能回退'})
+
+            cursor.execute("UPDATE reconciliation_statements SET status = '草稿' WHERE id = ?", (stmt_id,))
+            conn.commit()
+            return jsonify({'success': True, 'message': '对账单已回退到草稿状态'})
+        except Exception as e:
+            conn.rollback()
+            return jsonify({'success': False, 'message': f'回退失败: {str(e)}'})
+        finally:
+            conn.close()
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'服务器错误: {str(e)}'})
 
 
 @reconciliation_bp.route('/reconciliation/<int:stmt_id>', methods=['DELETE'])
