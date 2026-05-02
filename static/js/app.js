@@ -281,6 +281,33 @@ async function loadHome() {
 
 // ==================== 材料管理 ====================
 
+// 辅助函数：安全格式化数字
+function safeNum(val, decimals = 2, prefix = '') {
+    const num = parseFloat(val);
+    if (isNaN(num)) return prefix + '-';
+    return prefix + num.toFixed(decimals);
+}
+
+// 辅助函数：安全格式化税率
+function safeRate(val) {
+    const num = parseFloat(val);
+    if (isNaN(num) || num === 0) return '-';
+    return (num * 100).toFixed(0) + '%';
+}
+
+// 辅助函数：格式化是否国标
+function formatNationalStandard(val) {
+    return val == 1 ? '是' : '否';
+}
+
+// 辅助函数：编码前缀转区域名
+function codeToRegion(code) {
+    if (!code) return '-';
+    const prefix = (code.substring(0, 2) || '').toUpperCase();
+    const map = { 'AN': '安宁', 'KM': '昆明', 'BN': '版纳', 'DL': '大理' };
+    return map[prefix] || '-';
+}
+
 // 权限判断
 function isAdmin() {
     const user = JSON.parse(sessionStorage.getItem('currentUser') || '{}');
@@ -422,45 +449,26 @@ function renderMaterialTable() {
         return;
     }
 
-    // 辅助函数：安全格式化数字
-    const safeNum = (val, decimals = 2, prefix = '') => {
-        const num = parseFloat(val);
-        if (isNaN(num)) return prefix + '-';
-        return prefix + num.toFixed(decimals);
-    };
-
-    // 辅助函数：安全格式化税率
-    const safeRate = (val) => {
-        const num = parseFloat(val);
-        if (isNaN(num) || num === 0) return '-';
-        return (num * 100).toFixed(0) + '%';
-    };
-
-    // 辅助函数：格式化是否国标
-    const formatNationalStandard = (val) => {
-        return val == 1 ? '是' : '否';
-    };
-
     // 使用文档片段减少DOM操作
     const fragment = document.createDocumentFragment();
     materials.forEach(m => {
         const tr = document.createElement('tr');
         tr.className = 'material-row';
         tr.innerHTML = `
-            <td class="col-code">${escapeHtml(m.material_code) || '-'}</td>
+            <td class="col-code">${codeToRegion(m.material_code)}</td>
             <td class="col-name">${escapeHtml(m.material_name) || '-'}</td>
             <td class="col-spec">${escapeHtml(m.specification) || '-'}</td>
-            <td class="col-detail-spec">${escapeHtml(m.detail_spec) || '-'}</td>
-            <td class="col-national-standard">${formatNationalStandard(m.is_national_standard)}</td>
-            <td class="col-brand">${escapeHtml(m.brand) || '-'}</td>
             <td class="col-unit">${escapeHtml(m.unit_name) || '-'}</td>
+            <td class="col-detail-spec">${escapeHtml(m.detail_spec) || '-'}</td>
+            <td class="col-brand">${escapeHtml(m.brand) || '-'}</td>
+            <td class="col-national-standard">${formatNationalStandard(m.is_national_standard)}</td>
             <td class="col-rate">${safeRate(m.tax_rate)}</td>
             <td class="col-price">¥${safeNum(m.tax_price)}</td>
             <td class="col-no-tax">¥${safeNum(m.tax_exempt_price)}</td>
             <td class="col-supplier">${escapeHtml(m.supplier_name) || '-'}</td>
             <td class="col-actions">
-                ${isAdmin() ? `<button class="btn btn-secondary" onclick="editMaterial(${m.id})">编辑</button>
-                <button class="btn btn-danger" onclick="deleteMaterial(${m.id})">删除</button>` : ''}
+                ${(isAdmin() || isMaterialClerk()) ? `<button class="btn btn-secondary" onclick="editMaterial(${m.id})">编辑</button>` : ''}
+                ${isAdmin() ? `<button class="btn btn-danger" onclick="deleteMaterial(${m.id})">删除</button>` : ''}
                 <button class="btn btn-primary" onclick="addToCart(${m.id})">加入询比价</button>
             </td>
         `;
@@ -553,7 +561,7 @@ function renderCartItems() {
     }
     tbody.innerHTML = validCart.map((c, i) => `
         <tr>
-            <td>${escapeHtml(c?.material_code || c?.['商品编号'] || '无编号')}</td>
+            <td>${codeToRegion(c?.material_code || c?.['商品编号'] || '')}</td>
             <td>${escapeHtml(c?.material_name || c?.['商品名'] || '未知材料')}</td>
             <td>${escapeHtml(c?.specification || '-')}</td>
             <td>¥${(c?.library_price || c?.['含税价'] || 0).toFixed(2)}</td>
@@ -588,7 +596,7 @@ async function openMaterialModal(id = null) {
         if (m) {
             document.getElementById('materialId').value = m.id;
             document.getElementById('materialCode').value = m.material_code || '';
-            document.getElementById('materialCode').removeAttribute('readonly');
+            document.getElementById('materialRegion').value = codeToRegion(m.material_code);
             document.getElementById('materialName').value = m.material_name;
             document.getElementById('materialSpec').value = m.specification || '';
             document.getElementById('materialDetailSpec').value = m.detail_spec || '';
@@ -600,6 +608,20 @@ async function openMaterialModal(id = null) {
             document.getElementById('materialUnit').value = m.unit_name || '';
             document.getElementById('materialSupplier').value = m.default_supplier_id || '';
             document.getElementById('materialModalTitle').textContent = '编辑材料';
+
+            // 材料员编辑时禁用价格和供应商字段（由审批通过后覆盖）
+            const isMaterialClerkUser = !isAdmin() && isMaterialClerk();
+            document.getElementById('materialTaxPrice').readOnly = isMaterialClerkUser;
+            document.getElementById('materialSupplier').disabled = isMaterialClerkUser;
+            if (isMaterialClerkUser) {
+                document.getElementById('materialTaxPrice').style.backgroundColor = '#f5f5f5';
+                document.getElementById('materialSupplier').style.backgroundColor = '#f5f5f5';
+            } else {
+                document.getElementById('materialTaxPrice').readOnly = false;
+                document.getElementById('materialSupplier').disabled = false;
+                document.getElementById('materialTaxPrice').style.backgroundColor = '';
+                document.getElementById('materialSupplier').style.backgroundColor = '';
+            }
         }
     } else {
         document.getElementById('materialForm').reset();
@@ -608,15 +630,22 @@ async function openMaterialModal(id = null) {
         document.getElementById('materialNationalStandard').value = 0;
         document.getElementById('materialBrand').value = '';
         document.getElementById('materialModalTitle').textContent = '新建材料';
+        // 新建时启用所有字段
+        document.getElementById('materialTaxPrice').readOnly = false;
+        document.getElementById('materialSupplier').disabled = false;
+        document.getElementById('materialTaxPrice').style.backgroundColor = '';
+        document.getElementById('materialSupplier').style.backgroundColor = '';
         await loadUnitsAndSuppliers();
 
+        // 根据当前项目自动设置区域
         try {
             const res = await fetch(`/api/next-material-code?project_id=${currentProjectId}`);
             const data = await res.json();
             document.getElementById('materialCode').value = data.material_code || '';
-            document.getElementById('materialCode').setAttribute('readonly', 'readonly');
+            document.getElementById('materialRegion').value = codeToRegion(data.material_code || '');
         } catch (e) {
             document.getElementById('materialCode').value = '';
+            document.getElementById('materialRegion').value = '';
         }
     }
 
@@ -1993,7 +2022,32 @@ async function loadUnitsAndSuppliers() {
     }
 }
 
+async function loadAllMaterialsForSelect() {
+    try {
+        const res = await fetch('/api/materials?page=1&page_size=9999');
+        const data = await res.json();
+        if (data.success) {
+            materials = data.data || [];
+            console.log('加载全部材料:', materials.length, '个');
+        }
+    } catch (e) {
+        console.error('加载全部材料失败:', e);
+    }
+}
+
 // ==================== 询价单明细操作（嵌套比价结构）====================
+
+function buildDefaultQuotes() {
+    const defaultNames = ['灿宝', '永炜鑫', '蓉心胜'];
+    return defaultNames.map(name => {
+        const s = (suppliers || []).find(x => (x.supplier_name || '').includes(name));
+        return {
+            supplier_id: s ? s.id : '',
+            supplier_name: s ? s.supplier_name : '',
+            tax_price: 0, tax_exempt_price: 0, tax_rate: 0.13, total_amount: 0, is_lowest: false, is_selected: false
+        };
+    });
+}
 
 function addInquiryItem() {
     const item = {
@@ -2001,15 +2055,13 @@ function addInquiryItem() {
         material_name: '',
         material_code: '',
         specification: '',
+        detail_spec: '',
+        brand: '',
         unit_name: '',
         quantity: 1,
         library_price: 0,
         selected_quote_id: null,
-        quotes: [
-            { supplier_id: '', supplier_name: '', tax_price: 0, tax_exempt_price: 0, tax_rate: 0.13, total_amount: 0, is_lowest: false, is_selected: false },
-            { supplier_id: '', supplier_name: '', tax_price: 0, tax_exempt_price: 0, tax_rate: 0.13, total_amount: 0, is_lowest: false, is_selected: false },
-            { supplier_id: '', supplier_name: '', tax_price: 0, tax_exempt_price: 0, tax_rate: 0.13, total_amount: 0, is_lowest: false, is_selected: false }
-        ]
+        quotes: buildDefaultQuotes()
     };
     inquiryItems.push(item);
     renderInquiryItems();
@@ -2029,6 +2081,8 @@ function onMaterialSelect(itemIndex, materialId) {
         item.material_name = m.material_name || '';
         item.material_code = m.material_code || '';
         item.specification = m.specification || '';
+        item.detail_spec = m.detail_spec || '';
+        item.brand = m.brand || '';
         item.unit_name = m.unit_name || '';
         item.library_price = m.tax_price || 0;
     }
@@ -2048,6 +2102,9 @@ function updateQuoteField(itemIndex, quoteIndex, field, value) {
     if (field === 'tax_price') {
         quote.tax_exempt_price = numValue > 0 ? (numValue / (1 + quote.tax_rate)) : 0;
         quote.total_amount = numValue * item.quantity;
+    } else if (field === 'tax_rate') {
+        quote.tax_exempt_price = quote.tax_price > 0 ? (quote.tax_price / (1 + numValue)) : 0;
+        quote.total_amount = quote.tax_price * item.quantity;
     } else if (field === 'tax_exempt_price') {
         quote.tax_price = numValue > 0 ? (numValue * (1 + quote.tax_rate)) : 0;
         quote.total_amount = quote.tax_price * item.quantity;
@@ -2058,6 +2115,13 @@ function updateQuoteField(itemIndex, quoteIndex, field, value) {
 
     renderInquiryItems();
     updateInquiryTotal();
+}
+
+function updateItemField(itemIndex, field, value) {
+    const item = inquiryItems[itemIndex];
+    if (item) {
+        item[field] = value;
+    }
 }
 
 function updateItemQuantity(itemIndex, quantity) {
@@ -2140,9 +2204,8 @@ function renderInquiryItems() {
                 <div class="item-info">
                     <select onchange="onMaterialSelect(${itemIndex}, this.value)">
                         <option value="">--请选择材料--</option>
-                        ${validMaterials.map(m => `<option value="${m?.id}" ${item.material_id == m?.id ? 'selected' : ''}>${escapeHtml(m?.material_code || '')}${m?.specification ? ' ' + escapeHtml(m.specification) : ''} - ${escapeHtml(m?.material_name || '')}</option>`).join('')}
+                        ${validMaterials.map(m => `<option value="${m?.id}" ${item.material_id == m?.id ? 'selected' : ''}>${codeToRegion(m?.material_code || '')} ${escapeHtml(m?.material_name || '')}${m?.specification ? ' ' + escapeHtml(m.specification) : ''}</option>`).join('')}
                     </select>
-                    ${item.material_code ? `<span class="material-code">${escapeHtml(item.material_code)}</span>` : ''}
                     ${item.specification ? `<span class="material-spec">${escapeHtml(item.specification)}</span>` : ''}
                     ${item.unit_name ? `<span class="unit">单位: ${escapeHtml(item.unit_name)}</span>` : ''}
                     <span class="library-price-badge">库内价: ¥${(item.library_price || 0).toFixed(2)}</span>
@@ -2153,6 +2216,20 @@ function renderInquiryItems() {
                            onchange="updateItemQuantity(${itemIndex}, this.value)">
                 </div>
                 <button type="button" class="btn btn-danger btn-sm" onclick="removeInquiryItem(${itemIndex})">删除材料</button>
+            </div>
+            <div style="display:flex;gap:10px;padding:8px 15px;background:#fafafa;border-bottom:1px solid var(--border);">
+                <div style="flex:1;">
+                    <label style="font-size:12px;color:#666;">详细规格 <span style="color:red;">*</span></label>
+                    <input type="text" value="${escapeHtml(item.detail_spec || '')}"
+                           onchange="updateItemField(${itemIndex}, 'detail_spec', this.value)"
+                           placeholder="如：自喷漆800毫升/瓶" style="width:100%;padding:6px 8px;border:1px solid var(--border-light);border-radius:4px;font-size:13px;">
+                </div>
+                <div style="flex:1;">
+                    <label style="font-size:12px;color:#666;">品牌 <span style="color:red;">*</span></label>
+                    <input type="text" value="${escapeHtml(item.brand || '')}"
+                           onchange="updateItemField(${itemIndex}, 'brand', this.value)"
+                           placeholder="请输入品牌" style="width:100%;padding:6px 8px;border:1px solid var(--border-light);border-radius:4px;font-size:13px;">
+                </div>
             </div>
 
             <div class="quotes-grid">
@@ -2181,6 +2258,16 @@ function renderInquiryItems() {
                                     const arrow = diff < 0 ? '↓' : diff > 0 ? '↑' : '=';
                                     return `<span class="price-diff-hint" style="color:${color};">比库内价 ${arrow} ¥${Math.abs(diff).toFixed(2)}${pct ? ' (' + pct + '%)' : ''}</span>`;
                                 })() : ''}
+                            </div>
+                            <div class="input-group">
+                                <label>税率</label>
+                                <select onchange="updateQuoteField(${itemIndex}, ${quoteIndex}, 'tax_rate', this.value)">
+                                    <option value="0.01" ${quote.tax_rate == 0.01 ? 'selected' : ''}>1%</option>
+                                    <option value="0.03" ${quote.tax_rate == 0.03 ? 'selected' : ''}>3%</option>
+                                    <option value="0.06" ${quote.tax_rate == 0.06 ? 'selected' : ''}>6%</option>
+                                    <option value="0.09" ${quote.tax_rate == 0.09 ? 'selected' : ''}>9%</option>
+                                    <option value="0.13" ${quote.tax_rate == 0.13 ? 'selected' : ''}>13%</option>
+                                </select>
                             </div>
                             <div class="input-group">
                                 <label>不含税单价</label>
@@ -2244,15 +2331,13 @@ async function generateInquiryFromCart() {
             material_name: m?.material_name || item?.['商品名称'] || '',
             material_code: m?.material_code || item?.['商品编码'] || '',
             specification: m?.specification || '',
+            detail_spec: m?.detail_spec || '',
+            brand: m?.brand || '',
             unit_name: m?.unit_name || '',
             quantity: parseFloat(item?.quantity || 1),
             library_price: m?.tax_price || 0,
             selected_quote_id: null,
-            quotes: [
-                { supplier_id: '', supplier_name: '', tax_price: 0, tax_exempt_price: 0, tax_rate: 0.13, total_amount: 0, is_lowest: false, is_selected: false },
-                { supplier_id: '', supplier_name: '', tax_price: 0, tax_exempt_price: 0, tax_rate: 0.13, total_amount: 0, is_lowest: false, is_selected: false },
-                { supplier_id: '', supplier_name: '', tax_price: 0, tax_exempt_price: 0, tax_rate: 0.13, total_amount: 0, is_lowest: false, is_selected: false }
-            ]
+            quotes: buildDefaultQuotes()
         };
     });
 
@@ -2265,8 +2350,8 @@ async function generateInquiryFromCart() {
     // 设置默认日期
     document.getElementById('inquiryDate').value = new Date().toISOString().split('T')[0];
 
-    // 等待材料数据加载完成后再渲染
-    await loadUnitsAndSuppliers();
+    // 等待材料和供应商数据加载完成后再渲染
+    await Promise.all([loadUnitsAndSuppliers(), loadAllMaterialsForSelect()]);
 
     // 加载项目下拉（购物车生成询价单也需要加载）
     await loadProjectsToInquirySelect();
@@ -2287,6 +2372,49 @@ async function submitInquiryForm() {
 
     if (rawItems.length === 0) {
         alert('请添加有效的询价材料（需选择材料）');
+        return;
+    }
+
+    // 校验详细规格和品牌必填
+    for (let i = 0; i < rawItems.length; i++) {
+        const item = rawItems[i];
+        if (!item.detail_spec || !item.detail_spec.trim()) {
+            alert(`第 ${i + 1} 个材料的"详细规格"不能为空，请填写后重新提交`);
+            return;
+        }
+        if (!item.brand || !item.brand.trim()) {
+            alert(`第 ${i + 1} 个材料的"品牌"不能为空，请填写后重新提交`);
+            return;
+        }
+    }
+
+    // 先将详细规格和品牌更新到材料信息表
+    try {
+        for (const item of rawItems) {
+            const m = (materials || []).find(x => x?.id == item.material_id);
+            if (m) {
+                const updateBody = {
+                    material_name: m.material_name,
+                    specification: m.specification,
+                    detail_spec: item.detail_spec.trim(),
+                    is_national_standard: m.is_national_standard || 0,
+                    brand: item.brand.trim(),
+                    unit_name: m.unit_name || '',
+                    tax_price: m.tax_price || 0,
+                    tax_rate: m.tax_rate || 0.01,
+                    default_supplier_id: m.default_supplier_id || null,
+                    remark: m.remark || ''
+                };
+                await fetch(`/api/materials/${item.material_id}`, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(updateBody)
+                });
+            }
+        }
+    } catch (e) {
+        console.error('更新材料信息失败:', e);
+        alert('更新材料详细规格/品牌失败: ' + e.message);
         return;
     }
 
@@ -2453,20 +2581,19 @@ function openModal(id) {
 
     // 打开询价单模态框时加载数据（只加载一次）
     if (id === 'modal-inquiry' && !modal.dataset.loaded) {
-        // 设置默认日期为今天
         document.getElementById('inquiryDate').value = new Date().toISOString().split('T')[0];
-        loadUnitsAndSuppliers().then(() => {
+        Promise.all([loadUnitsAndSuppliers(), loadAllMaterialsForSelect()]).then(() => {
             if (inquiryItems.length === 0) {
                 addInquiryItem();
             }
+            renderInquiryItems();
         });
-        // 加载项目下拉
         loadProjectsToInquirySelect();
         modal.dataset.loaded = 'true';
     }
     // 打开入库单模态框时加载数据
     if (id === 'modal-stock-in' && !modal.dataset.loaded) {
-        loadUnitsAndSuppliers();
+        Promise.all([loadUnitsAndSuppliers(), loadAllMaterialsForSelect()]);
         modal.dataset.loaded = 'true';
     }
     // 打开对账单模态框时初始化

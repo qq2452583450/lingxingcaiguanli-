@@ -234,6 +234,7 @@ def init_database():
             quantity REAL DEFAULT 1,
             library_price REAL DEFAULT 0,
             selected_quote_id INTEGER,
+            tax_rate REAL DEFAULT 0.01,
             create_time TEXT,
             FOREIGN KEY (inquiry_id) REFERENCES purchase_inquiries(id) ON DELETE CASCADE,
             FOREIGN KEY (material_id) REFERENCES materials(id)

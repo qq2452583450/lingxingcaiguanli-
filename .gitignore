@@ -25,3 +25,12 @@ Thumbs.db
 
 # gstack
 .gstack/qa-reports/screenshots/
+
+# Claude AI
+.claude/
+
+# Workbuddy AI
+.workbuddy/
+
+# Database files
+*.db

@@ -35,20 +35,38 @@ def generate_stock_out_no():
 
 @stock_bp.route('/stock-in', methods=['GET'])
 def get_stock_in():
-    """获取所有入库单"""
+    """获取所有入库明细（每条材料单独一行，含当前库存和出库状态）"""
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT si.*, s.supplier_name, w.warehouse_name, u.real_name as operator_name
-        FROM stock_in_orders si
+        SELECT 
+            sid.id,
+            sid.order_id,
+            sid.material_id,
+            si.order_no,
+            si.in_time,
+            si.source_type,
+            m.material_name,
+            m.specification,
+            u.unit_name,
+            sid.quantity,
+            sid.unit_price,
+            sid.amount,
+            s.supplier_name,
+            p.project_name,
+            COALESCE(inv.quantity, 0) AS current_stock
+        FROM stock_in_details sid
+        JOIN stock_in_orders si ON sid.order_id = si.id
+        LEFT JOIN materials m ON sid.material_id = m.id
+        LEFT JOIN units u ON m.unit_id = u.id
         LEFT JOIN suppliers s ON si.supplier_id = s.id
-        LEFT JOIN warehouses w ON si.warehouse_id = w.id
-        LEFT JOIN users u ON si.operator_id = u.id
-        ORDER BY si.create_time DESC
+        LEFT JOIN projects p ON si.project_id = p.id
+        LEFT JOIN inventory inv ON sid.material_id = inv.material_id AND inv.warehouse_id = 1
+        ORDER BY si.in_time DESC, sid.id ASC
     """)
-    stock_in = [dict(row) for row in cursor.fetchall()]
+    details = [dict(row) for row in cursor.fetchall()]
     conn.close()
-    return jsonify({'success': True, 'data': stock_in})
+    return jsonify({'success': True, 'data': details})
 
 
 @stock_bp.route('/stock-in', methods=['POST'])
@@ -120,24 +138,38 @@ def create_stock_in():
 
 @stock_bp.route('/stock-out', methods=['GET'])
 def get_stock_out():
-    """获取所有出库单"""
+    """获取所有出库明细（每条材料单独一行）"""
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT so.*, w.warehouse_name, u.real_name as operator_name
-        FROM stock_out_orders so
-        LEFT JOIN warehouses w ON so.warehouse_id = w.id
+        SELECT 
+            sod.id,
+            sod.order_id,
+            so.order_no,
+            so.out_time,
+            m.material_name,
+            m.specification,
+            u2.unit_name,
+            sod.quantity,
+            sod.unit_price,
+            sod.team_name,
+            sod.receiver_name,
+            u.real_name as operator_name
+        FROM stock_out_details sod
+        JOIN stock_out_orders so ON sod.order_id = so.id
+        LEFT JOIN materials m ON sod.material_id = m.id
+        LEFT JOIN units u2 ON m.unit_id = u2.id
         LEFT JOIN users u ON so.operator_id = u.id
-        ORDER BY so.create_time DESC
+        ORDER BY so.out_time DESC, sod.id ASC
     """)
-    stock_out = [dict(row) for row in cursor.fetchall()]
+    details = [dict(row) for row in cursor.fetchall()]
     conn.close()
-    return jsonify({'success': True, 'data': stock_out})
+    return jsonify({'success': True, 'data': details})
 
 
 @stock_bp.route('/stock-out', methods=['POST'])
 def create_stock_out():
-    """创建出库单"""
+    """创建出库单（从入库明细直接出库）"""
     data = request.json
     user = session.get('user')
     if not user:
@@ -150,34 +182,70 @@ def create_stock_out():
         order_no = generate_stock_out_no()
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         details = data.get('details', [])
+        team_name = data.get('team_name', '')
+        receiver_name = data.get('receiver_name', '')
+        project_id = data.get('project_id')
+
+        if not details:
+            conn.close()
+            return jsonify({'success': False, 'message': '出库明细不能为空'})
+
+        if not team_name and not receiver_name:
+            conn.close()
+            return jsonify({'success': False, 'message': '请填写领用班组或领用人'})
 
         cursor.execute("""
             INSERT INTO stock_out_orders (
                 order_no, out_type, customer_name, warehouse_id,
-                operator_id, out_time, create_time, remark
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                operator_id, out_time, create_time, remark, project_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            order_no, escape(data.get('out_type', '领用')), escape(data.get('customer_name', '')),
-            data.get('warehouse_id', 1), user['id'], now, now, escape(data.get('remark', ''))
+            order_no, '领用', '', 1,
+            user['id'], now, now, escape(data.get('remark', '')), project_id
         ))
         order_id = cursor.lastrowid
 
         for d in details:
-            amount = d.get('quantity', 0) * d.get('unit_price', 0)
-            cursor.execute("""
-                INSERT INTO stock_out_details (order_id, material_id, quantity, unit_price, amount)
-                VALUES (?, ?, ?, ?, ?)
-            """, (order_id, d.get('material_id'), d.get('quantity', 0),
-                  d.get('unit_price', 0), amount))
+            material_id = d.get('material_id')
+            quantity = float(d.get('quantity', 0))
+            unit_price = float(d.get('unit_price', 0))
 
-            # 扣减库存（防止负数）
+            if quantity <= 0:
+                raise Exception(f"出库数量必须大于0")
+
+            # 检查库存
+            cursor.execute("""
+                SELECT quantity FROM inventory WHERE material_id = ? AND warehouse_id = ?
+            """, (material_id, 1))
+            inv = cursor.fetchone()
+            current_stock = inv['quantity'] if inv else 0
+
+            if current_stock < 1:
+                # 查材料名用于友好提示
+                cursor.execute("SELECT material_name FROM materials WHERE id = ?", (material_id,))
+                mat = cursor.fetchone()
+                mat_name = mat['material_name'] if mat else f'ID:{material_id}'
+                raise Exception(f"库存不足：「{mat_name}」当前库存为 {current_stock}，无法出库")
+
+            if current_stock < quantity:
+                # 查材料名用于友好提示
+                cursor.execute("SELECT material_name FROM materials WHERE id = ?", (material_id,))
+                mat = cursor.fetchone()
+                mat_name = mat['material_name'] if mat else f'ID:{material_id}'
+                raise Exception(f"库存不足：「{mat_name}」当前库存仅 {current_stock}，不足出库 {quantity}")
+
+            amount = quantity * unit_price
+            cursor.execute("""
+                INSERT INTO stock_out_details (order_id, material_id, quantity, unit_price, amount, team_name, receiver_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (order_id, material_id, quantity, unit_price, amount,
+                  escape(team_name), escape(receiver_name)))
+
+            # 扣减库存
             cursor.execute("""
                 UPDATE inventory SET quantity = quantity - ?, update_time = ?
-                WHERE material_id = ? AND warehouse_id = ? AND quantity >= ?
-            """, (d.get('quantity', 0), now, d.get('material_id'), data.get('warehouse_id', 1), d.get('quantity', 0)))
-            if cursor.rowcount == 0:
-                # 库存不足，回滚
-                raise Exception(f"库存不足：材料ID {d.get('material_id')} 在仓库 {data.get('warehouse_id', 1)} 库存不足")
+                WHERE material_id = ? AND warehouse_id = ?
+            """, (quantity, now, material_id, 1))
 
         conn.commit()
         conn.close()
@@ -187,6 +255,35 @@ def create_stock_out():
         conn.rollback()
         conn.close()
         return jsonify({'success': False, 'message': str(e)})
+
+
+# ==================== 材料出库记录查询 ====================
+
+@stock_bp.route('/stock-out/by-material/<int:material_id>', methods=['GET'])
+def get_stock_out_by_material(material_id):
+    """查询指定材料的出库历史记录"""
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT 
+            sod.id,
+            so.order_no,
+            so.out_time,
+            sod.quantity,
+            sod.unit_price,
+            sod.amount,
+            sod.team_name,
+            sod.receiver_name,
+            u.real_name as operator_name
+        FROM stock_out_details sod
+        JOIN stock_out_orders so ON sod.order_id = so.id
+        LEFT JOIN users u ON so.operator_id = u.id
+        WHERE sod.material_id = ?
+        ORDER BY so.out_time DESC
+    """, (material_id,))
+    records = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify({'success': True, 'data': records})
 
 
 # ==================== 库存查询 ====================
@@ -208,3 +305,48 @@ def get_inventory():
     inventory = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return jsonify({'success': True, 'data': inventory})
+
+
+@stock_bp.route('/stock-in/<int:stock_in_id>', methods=['DELETE'])
+def delete_stock_in(stock_in_id):
+    """删除入库明细"""
+    user = session.get('user')
+    if not user or user.get('role_name') != '系统管理员':
+        return jsonify({'success': False, 'message': '仅管理员可删除'})
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM stock_in_details WHERE id = ?', (stock_in_id,))
+    conn.commit()
+    rows = cursor.rowcount
+    conn.close()
+    return jsonify({'success': rows > 0, 'message': '删除成功' if rows > 0 else '删除失败'})
+
+
+@stock_bp.route('/stock-out/<int:stock_out_id>', methods=['DELETE'])
+def delete_stock_out(stock_out_id):
+    """删除出库明细"""
+    user = session.get('user')
+    if not user or user.get('role_name') != '系统管理员':
+        return jsonify({'success': False, 'message': '仅管理员可删除'})
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM stock_out_details WHERE id = ?', (stock_out_id,))
+    conn.commit()
+    rows = cursor.rowcount
+    conn.close()
+    return jsonify({'success': rows > 0, 'message': '删除成功' if rows > 0 else '删除失败'})
+
+
+@stock_bp.route('/inventory/<int:material_id>', methods=['DELETE'])
+def delete_inventory(material_id):
+    """删除库存记录"""
+    user = session.get('user')
+    if not user or user.get('role_name') != '系统管理员':
+        return jsonify({'success': False, 'message': '仅管理员可删除'})
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM inventory WHERE material_id = ?', (material_id,))
+    conn.commit()
+    rows = cursor.rowcount
+    conn.close()
+    return jsonify({'success': rows > 0, 'message': '删除成功' if rows > 0 else '删除失败'})

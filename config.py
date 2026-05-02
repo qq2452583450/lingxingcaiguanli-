@@ -31,10 +31,7 @@ DEFAULT_UNITS = [
 # 预置角色
 DEFAULT_ROLES = [
     {"name": "系统管理员", "permissions": "*"},
-    {"name": "项目部员工", "permissions": "material.view,purchase_inquiry.add,purchase_inquiry.view"},
-    {"name": "领导", "permissions": "material.view,purchase_inquiry.view,purchase_approval,report.view"},
-    {"name": "材料员", "permissions": "material.view,stock.in,stock.out,inventory.view"},
-    {"name": "销售员", "permissions": "material.view,sales.add,sales.view,customer.view"},
+    {"name": "材料员", "permissions": "material.view,material.add,material.edit,stock.in,stock.out,stock.view,inventory.view"},
 ]
 
 # 预置账号（密码通过环境变量 ADMIN_PASSWORD 设置，默认为空，首次登录需修改）

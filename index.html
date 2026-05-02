@@ -147,13 +147,13 @@
                         </colgroup>
                         <thead>
                             <tr>
-                                <th class="col-code">编码</th>
+                                <th class="col-code">区域</th>
                                 <th class="col-name">名称</th>
                                 <th class="col-spec">规格</th>
-                                <th class="col-detail-spec">详细规格</th>
-                                <th class="col-national-standard">国标</th>
-                                <th class="col-brand">品牌</th>
                                 <th class="col-unit">单位</th>
+                                <th class="col-detail-spec">详细规格</th>
+                                <th class="col-brand">品牌</th>
+                                <th class="col-national-standard">国标</th>
                                 <th class="col-rate">税率</th>
                                 <th class="col-price">含税价</th>
                                 <th class="col-no-tax">不含税价</th>
@@ -448,10 +448,11 @@
             </div>
             <form id="materialForm">
                 <input type="hidden" id="materialId">
+                <input type="hidden" id="materialCode">
                 <div class="form-row">
                     <div class="form-group">
-                        <label>材料编码 *</label>
-                        <input type="text" id="materialCode" required>
+                        <label>区域</label>
+                        <input type="text" id="materialRegion" readonly style="background:#f5f5f5;">
                     </div>
                     <div class="form-group">
                         <label>材料名称 *</label>
@@ -1045,7 +1046,7 @@
             <table class="detail-table">
                 <thead>
                     <tr>
-                        <th>编码</th>
+                        <th>区域</th>
                         <th>名称</th>
                         <th>规格</th>
                         <th>库内价</th>

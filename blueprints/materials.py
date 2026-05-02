@@ -211,6 +211,10 @@ def update_material(material_id):
     conn = get_db()
     cursor = conn.cursor()
 
+    # 判断是材料员还是管理员
+    is_admin = user.get('role_name') == '系统管理员'
+
+    # 税务计算
     tax_price = data.get('tax_price', 0)
     tax_rate = data.get('tax_rate', 0.01)
     tax_exempt_price = round(tax_price / (1 + tax_rate), 2) if tax_price else 0
@@ -228,19 +232,34 @@ def update_material(material_id):
     else:
         unit_id = None
 
-    cursor.execute("""
-        UPDATE materials SET
-            material_name = ?, specification = ?, detail_spec = ?, is_national_standard = ?, brand = ?,
-            unit_id = ?, tax_price = ?, tax_exempt_price = ?, freight = ?, remark = ?,
-            default_supplier_id = ?, inventory_min = ?, inventory_max = ?, tax_rate = ?
-        WHERE id = ?
-    """, (
-        escape(data.get('material_name', '')), escape(data.get('specification', '')),
-        escape(data.get('detail_spec', '')), data.get('is_national_standard', 0), escape(data.get('brand', '')),
-        unit_id, tax_price, tax_exempt_price, data.get('freight', 0), escape(data.get('remark', '')),
-        data.get('default_supplier_id'), data.get('inventory_min', 0),
-        data.get('inventory_max', 0), tax_rate, material_id
-    ))
+    if is_admin:
+        # 管理员可以更新所有字段，包括价格和供应商
+        cursor.execute("""
+            UPDATE materials SET
+                material_name = ?, specification = ?, detail_spec = ?, is_national_standard = ?, brand = ?,
+                unit_id = ?, tax_price = ?, tax_exempt_price = ?, freight = ?, remark = ?,
+                default_supplier_id = ?, inventory_min = ?, inventory_max = ?, tax_rate = ?
+            WHERE id = ?
+        """, (
+            escape(data.get('material_name', '')), escape(data.get('specification', '')),
+            escape(data.get('detail_spec', '')), data.get('is_national_standard', 0), escape(data.get('brand', '')),
+            unit_id, tax_price, tax_exempt_price, data.get('freight', 0), escape(data.get('remark', '')),
+            data.get('default_supplier_id'), data.get('inventory_min', 0),
+            data.get('inventory_max', 0), tax_rate, material_id
+        ))
+    else:
+        # 材料员只能更新基础信息，不能修改价格和供应商
+        cursor.execute("""
+            UPDATE materials SET
+                material_name = ?, specification = ?, detail_spec = ?, is_national_standard = ?, brand = ?,
+                unit_id = ?, freight = ?, remark = ?, inventory_min = ?, inventory_max = ?, tax_rate = ?
+            WHERE id = ?
+        """, (
+            escape(data.get('material_name', '')), escape(data.get('specification', '')),
+            escape(data.get('detail_spec', '')), data.get('is_national_standard', 0), escape(data.get('brand', '')),
+            unit_id, data.get('freight', 0), escape(data.get('remark', '')),
+            data.get('inventory_min', 0), data.get('inventory_max', 0), tax_rate, material_id
+        ))
 
     conn.commit()
     conn.close()

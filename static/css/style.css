@@ -302,7 +302,7 @@ h1, h2, h3 {
 .table-container {
     background: var(--bg-white);
     border-radius: var(--radius-md);
-    overflow: hidden;
+    overflow: auto;
     box-shadow: var(--shadow-sm);
 }
 
@@ -572,6 +572,172 @@ tr:hover {
     color: var(--text-secondary);
 }
 
+/* 加载状态 - 保留DOM结构 */
+.loading-row,
+.error-row,
+.empty-row,
+.load-more-row {
+    text-align: center;
+}
+
+.loading-row td,
+.error-row td,
+.empty-row td,
+.load-more-row td {
+    padding: 20px;
+}
+
+.loading-spinner {
+    display: inline-block;
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.loading-spinner::before {
+    content: '';
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    margin-right: 8px;
+    border: 2px solid var(--border);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    vertical-align: middle;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+.error-message {
+    color: var(--danger);
+    font-size: 14px;
+}
+
+.empty-message {
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.load-more-message {
+    color: var(--text-secondary);
+    font-size: 13px;
+    padding: 10px;
+}
+
+/* 材料表格 - 固定布局 */
+#materialTableEl {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+    min-width: 1000px;
+}
+
+/* 列宽由colgroup的col元素inline样式决定 */
+
+/* 表头和数据单元格基础样式 - 统一padding */
+#materialTableEl th,
+#materialTableEl td {
+    padding: 10px 8px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+    box-sizing: border-box;
+}
+
+/* 表头样式 - 纯色不透明 */
+#materialTableEl thead th {
+    background: #f5f5f5;
+    font-weight: 600;
+    text-align: center;
+    border-bottom: 2px solid var(--border);
+    white-space: nowrap;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+/* 所有列居中对齐 */
+#materialTableEl .col-code,
+#materialTableEl thead .col-code,
+#materialTableEl .col-name,
+#materialTableEl thead .col-name,
+#materialTableEl .col-spec,
+#materialTableEl thead .col-spec,
+#materialTableEl .col-unit,
+#materialTableEl thead .col-unit,
+#materialTableEl .col-rate,
+#materialTableEl thead .col-rate,
+#materialTableEl .col-price,
+#materialTableEl thead .col-price,
+#materialTableEl .col-no-tax,
+#materialTableEl thead .col-no-tax,
+#materialTableEl .col-supplier,
+#materialTableEl thead .col-supplier,
+#materialTableEl .col-actions,
+#materialTableEl thead .col-actions { text-align: center; }
+
+/* 操作列冻结 */
+#materialTableEl .col-actions,
+#materialTableEl thead .col-actions {
+    position: sticky;
+    right: 0;
+    background: inherit;
+    z-index: 5;
+}
+
+#materialTableEl thead .col-actions {
+    background: #f5f5f5;
+    z-index: 15;
+}
+
+/* 数据行样式 - 居中对齐 */
+.material-row td {
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* 文字过长换行处理 */
+.material-row .col-name,
+.material-row .col-spec {
+    white-space: normal;
+    word-break: break-word;
+}
+
+/* 金额显示 - ¥符号已在JS中直接写入
+.material-row .col-price::before,
+.material-row .col-no-tax::before {
+    content: '¥';
+}
+*/
+
+/* 操作按钮组 */
+.material-row .col-actions .btn {
+    padding: 4px 8px;
+    font-size: 12px;
+    margin: 0 2px;
+    white-space: nowrap;
+}
+
+/* 确保操作列不换行 */
+.col-actions {
+    white-space: nowrap !important;
+}
+
+/* 表格行样式 - 确保刷新后样式一致 */
+.material-row {
+    transition: background-color 0.15s ease;
+}
+
+.material-row:hover {
+    background-color: var(--bg-hover);
+}
+
+.material-row:hover .col-actions {
+    background: var(--bg-hover);
+}
+
 /* 响应式 */
 @media (max-width: 1200px) {
     .stat-cards {
@@ -686,4 +852,634 @@ tr:hover {
     align-items: center;
     justify-content: center;
     font-weight: bold;
+}
+
+/* ==================== 询价单嵌套比价结构 ==================== */
+.inquiry-item-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    margin-bottom: 20px;
+    background: #fafafa;
+}
+
+.item-header {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 12px 15px;
+    background: #f0f0f0;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: nowrap;
+}
+
+.item-info {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    overflow: hidden;
+}
+
+.item-info select {
+    max-width: 220px;
+    min-width: 160px;
+    flex-shrink: 1;
+}
+
+.item-info .material-name {
+    font-weight: bold;
+    font-size: 16px;
+    color: var(--dark);
+}
+
+.item-info .material-code {
+    color: var(--text-secondary);
+    font-size: 12px;
+    background: #e8e8e8;
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+
+.item-info .material-spec {
+    color: var(--text-muted);
+    font-size: 12px;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.item-info .unit {
+    color: var(--text-secondary);
+    font-size: 12px;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.item-info .library-price-badge {
+    display: inline-block;
+    font-size: 13px;
+    font-weight: 600;
+    color: #fff;
+    background: linear-gradient(135deg, #e67e22, #d35400);
+    padding: 3px 10px;
+    border-radius: 12px;
+    letter-spacing: 0.5px;
+    box-shadow: 0 1px 4px rgba(230, 126, 34, 0.35);
+    margin-left: 4px;
+    white-space: nowrap;
+}
+
+.price-diff-hint {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    margin-top: 3px;
+    letter-spacing: 0.3px;
+}
+
+.item-quantity {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.item-quantity label {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.item-quantity .qty-input {
+    width: 80px;
+    padding: 6px 8px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+}
+
+.quotes-grid {
+    padding: 15px;
+}
+
+.quote-row {
+    display: flex;
+    align-items: stretch;
+    gap: 15px;
+    padding: 12px;
+    border: 1px solid #eee;
+    border-radius: var(--radius-sm);
+    margin-bottom: 10px;
+    position: relative;
+    background: white;
+    transition: border-color 0.2s, background-color 0.2s;
+}
+
+.quote-row:hover {
+    border-color: var(--primary);
+}
+
+.quote-row.lowest {
+    border-color: var(--success);
+    background: #f0fff4;
+}
+
+.quote-row.selected {
+    border-color: var(--primary);
+    background: #f0f7ff;
+}
+
+.lowest-badge {
+    position: absolute;
+    top: -8px;
+    right: 10px;
+    background: var(--success);
+    color: white;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    font-weight: bold;
+}
+
+.quote-supplier {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 160px;
+    margin: 0;
+    padding: 0;
+    justify-content: flex-start;
+}
+
+.quote-supplier label {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin: 0;
+}
+
+.quote-supplier select {
+    padding: 6px 8px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    background: white;
+    height: 34px;
+    box-sizing: border-box;
+    margin: 0;
+}
+
+.quote-inputs {
+    display: grid;
+    grid-template-columns: 1fr 80px 1fr;
+    gap: 10px;
+    flex: 1;
+    min-width: 0;
+}
+
+.input-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+}
+
+.input-group label {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin: 0;
+}
+
+.input-group input {
+    padding: 6px 8px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    height: 34px;
+    box-sizing: border-box;
+    margin: 0;
+}
+
+.input-group select {
+    padding: 6px 4px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    height: 34px;
+    box-sizing: border-box;
+    margin: 0;
+}
+
+.input-group input:focus,
+.input-group select:focus {
+    border-color: var(--primary);
+    outline: none;
+}
+
+.input-group input[readonly] {
+    background: #f5f5f5;
+    color: var(--text-secondary);
+}
+
+.quote-amount {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 110px;
+    margin: 0;
+    padding: 0;
+    justify-content: flex-start;
+}
+
+.quote-amount label {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin: 0;
+}
+
+.amount-value {
+    font-size: 18px;
+    font-weight: bold;
+    color: var(--danger);
+    line-height: 34px;
+    height: 34px;
+}
+
+.quote-actions {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    min-width: 80px;
+    margin: 0;
+    padding: 0;
+}
+
+.quote-actions .btn {
+    height: 34px;
+    box-sizing: border-box;
+    white-space: nowrap;
+    font-size: 13px;
+    padding: 6px 12px;
+    margin: 0;
+    margin-top: 18px; /* 补偿 label 高度，和输入框对齐 */
+}
+
+.btn-outline {
+    background: transparent;
+    border: 1px solid var(--primary);
+    color: var(--primary);
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+}
+
+.btn-outline:hover {
+    background: var(--primary);
+    color: white;
+}
+
+.btn-outline.selected {
+    background: var(--primary);
+    color: white;
+}
+
+#inquiryItemsContainer .empty-hint {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 40px;
+    font-size: 14px;
+}
+
+/* ==================== 审批模态框 ==================== */
+.approval-info-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.approval-info-item {
+    background: #f8f9fa;
+    padding: 10px 14px;
+    border-radius: var(--radius-sm);
+    border-left: 3px solid var(--primary);
+}
+
+.approval-info-item .label {
+    display: block;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 2px;
+}
+
+.approval-info-item .value {
+    display: block;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.approval-info-item .value.amount {
+    color: var(--danger);
+    font-size: 16px;
+}
+
+.approval-section {
+    margin-bottom: 20px;
+}
+
+.approval-section-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--dark);
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+/* 审批操作按钮组 */
+.approval-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.approval-action-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 24px;
+    border-radius: var(--radius-md);
+    border: 2px solid transparent;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    transition: all 0.2s ease;
+    position: relative;
+}
+
+.approval-action-btn .action-icon {
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+}
+
+.approval-action-btn .action-label {
+    display: flex;
+    flex-direction: column;
+}
+
+.approval-action-btn .action-label .main {
+    font-size: 14px;
+    line-height: 1.2;
+}
+
+.approval-action-btn .action-label .sub {
+    font-size: 11px;
+    opacity: 0.8;
+    font-weight: 400;
+}
+
+/* 同意按钮 */
+.approval-action-btn.btn-approve {
+    background: #f0fff4;
+    color: var(--success);
+    border-color: var(--success);
+}
+
+.approval-action-btn.btn-approve:hover {
+    background: var(--success);
+    color: white;
+}
+
+/* 驳回按钮 */
+.approval-action-btn.btn-reject {
+    background: #fff5f5;
+    color: var(--danger);
+    border-color: var(--danger);
+}
+
+.approval-action-btn.btn-reject:hover {
+    background: var(--danger);
+    color: white;
+}
+
+/* 审批错误提示 */
+.approval-error {
+    color: var(--danger);
+    font-size: 13px;
+    margin-top: 8px;
+    padding: 8px 12px;
+    background: #fff5f5;
+    border-radius: var(--radius-sm);
+    border: 1px solid #ffcdd2;
+}
+
+/* 审批时间线 */
+.approval-timeline {
+    position: relative;
+    padding-left: 24px;
+}
+
+.approval-timeline::before {
+    content: '';
+    position: absolute;
+    left: 8px;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--border);
+}
+
+.approval-timeline-item {
+    position: relative;
+    padding-bottom: 20px;
+    padding-left: 16px;
+}
+
+.approval-timeline-item:last-child {
+    padding-bottom: 0;
+}
+
+.approval-timeline-item::before {
+    content: '';
+    position: absolute;
+    left: -20px;
+    top: 6px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 2px solid var(--primary);
+    background: white;
+    z-index: 1;
+}
+
+.approval-timeline-item.approved::before {
+    background: var(--success);
+    border-color: var(--success);
+}
+
+.approval-timeline-item.rejected::before {
+    background: var(--danger);
+    border-color: var(--danger);
+}
+
+.approval-timeline-item.pending::before {
+    background: var(--warning);
+    border-color: var(--warning);
+}
+
+.approval-timeline-item.submit::before {
+    background: var(--primary);
+    border-color: var(--primary);
+}
+
+.approval-timeline-item .timeline-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 4px;
+}
+
+.approval-timeline-item .timeline-result {
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.approval-timeline-item .timeline-result.approved {
+    color: var(--success);
+}
+
+.approval-timeline-item .timeline-result.rejected {
+    color: var(--danger);
+}
+
+.approval-timeline-item .timeline-result.pending {
+    color: var(--warning);
+}
+
+.approval-timeline-item .timeline-result.submit {
+    color: var(--primary);
+}
+
+.approval-timeline-item .timeline-approver {
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.approval-timeline-item .timeline-time {
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-left: auto;
+}
+
+.approval-timeline-item .timeline-remark {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin-top: 2px;
+    padding-left: 2px;
+}
+
+.approval-timeline-empty {
+    color: var(--text-muted);
+    text-align: center;
+    padding: 20px;
+    font-size: 14px;
+}
+
+/* 审批操作提交中状态 */
+.approval-action-btn.loading {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+/* ==================== 对账单模态框 ==================== */
+.recon-info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 15px;
+}
+
+.recon-import-section {
+    background: var(--bg-secondary, #f8f9fa);
+    border-radius: 8px;
+    padding: 12px 15px;
+    margin-bottom: 10px;
+}
+
+.recon-import-section h4 {
+    margin: 0 0 8px 0;
+    font-size: 14px;
+    color: var(--text-primary, #333);
+}
+
+.recon-import-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.recon-import-row select {
+    flex: 1;
+    height: 34px;
+    padding: 0 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 13px;
+}
+
+.recon-detail-table input {
+    border: 1px solid #e0e0e0;
+    border-radius: 3px;
+    padding: 4px 6px;
+    font-size: 13px;
+    height: 28px;
+    box-sizing: border-box;
+}
+
+.recon-detail-table input:focus {
+    border-color: var(--primary, #3498db);
+    outline: none;
+}
+
+.recon-amount-section {
+    margin-top: 15px;
+    padding: 15px;
+    background: var(--bg-secondary, #f8f9fa);
+    border-radius: 8px;
+}
+
+.recon-amount-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+}
+
+.recon-amount-display {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--primary, #3498db);
+    padding: 6px 0;
+}
+
+@media (max-width: 768px) {
+    .recon-info-grid,
+    .recon-amount-grid {
+        grid-template-columns: 1fr;
+    }
+    .recon-import-row {
+        flex-direction: column;
+    }
+}
+
+/* 审批意见框在驳回模式高亮 */
+#approvalRemark.reject-required {
+    border-color: var(--danger);
+    background: #fff5f5;
 }

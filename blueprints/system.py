@@ -13,7 +13,7 @@ system_bp = Blueprint('system', __name__, url_prefix='/api')
 
 @system_bp.route('/users', methods=['GET'])
 def get_users():
-    """获取所有用户"""
+    """获取所有用户（含绑定项目）"""
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("""
@@ -24,6 +24,18 @@ def get_users():
         ORDER BY u.id
     """)
     users = [dict(row) for row in cursor.fetchall()]
+
+    # 查询每个用户绑定的项目
+    for u in users:
+        cursor.execute("""
+            SELECT p.id, p.project_name, p.project_code
+            FROM user_projects up
+            JOIN projects p ON up.project_id = p.id
+            WHERE up.user_id = ?
+            ORDER BY p.project_name
+        """, (u['id'],))
+        u['projects'] = [dict(row) for row in cursor.fetchall()]
+
     conn.close()
     return jsonify({'success': True, 'data': users})
 
@@ -63,6 +75,12 @@ def create_user():
             data.get('role_id'), data.get('is_active', 1), now
         ))
         user_id = cursor.lastrowid
+
+        # 绑定项目
+        project_ids = data.get('project_ids', [])
+        for pid in project_ids:
+            cursor.execute("INSERT OR IGNORE INTO user_projects (user_id, project_id) VALUES (?, ?)", (user_id, int(pid)))
+
         conn.commit()
         conn.close()
         return jsonify({'success': True, 'id': user_id})
@@ -100,6 +118,13 @@ def update_user(user_id):
         """, (escape(data.get('username', '')), escape(data.get('real_name', '')), data.get('role_id'),
               data.get('is_active', 1), user_id))
 
+    # 更新项目绑定
+    project_ids = data.get('project_ids', None)
+    if project_ids is not None:
+        cursor.execute("DELETE FROM user_projects WHERE user_id = ?", (user_id,))
+        for pid in project_ids:
+            cursor.execute("INSERT OR IGNORE INTO user_projects (user_id, project_id) VALUES (?, ?)", (user_id, int(pid)))
+
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -121,6 +146,7 @@ def delete_user(user_id):
         conn.close()
         return jsonify({'success': False, 'message': '不能删除管理员账号'})
 
+    cursor.execute("DELETE FROM user_projects WHERE user_id = ?", (user_id,))
     cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
     conn.commit()
     conn.close()
@@ -175,6 +201,29 @@ def create_supplier():
     conn.commit()
     conn.close()
     return jsonify({'success': True, 'id': supplier_id})
+
+
+@system_bp.route('/suppliers/<int:supplier_id>', methods=['PUT'])
+def update_supplier(supplier_id):
+    """更新供应商"""
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+    if user.get('role_name') not in ('系统管理员', '材料员'):
+        return jsonify({'success': False, 'message': '无权限'})
+
+    data = request.json
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE suppliers SET supplier_name = ?, contact = ?, phone = ?, address = ?, remark = ?, tax_rate = ?
+        WHERE id = ?
+    """, (escape(data.get('supplier_name', '')), escape(data.get('contact', '')),
+          escape(data.get('phone', '')), escape(data.get('address', '')),
+          escape(data.get('remark', '')), data.get('tax_rate'), supplier_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
 
 
 @system_bp.route('/suppliers/<int:supplier_id>', methods=['DELETE'])
@@ -258,15 +307,152 @@ def get_units():
 
 @system_bp.route('/projects', methods=['GET'])
 def get_projects():
-    """获取所有项目"""
+    """获取项目列表，支持 ?mine=1 只返回当前用户绑定的项目"""
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT p.*, c.customer_name
-        FROM projects p
-        LEFT JOIN customers c ON p.customer_id = c.id
-        ORDER BY p.create_time DESC
-    """)
+
+    mine = request.args.get('mine', '0') == '1'
+    user = session.get('user')
+
+    if mine and user:
+        # 只返回当前用户绑定的项目
+        cursor.execute("""
+            SELECT p.*, c.customer_name
+            FROM projects p
+            LEFT JOIN customers c ON p.customer_id = c.id
+            JOIN user_projects up ON p.id = up.project_id
+            WHERE up.user_id = ?
+            ORDER BY p.create_time DESC
+        """, (user['id'],))
+    else:
+        cursor.execute("""
+            SELECT p.*, c.customer_name
+            FROM projects p
+            LEFT JOIN customers c ON p.customer_id = c.id
+            ORDER BY p.create_time DESC
+        """)
+
     projects = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return jsonify({'success': True, 'data': projects})
+
+
+@system_bp.route('/projects', methods=['POST'])
+def create_project():
+    """创建项目"""
+    data = request.json
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
+    conn = get_db()
+    cursor = conn.cursor()
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    # 检查编号是否重复
+    project_code = data.get('project_code', '').strip()
+    if not project_code:
+        # 自动生成编号
+        cursor.execute("SELECT MAX(CAST(SUBSTR(project_code, 4) AS INTEGER)) FROM projects WHERE project_code LIKE 'XM-%'")
+        max_code = cursor.fetchone()[0] or 0
+        project_code = f'XM-{str(max_code + 1).zfill(4)}'
+    else:
+        cursor.execute("SELECT id FROM projects WHERE project_code = ?", (project_code,))
+        if cursor.fetchone():
+            conn.close()
+            return jsonify({'success': False, 'message': '项目编号已存在'})
+
+    project_name = data.get('project_name', '').strip()
+    if not project_name:
+        conn.close()
+        return jsonify({'success': False, 'message': '项目名称不能为空'})
+
+    try:
+        cursor.execute("""
+            INSERT INTO projects (project_code, project_name, contract_no, customer_id, start_date, end_date, remark, create_time)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (project_code, escape(project_name), escape(data.get('contract_no', '')),
+              data.get('customer_id') or None, data.get('start_date') or None,
+              data.get('end_date') or None, escape(data.get('remark', '')), now))
+        project_id = cursor.lastrowid
+
+        # 自动给admin用户(user_id=1)绑定新项目
+        cursor.execute("INSERT INTO user_projects (user_id, project_id) VALUES (1, ?)", (project_id,))
+
+        # 也给创建者绑定
+        if user['id'] != 1:
+            cursor.execute("INSERT OR IGNORE INTO user_projects (user_id, project_id) VALUES (?, ?)", (user['id'], project_id))
+
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True, 'id': project_id, 'project_code': project_code})
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return jsonify({'success': False, 'message': str(e)})
+
+
+@system_bp.route('/projects/<int:project_id>', methods=['PUT'])
+def update_project(project_id):
+    """更新项目"""
+    data = request.json
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    project_code = data.get('project_code', '').strip()
+    if project_code:
+        cursor.execute("SELECT id FROM projects WHERE project_code = ? AND id != ?", (project_code, project_id))
+        if cursor.fetchone():
+            conn.close()
+            return jsonify({'success': False, 'message': '项目编号已存在'})
+
+    try:
+        cursor.execute("""
+            UPDATE projects SET project_code = ?, project_name = ?, contract_no = ?,
+            customer_id = ?, start_date = ?, end_date = ?, remark = ?
+            WHERE id = ?
+        """, (escape(project_code), escape(data.get('project_name', '')),
+              escape(data.get('contract_no', '')), data.get('customer_id') or None,
+              data.get('start_date') or None, data.get('end_date') or None,
+              escape(data.get('remark', '')), project_id))
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True})
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return jsonify({'success': False, 'message': str(e)})
+
+
+@system_bp.route('/projects/<int:project_id>', methods=['DELETE'])
+def delete_project(project_id):
+    """删除项目"""
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # 检查是否有关联数据
+    cursor.execute("SELECT COUNT(*) FROM user_projects WHERE project_id = ?", (project_id,))
+    if cursor.fetchone()[0] > 0:
+        cursor.execute("DELETE FROM user_projects WHERE project_id = ?", (project_id,))
+
+    cursor.execute("SELECT COUNT(*) FROM reconciliation_statements WHERE project_id = ?", (project_id,))
+    recon_count = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM purchase_orders WHERE project_id = ?", (project_id,))
+    order_count = cursor.fetchone()[0]
+
+    if recon_count > 0 or order_count > 0:
+        conn.close()
+        return jsonify({'success': False, 'message': f'该项目已关联对账单({recon_count}条)或采购单({order_count}条)，无法删除'})
+
+    cursor.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
