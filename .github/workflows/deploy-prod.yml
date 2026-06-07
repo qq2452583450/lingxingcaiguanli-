@@ -1,0 +1,27 @@
+name: Deploy prod
+
+on:
+  push:
+    branches:
+      - prod
+  workflow_dispatch:
+
+concurrency:
+  group: lxclgl-prod-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy prod on Windows server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_SSH_PORT || 22 }}
+          script_stop: true
+          script: |
+            powershell -NoProfile -ExecutionPolicy Bypass -File C:\wwwroot\lxclgl\deploy\deploy.ps1 -AppDir C:\wwwroot\lxclgl -ServiceName lxclgl -Branch prod -Port 5000
+            powershell -NoProfile -Command "$r = Invoke-WebRequest -Uri 'http://127.0.0.1:5000' -UseBasicParsing -TimeoutSec 10; if ([int]$r.StatusCode -ne 200) { throw 'HTTP health check failed' }"
