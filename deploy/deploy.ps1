@@ -2,7 +2,6 @@ param(
     [string]$AppDir = "C:\wwwroot\lxclgl",
     [string]$ServiceName = "lxclgl",
     [string]$Branch = "main",
-    [string]$DbFile = "零星材管理系统.db",
     [int]$Port = 5000
 )
 
@@ -22,13 +21,16 @@ if (-not $env:SECRET_KEY) {
 $BackupDir = Join-Path $AppDir "backups"
 New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null
 
-if (Test-Path -LiteralPath $DbFile) {
+$DbFiles = Get-ChildItem -LiteralPath $AppDir -Filter "*.db" -File -ErrorAction SilentlyContinue
+if ($DbFiles) {
     $Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-    $BackupPath = Join-Path $BackupDir "$DbFile.bak-$Timestamp"
-    Write-Host "Backing up database to $BackupPath"
-    Copy-Item -LiteralPath $DbFile -Destination $BackupPath
+    foreach ($DbFile in $DbFiles) {
+        $BackupPath = Join-Path $BackupDir "$($DbFile.Name).bak-$Timestamp"
+        Write-Host "Backing up database to $BackupPath"
+        Copy-Item -LiteralPath $DbFile.FullName -Destination $BackupPath
+    }
 } else {
-    Write-Host "Database $DbFile not found, skipping backup"
+    Write-Host "No .db files found, skipping backup"
 }
 
 Write-Host "Pulling latest code from origin/$Branch"
@@ -49,8 +51,19 @@ $Service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($Service) {
     Write-Host "Restarting Windows service: $ServiceName"
     Restart-Service -Name $ServiceName -Force
+} elseif (Get-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue) {
+    Write-Host "Restarting startup task: $ServiceName"
+    Stop-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue
+    $Listeners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    foreach ($Listener in $Listeners) {
+        $Process = Get-Process -Id $Listener.OwningProcess -ErrorAction SilentlyContinue
+        if ($Process -and $Process.ProcessName -match "python") {
+            Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Start-ScheduledTask -TaskName $ServiceName
 } else {
-    throw "Windows service '$ServiceName' is not installed. Run deploy\install-service.ps1 once on the server first."
+    throw "Auto-start '$ServiceName' is not installed. Run deploy\install-service.ps1 once on the server first."
 }
 
 Start-Sleep -Seconds 3

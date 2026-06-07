@@ -40,6 +40,42 @@ function Ensure-Nssm {
     }
 }
 
+function Stop-AppOnPort {
+    param([int]$TargetPort)
+
+    $Listeners = Get-NetTCPConnection -LocalPort $TargetPort -State Listen -ErrorAction SilentlyContinue
+    foreach ($Listener in $Listeners) {
+        $Process = Get-Process -Id $Listener.OwningProcess -ErrorAction SilentlyContinue
+        if ($Process -and $Process.ProcessName -match "python") {
+            Write-Host "Stopping existing Python process on port $TargetPort"
+            Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Install-StartupTask {
+    param(
+        [string]$TaskName,
+        [string]$TargetAppDir
+    )
+
+    $StartScript = Join-Path $TargetAppDir "deploy\start-app.ps1"
+    if (-not (Test-Path -LiteralPath $StartScript)) {
+        throw "Missing startup script: $StartScript"
+    }
+
+    Write-Host "Installing startup task: $TaskName"
+    $Action = New-ScheduledTaskAction `
+        -Execute "powershell.exe" `
+        -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$StartScript`" -AppDir `"$TargetAppDir`""
+    $Trigger = New-ScheduledTaskTrigger -AtStartup
+    $Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
+    $Settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings | Out-Null
+}
+
 Set-Location -LiteralPath $AppDir
 
 $LocalEnv = Join-Path $AppDir "deploy\server.env.ps1"
@@ -53,7 +89,14 @@ if (-not $env:SECRET_KEY) {
 }
 
 $Nssm = Join-Path $AppDir "tools\nssm.exe"
-Ensure-Nssm -TargetPath $Nssm
+$UseNssm = $true
+try {
+    Ensure-Nssm -TargetPath $Nssm
+} catch {
+    $UseNssm = $false
+    Write-Host "NSSM is unavailable, falling back to Windows startup task."
+    Write-Host $_.Exception.Message
+}
 
 $VenvPython = Join-Path $AppDir ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $VenvPython)) {
@@ -64,36 +107,45 @@ if (-not (Test-Path -LiteralPath $VenvPython)) {
 Write-Host "Installing Python dependencies"
 & $VenvPython -m pip install -r requirements.txt
 
-$Existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-if ($Existing) {
-    Write-Host "Service $ServiceName already exists. Stopping before reconfiguring."
-    Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+if ($UseNssm) {
+    $Existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($Existing) {
+        Write-Host "Service $ServiceName already exists. Stopping before reconfiguring."
+        Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+    } else {
+        Write-Host "Installing Windows service: $ServiceName"
+        & $Nssm install $ServiceName $VenvPython "app.py"
+    }
+
+    $OutLog = Join-Path $AppDir ".server-out.log"
+    $ErrLog = Join-Path $AppDir ".server-err.log"
+
+    & $Nssm set $ServiceName AppDirectory $AppDir
+    & $Nssm set $ServiceName AppEnvironmentExtra "SECRET_KEY=$env:SECRET_KEY"
+    & $Nssm set $ServiceName AppStdout $OutLog
+    & $Nssm set $ServiceName AppStderr $ErrLog
+    & $Nssm set $ServiceName AppRotateFiles 1
+    & $Nssm set $ServiceName AppRotateOnline 1
+    & $Nssm set $ServiceName AppRotateSeconds 86400
+    & $Nssm set $ServiceName Start SERVICE_AUTO_START
+
+    Write-Host "Starting service: $ServiceName"
+    Start-Service -Name $ServiceName
 } else {
-    Write-Host "Installing Windows service: $ServiceName"
-    & $Nssm install $ServiceName $VenvPython "app.py"
+    Stop-AppOnPort -TargetPort $Port
+    Install-StartupTask -TaskName $ServiceName -TargetAppDir $AppDir
+    Write-Host "Starting startup task: $ServiceName"
+    Start-ScheduledTask -TaskName $ServiceName
 }
 
-$OutLog = Join-Path $AppDir ".server-out.log"
-$ErrLog = Join-Path $AppDir ".server-err.log"
-
-& $Nssm set $ServiceName AppDirectory $AppDir
-& $Nssm set $ServiceName AppEnvironmentExtra "SECRET_KEY=$env:SECRET_KEY"
-& $Nssm set $ServiceName AppStdout $OutLog
-& $Nssm set $ServiceName AppStderr $ErrLog
-& $Nssm set $ServiceName AppRotateFiles 1
-& $Nssm set $ServiceName AppRotateOnline 1
-& $Nssm set $ServiceName AppRotateSeconds 86400
-& $Nssm set $ServiceName Start SERVICE_AUTO_START
-
-Write-Host "Starting service: $ServiceName"
-Start-Service -Name $ServiceName
 Start-Sleep -Seconds 3
 
 $Listening = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
 if ($Listening) {
-    Write-Host "Service installed and app is listening on port $Port."
+    Write-Host "Auto-start installed and app is listening on port $Port."
 } else {
-    Write-Host "Service started but port $Port is not listening. Last error log:"
+    $ErrLog = Join-Path $AppDir ".server-err.log"
+    Write-Host "Auto-start was configured but port $Port is not listening. Last error log:"
     if (Test-Path -LiteralPath $ErrLog) {
         Get-Content -LiteralPath $ErrLog -Tail 80
     }
