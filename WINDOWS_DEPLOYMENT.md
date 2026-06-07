@@ -66,19 +66,13 @@ $env:SECRET_KEY = "你的随机密钥"
 
 推荐使用 NSSM 把项目注册为 Windows 服务。这样服务器重启后会自动启动，部署更新时也能自动重启，不需要手动输入 `python app.py`。
 
-1. 下载 NSSM：
-
-```text
-https://nssm.cc/download
-```
-
-2. 解压后找到 `win64\nssm.exe`，放到服务器：
+安装脚本会自动下载 NSSM 并放到：
 
 ```text
 C:\wwwroot\lxclgl\tools\nssm.exe
 ```
 
-3. 在宝塔终端里执行一次：
+在宝塔终端里执行一次：
 
 ```powershell
 cd C:\wwwroot\lxclgl
@@ -138,6 +132,6 @@ powershell -ExecutionPolicy Bypass -File deploy\deploy.ps1 -Port 5001
 
 - 不要把服务器的 `零星材管理系统.db` 提交到 Git。
 - 每次部署前脚本会备份数据库。
-- `tools\nssm.exe` 是服务器本地文件，不会提交到 Git。
+- `tools\nssm.exe` 是服务器本地文件，由安装脚本自动准备，不会提交到 Git。
 - 如果 `git pull --ff-only` 失败，说明服务器项目目录里有人手工改过代码，需要先人工确认。
 - 涉及角色权限更新时，用户需要退出重新登录。

@@ -6,6 +6,40 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Ensure-Nssm {
+    param([string]$TargetPath)
+
+    if (Test-Path -LiteralPath $TargetPath) {
+        return
+    }
+
+    $ToolsDir = Split-Path -Parent $TargetPath
+    New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+
+    $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("lxclgl-nssm-" + [System.Guid]::NewGuid().ToString("N"))
+    $ZipPath = Join-Path $TempDir "nssm.zip"
+    New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
+
+    try {
+        Write-Host "Downloading NSSM service helper"
+        Invoke-WebRequest -Uri "https://nssm.cc/release/nssm-2.24.zip" -OutFile $ZipPath
+        Expand-Archive -LiteralPath $ZipPath -DestinationPath $TempDir -Force
+
+        $Candidate = Get-ChildItem -LiteralPath $TempDir -Recurse -Filter "nssm.exe" |
+            Where-Object { $_.FullName -match "\\win64\\nssm\.exe$" } |
+            Select-Object -First 1
+
+        if (-not $Candidate) {
+            throw "Could not find win64 nssm.exe in downloaded archive."
+        }
+
+        Copy-Item -LiteralPath $Candidate.FullName -Destination $TargetPath -Force
+    }
+    finally {
+        Remove-Item -LiteralPath $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Set-Location -LiteralPath $AppDir
 
 $LocalEnv = Join-Path $AppDir "deploy\server.env.ps1"
@@ -19,9 +53,7 @@ if (-not $env:SECRET_KEY) {
 }
 
 $Nssm = Join-Path $AppDir "tools\nssm.exe"
-if (-not (Test-Path -LiteralPath $Nssm)) {
-    throw "Missing $Nssm. Download NSSM, create tools folder, and place nssm.exe there."
-}
+Ensure-Nssm -TargetPath $Nssm
 
 $VenvPython = Join-Path $AppDir ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $VenvPython)) {
