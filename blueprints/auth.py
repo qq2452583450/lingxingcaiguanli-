@@ -2,7 +2,8 @@
 认证蓝图
 """
 from flask import Blueprint, request, jsonify, session
-from helpers import verify_password
+from helpers import verify_password, get_db
+from helpers.auth_decorators import login_required
 from datetime import datetime, timedelta
 import threading
 
@@ -50,17 +51,6 @@ def _reset_attempts(ip):
     with _attempts_lock:
         if ip in _login_attempts:
             del _login_attempts[ip]
-
-
-def get_db():
-    """获取数据库连接"""
-    from flask import current_app, g
-    if 'db' not in g:
-        import sqlite3
-        import config
-        g.db = sqlite3.connect(config.DATABASE_PATH)
-        g.db.row_factory = sqlite3.Row
-    return g.db
 
 
 @auth_bp.route('/login', methods=['POST'])

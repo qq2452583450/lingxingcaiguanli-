@@ -12,38 +12,60 @@ def amount_to_chinese(amount):
     decimal_part = round((amount - integer_part) * 100)
 
     chinese_digits = ['零', '壹', '贰', '叁', '肆', '伍', '陆', '柒', '捌', '玖']
-    chinese_units = ['', '拾', '佰', '仟', '万', '拾', '佰', '仟', '亿']
+    units = ['', '拾', '佰', '仟']
 
     if integer_part == 0:
         result = '零'
     else:
-        result = ''
         str_int = str(integer_part)
         length = len(str_int)
-        for i, digit in enumerate(str_int):
-            digit_int = int(digit)
-            unit_index = length - i - 1
-            if digit_int != 0:
-                result += chinese_digits[digit_int] + chinese_units[unit_index]
-            else:
-                if unit_index % 4 == 0 and result and result[-1] != '零' and result[-1] != '万' and result[-1] != '亿':
-                    if length > 4 and (length - i) <= length % 4 or result.endswith('亿'):
-                        pass
-                    else:
-                        result += '零'
-                elif result and result[-1] != '零' and result[-1] != '万' and result[-1] != '亿':
-                    result += '零'
 
+        # 按4位分组
+        groups = []
+        while str_int:
+            groups.insert(0, str_int[-4:] if len(str_int) >= 4 else str_int)
+            str_int = str_int[:-4]
+
+        group_units = ['', '万', '亿', '万亿']
+        result = ''
+
+        for gi, group in enumerate(groups):
+            group_str = ''
+            group_len = len(group)
+
+            for i, digit in enumerate(group):
+                d = int(digit)
+                pos = group_len - 1 - i  # 0=个位, 1=十位, 2=百位, 3=千位
+
+                if d != 0:
+                    # 前面有0且不是组首，加零
+                    if i > 0 and group[i-1] == '0' and not group_str.endswith('零'):
+                        group_str += '零'
+                    group_str += chinese_digits[d] + units[pos]
+                # 组内末尾的0不加零，由下一级处理
+
+            if group_str:
+                result += group_str + group_units[len(groups) - 1 - gi]
+            elif result and not result.endswith('零') and gi < len(groups) - 1:
+                # 当前组全0，但后面还有组，需要加零（如果还没加的话）
+                # 这里先不加，等遇到非零时再加
+                pass
+
+        # 处理跨组的零：如果结果中有"万"或"亿"后面紧跟数字（不是零开头），需要检查
         result = result.rstrip('零')
-        if result.endswith('零'):
-            result = result[:-1]
 
     if decimal_part == 0:
         return f"{result}元整"
     else:
-        result += f"元{chinese_digits[decimal_part // 10] if decimal_part >= 10 else '零'}{chinese_digits[decimal_part % 10 if decimal_part >= 10 else decimal_part]}角"
-        if decimal_part % 10 == 0:
-            result = result.rstrip('零角') + '整'
+        jiao = decimal_part // 10
+        fen = decimal_part % 10
+        result += '元'
+        if jiao > 0:
+            result += chinese_digits[jiao] + '角'
+        elif fen > 0:
+            result += '零'
+        if fen > 0:
+            result += chinese_digits[fen] + '分'
         return result
 
 

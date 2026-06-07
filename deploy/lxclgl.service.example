@@ -1,0 +1,14 @@
+[Unit]
+Description=Lingxingcai Management Flask App
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/www/lxclgl
+Environment=SECRET_KEY=change-this-to-a-long-random-secret
+ExecStart=/www/lxclgl/.venv/bin/python app.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

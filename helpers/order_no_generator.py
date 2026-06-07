@@ -3,20 +3,21 @@
 """
 import sqlite3
 from datetime import datetime
-from database import get_connection
+from .db_helper import get_db
 
 
-def generate_order_no(prefix: str, date_format: str = "%y%m%d", seq_digits: int = 3, max_retries: int = 10):
+def generate_order_no(prefix: str, date_format: str = "%y%m%d", seq_digits: int = 3,
+                      max_retries: int = 10, table_name: str = None, column_name: str = "order_no"):
     """
     生成单号（带重试机制防止并发冲突）
     """
-    conn = get_connection()
+    conn = get_db()
     cursor = conn.cursor()
 
     today = datetime.now().strftime(date_format)
     seq_digit_str = "{" + f"0:0{seq_digits}d" + "}"
 
-    tables_with_no = [
+    tables_with_no = [(table_name, column_name)] if table_name else [
         ("stock_in_orders", "order_no"),
         ("stock_out_orders", "order_no"),
         ("sales_orders", "order_no"),
@@ -47,14 +48,17 @@ def generate_order_no(prefix: str, date_format: str = "%y%m%d", seq_digits: int 
         new_no = f"{prefix}-{today}-{seq_digit_str.format(new_seq)}"
 
         # 检查是否已存在
-        cursor.execute("SELECT 1 FROM purchase_inquiries WHERE inquiry_no = ?", (new_no,))
-        if not cursor.fetchone():
-            conn.close()
+        exists = False
+        for table, col in tables_with_no:
+            cursor.execute(f"SELECT 1 FROM {table} WHERE {col} = ?", (new_no,))
+            if cursor.fetchone():
+                exists = True
+                break
+        if not exists:
             return new_no
 
         # 已存在，尝试下一个序号（继续循环）
 
-    conn.close()
     raise Exception(f"无法生成唯一的单号，已重试{max_retries}次")
 
 
@@ -71,6 +75,15 @@ def generate_stock_in_no():
 def generate_stock_out_no():
     """生成出库单号 CK-YYMMDD-XXX"""
     return generate_order_no("CK", "%y%m%d", 3)
+
+
+def generate_stock_transfer_no():
+    """生成调拨单号 DB-YYMMDD-XXX"""
+    return generate_order_no(
+        "DB", "%y%m%d", 3,
+        table_name="stock_transfer_orders",
+        column_name="transfer_no",
+    )
 
 
 def generate_sales_no():

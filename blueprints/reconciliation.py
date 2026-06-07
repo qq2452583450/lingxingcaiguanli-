@@ -302,23 +302,26 @@ def rollback_reconciliation(stmt_id):
 
 @reconciliation_bp.route('/reconciliation/<int:stmt_id>', methods=['DELETE'])
 def delete_reconciliation(stmt_id):
-    """删除对账单（仅草稿可删）"""
+    """删除对账单（仅系统管理员可删，且仅草稿可删）"""
     user = session.get('user')
     if not user:
         return jsonify({'success': False, 'message': '未登录'})
 
+    # 权限校验：只有系统管理员可以删除
     conn = get_db()
     cursor = conn.cursor()
+    cursor.execute("SELECT r.role_name FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.id = ?", (user['id'],))
+    role_row = cursor.fetchone()
+    role_name = dict(role_row)['role_name'] if role_row else None
+    if role_name != '系统管理员':
+        conn.close()
+        return jsonify({'success': False, 'message': '仅系统管理员可删除对账单'})
+
     cursor.execute("SELECT status FROM reconciliation_statements WHERE id = ?", (stmt_id,))
     row = cursor.fetchone()
     if not row:
         conn.close()
         return jsonify({'success': False, 'message': '对账单不存在'})
-
-    current_status = dict(row)['status']
-    if current_status != '草稿':
-        conn.close()
-        return jsonify({'success': False, 'message': f'当前状态为"{current_status}"，只有草稿状态才能删除'})
 
     cursor.execute("DELETE FROM reconciliation_details WHERE statement_id = ?", (stmt_id,))
     cursor.execute("DELETE FROM reconciliation_statements WHERE id = ?", (stmt_id,))

@@ -53,6 +53,11 @@ def init_database():
             create_time TEXT
         )
     """)
+    cursor.execute("""
+        UPDATE warehouses
+        SET warehouse_name = '材料基地'
+        WHERE is_default = 1 AND warehouse_name = '默认仓库'
+    """)
 
     # 供应商表
     cursor.execute("""
@@ -125,6 +130,45 @@ def init_database():
     except Exception:
         pass  # 列已存在
 
+    # 添加现金含税价相关列（如果不存在）
+    try:
+        cursor.execute("ALTER TABLE materials ADD COLUMN is_cash_price INTEGER DEFAULT 0")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE materials ADD COLUMN cash_price REAL DEFAULT 0")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE materials ADD COLUMN cash_tax_price REAL DEFAULT 0")
+    except Exception:
+        pass
+
+    # 添加重量列（如果不存在）
+    try:
+        cursor.execute("ALTER TABLE materials ADD COLUMN weight REAL DEFAULT 0")
+    except Exception:
+        pass
+
+    # 添加是否国标和是否现金含税价到询价材料项（如果不存在）
+    try:
+        cursor.execute("ALTER TABLE purchase_inquiry_items ADD COLUMN is_national_standard INTEGER DEFAULT 0")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE purchase_inquiry_items ADD COLUMN is_cash_price INTEGER DEFAULT 0")
+    except Exception:
+        pass
+    # 添加详细规格和品牌到询价材料项（如果不存在）
+    try:
+        cursor.execute("ALTER TABLE purchase_inquiry_items ADD COLUMN detail_spec TEXT")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE purchase_inquiry_items ADD COLUMN brand TEXT")
+    except Exception:
+        pass
+
     # 材料价格历史表
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS material_price_history (
@@ -154,6 +198,83 @@ def init_database():
             UNIQUE(material_id, warehouse_id)
         )
     """)
+
+    # 材料基地库存独立于项目库存，只有明确入库基地后才会产生记录。
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS base_inventory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            material_id INTEGER UNIQUE,
+            material_name TEXT,
+            specification TEXT,
+            detail_spec TEXT,
+            unit_name TEXT,
+            quantity REAL DEFAULT 0,
+            unit_price REAL DEFAULT 0,
+            update_time TEXT,
+            remark TEXT,
+            FOREIGN KEY (material_id) REFERENCES materials(id)
+        )
+    """)
+    # 兼容已创建的旧版基地库存表：允许基地自有材料不依赖项目材料库。
+    cursor.execute("PRAGMA table_info(base_inventory)")
+    base_inventory_columns = {row['name']: row for row in cursor.fetchall()}
+    if base_inventory_columns.get('material_id') and base_inventory_columns['material_id']['notnull']:
+        cursor.execute("""
+            CREATE TABLE base_inventory_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                material_id INTEGER UNIQUE,
+                material_name TEXT,
+                specification TEXT,
+                detail_spec TEXT,
+                unit_name TEXT,
+                quantity REAL DEFAULT 0,
+                unit_price REAL DEFAULT 0,
+                update_time TEXT,
+                remark TEXT,
+                FOREIGN KEY (material_id) REFERENCES materials(id)
+            )
+        """)
+        cursor.execute("""
+            INSERT INTO base_inventory_new (id, material_id, quantity, unit_price, update_time, remark)
+            SELECT id, material_id, quantity, unit_price, update_time, NULL
+            FROM base_inventory
+        """)
+        cursor.execute("DROP TABLE base_inventory")
+        cursor.execute("ALTER TABLE base_inventory_new RENAME TO base_inventory")
+    else:
+        for column_name in ('material_name', 'specification', 'detail_spec', 'unit_name', 'remark'):
+            if column_name not in base_inventory_columns:
+                cursor.execute(f"ALTER TABLE base_inventory ADD COLUMN {column_name} TEXT")
+
+    # 基地到项目调拨台账，保留材料快照、折旧价格和运费。
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS base_inventory_transfers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transfer_no TEXT UNIQUE NOT NULL,
+            base_inventory_id INTEGER NOT NULL,
+            project_id INTEGER NOT NULL,
+            material_name TEXT NOT NULL,
+            specification TEXT,
+            detail_spec TEXT,
+            unit_name TEXT,
+            quantity REAL DEFAULT 0,
+            original_unit_price REAL DEFAULT 0,
+            depreciated_unit_price REAL DEFAULT 0,
+            freight REAL DEFAULT 0,
+            total_amount REAL DEFAULT 0,
+            operator_id INTEGER,
+            transfer_time TEXT,
+            batch_no TEXT,
+            remark TEXT,
+            FOREIGN KEY (base_inventory_id) REFERENCES base_inventory(id),
+            FOREIGN KEY (project_id) REFERENCES projects(id),
+            FOREIGN KEY (operator_id) REFERENCES users(id)
+        )
+    """)
+    cursor.execute("PRAGMA table_info(base_inventory_transfers)")
+    base_transfer_columns = {row['name'] for row in cursor.fetchall()}
+    if 'batch_no' not in base_transfer_columns:
+        cursor.execute("ALTER TABLE base_inventory_transfers ADD COLUMN batch_no TEXT")
 
     # 项目表
     cursor.execute("""
@@ -328,8 +449,10 @@ def init_database():
             quantity REAL DEFAULT 0,
             unit_price REAL DEFAULT 0,
             amount REAL DEFAULT 0,
+            supplier_id INTEGER,
             FOREIGN KEY (order_id) REFERENCES stock_in_orders(id),
-            FOREIGN KEY (material_id) REFERENCES materials(id)
+            FOREIGN KEY (material_id) REFERENCES materials(id),
+            FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
         )
     """)
 
@@ -345,8 +468,12 @@ def init_database():
             out_time TEXT,
             create_time TEXT,
             remark TEXT,
+            team_name TEXT,
+            receiver_name TEXT,
+            project_id INTEGER,
             FOREIGN KEY (warehouse_id) REFERENCES warehouses(id),
-            FOREIGN KEY (operator_id) REFERENCES users(id)
+            FOREIGN KEY (operator_id) REFERENCES users(id),
+            FOREIGN KEY (project_id) REFERENCES projects(id)
         )
     """)
 
@@ -359,7 +486,40 @@ def init_database():
             quantity REAL DEFAULT 0,
             unit_price REAL DEFAULT 0,
             amount REAL DEFAULT 0,
+            team_name TEXT,
+            receiver_name TEXT,
             FOREIGN KEY (order_id) REFERENCES stock_out_orders(id),
+            FOREIGN KEY (material_id) REFERENCES materials(id)
+        )
+    """)
+
+    # 调拨单表
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS stock_transfer_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transfer_no TEXT UNIQUE NOT NULL,
+            from_warehouse_id INTEGER NOT NULL,
+            to_warehouse_id INTEGER NOT NULL,
+            operator_id INTEGER,
+            transfer_time TEXT,
+            create_time TEXT,
+            remark TEXT,
+            FOREIGN KEY (from_warehouse_id) REFERENCES warehouses(id),
+            FOREIGN KEY (to_warehouse_id) REFERENCES warehouses(id),
+            FOREIGN KEY (operator_id) REFERENCES users(id)
+        )
+    """)
+
+    # 调拨明细表
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS stock_transfer_details (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL,
+            material_id INTEGER NOT NULL,
+            quantity REAL DEFAULT 0,
+            unit_price REAL DEFAULT 0,
+            amount REAL DEFAULT 0,
+            FOREIGN KEY (order_id) REFERENCES stock_transfer_orders(id),
             FOREIGN KEY (material_id) REFERENCES materials(id)
         )
     """)
@@ -489,6 +649,117 @@ def init_database():
         )
     """)
 
+    # 甲供材料专项量控台账
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS owner_material_controls (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            data_status TEXT DEFAULT '正式',
+            control_level TEXT DEFAULT 'A类重点',
+            building TEXT,
+            work_item TEXT,
+            material_name TEXT NOT NULL,
+            specification TEXT,
+            unit TEXT NOT NULL,
+            contract_quantity REAL DEFAULT 0,
+            budget_quantity REAL DEFAULT 0,
+            change_quantity REAL DEFAULT 0,
+            arrival_quantity REAL DEFAULT 0,
+            issued_quantity REAL DEFAULT 0,
+            theoretical_quantity REAL DEFAULT 0,
+            site_surplus REAL DEFAULT 0,
+            contractor_inventory REAL DEFAULT 0,
+            transit_quantity REAL DEFAULT 0,
+            reason_measures TEXT,
+            responsible_person TEXT,
+            updated_at TEXT,
+            remark TEXT,
+            FOREIGN KEY (project_id) REFERENCES projects(id)
+        )
+    """)
+
+    # 甲供材料月度需求计划
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS owner_monthly_demands (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            plan_month TEXT NOT NULL,
+            building TEXT,
+            construction_area TEXT,
+            material_name TEXT NOT NULL,
+            specification TEXT,
+            unit TEXT NOT NULL,
+            planned_quantity REAL DEFAULT 0,
+            current_inventory REAL DEFAULT 0,
+            contractor_inventory REAL DEFAULT 0,
+            transit_quantity REAL DEFAULT 0,
+            required_date TEXT,
+            review_comment TEXT,
+            FOREIGN KEY (project_id) REFERENCES projects(id)
+        )
+    """)
+
+    # 甲供材料到货、领用、退库和调拨原始记录
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS owner_material_transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            business_date TEXT NOT NULL,
+            business_type TEXT NOT NULL,
+            building TEXT,
+            construction_area TEXT,
+            material_name TEXT NOT NULL,
+            specification TEXT,
+            unit TEXT NOT NULL,
+            quantity REAL DEFAULT 0,
+            supplier_source TEXT,
+            document_no TEXT,
+            acceptance_result TEXT,
+            quality_documents TEXT,
+            receiving_unit TEXT,
+            signer TEXT,
+            registrant TEXT,
+            remark TEXT,
+            FOREIGN KEY (project_id) REFERENCES projects(id)
+        )
+    """)
+
+    # 甲供材料预警问题闭环
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS owner_warning_issues (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            warning_date TEXT NOT NULL,
+            warning_status TEXT NOT NULL,
+            building TEXT,
+            material_name TEXT NOT NULL,
+            specification TEXT,
+            variance_quantity REAL DEFAULT 0,
+            loss_rate REAL DEFAULT 0,
+            problem_description TEXT NOT NULL,
+            reason_category TEXT,
+            corrective_action TEXT,
+            responsible_person TEXT,
+            due_date TEXT,
+            closure_status TEXT DEFAULT '待处理',
+            review_result TEXT,
+            reviewer TEXT,
+            FOREIGN KEY (project_id) REFERENCES projects(id)
+        )
+    """)
+
+    # 项目级甲供材预警参数
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS owner_supplied_settings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER UNIQUE NOT NULL,
+            yellow_loss_rate REAL DEFAULT 0.02,
+            red_loss_rate REAL DEFAULT 0.03,
+            yellow_remaining_threshold REAL DEFAULT 0,
+            FOREIGN KEY (project_id) REFERENCES projects(id)
+        )
+    """)
+
     conn.commit()
     return conn
 
@@ -509,6 +780,9 @@ def create_indexes(conn=None):
 
     # 库存表复合索引
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_material_warehouse ON inventory(material_id, warehouse_id)")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_base_inventory_material ON base_inventory(material_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_base_inventory_transfers_project ON base_inventory_transfers(project_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_base_inventory_transfers_time ON base_inventory_transfers(transfer_time)")
 
     # 询价单索引
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_inquiries_no ON purchase_inquiries(inquiry_no)")
@@ -528,6 +802,10 @@ def create_indexes(conn=None):
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_out_no ON stock_out_orders(order_no)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_stock_out_date ON stock_out_orders(out_time)")
 
+    # 调拨单索引
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_transfer_no ON stock_transfer_orders(transfer_no)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_stock_transfer_date ON stock_transfer_orders(transfer_time)")
+
     # 销售单索引
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_no ON sales_orders(order_no)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_date ON sales_orders(create_time)")
@@ -543,6 +821,12 @@ def create_indexes(conn=None):
     # 供应商/客户索引
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_suppliers_name ON suppliers(supplier_name)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(customer_name)")
+
+    # 甲供材料专项量控
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_owner_controls_project ON owner_material_controls(project_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_owner_demands_project_month ON owner_monthly_demands(project_id, plan_month)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_owner_transactions_project_date ON owner_material_transactions(project_id, business_date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_owner_issues_project_status ON owner_warning_issues(project_id, closure_status)")
 
     conn.commit()
 
@@ -595,7 +879,7 @@ def insert_default_data(conn):
     # 插入默认仓库
     cursor.execute(
         "INSERT INTO warehouses (warehouse_name, address, is_default, create_time) VALUES (?, ?, ?, ?)",
-        ("默认仓库", "默认地址", 1, now)
+        ("材料基地", "默认地址", 1, now)
     )
 
     conn.commit()

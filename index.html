@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>零星材管理系统</title>
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/style.css?v=2026060101">
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 </head>
 <body>
@@ -39,17 +39,23 @@
                 <span>v1.0.0</span>
             </div>
             <div class="sidebar-nav">
-                <div class="nav-item active" onclick="showModule('home')"><i data-lucide="home"></i> 首页</div>
-                <div class="nav-item" onclick="showModule('material')"><i data-lucide="package"></i> 材料信息</div>
-                <div class="nav-item" onclick="showModule('purchase_inquiry')"><i data-lucide="file-text"></i> 采购询比价</div>
-<div class="nav-item" onclick="showModule('stock_in')"><i data-lucide="package-plus"></i> 入库管理</div>
-                <div class="nav-item" onclick="showModule('stock_out')"><i data-lucide="package-minus"></i> 出库管理</div>
-                <div class="nav-item" onclick="showModule('inventory')"><i data-lucide="bar-chart-2"></i> 库存管理</div>
-                <div class="nav-item" onclick="showModule('supplier')"><i data-lucide="building"></i> 供应商</div>
-                <div class="nav-item admin-only-nav" onclick="showModule('project')"><i data-lucide="folder-kanban"></i> 项目管理</div>
-                <div class="nav-item" onclick="showModule('reconciliation')"><i data-lucide="file-check"></i> 对账管理</div>
-                <div class="nav-item" onclick="showModule('report')"><i data-lucide="pie-chart"></i> 报表统计</div>
-                <div class="nav-item admin-only-nav" onclick="showModule('system')"><i data-lucide="settings"></i> 系统设置</div>
+                <div class="nav-group"><div class="nav-group-title">业务操作</div>
+                <div class="nav-item" data-module="purchase_inquiry" onclick="showModule('purchase_inquiry')"><i data-lucide="file-text"></i> <span class="nav-label">采购询比价</span></div>
+                <div class="nav-item" data-module="stock_in" onclick="showModule('stock_in')"><i data-lucide="package-plus"></i> <span class="nav-label">入库管理</span></div>
+                <div class="nav-item" data-module="stock_out" onclick="showModule('stock_out')"><i data-lucide="package-minus"></i> <span class="nav-label">出库管理</span></div>
+                <div class="nav-item" data-module="stock_transfer" onclick="showModule('stock_transfer')"><i data-lucide="arrow-left-right"></i> <span class="nav-label">材料调拨</span></div>
+                <div class="nav-item" data-module="owner_supplied" onclick="showModule('owner_supplied')"><i data-lucide="clipboard-check"></i> <span class="nav-label">甲供材量控</span></div></div>
+                <div class="nav-group"><div class="nav-group-title">数据中心</div>
+                <div class="nav-item active" data-module="home" onclick="showModule('home')"><i data-lucide="home"></i> <span class="nav-label">首页</span></div>
+                <div class="nav-item" data-module="material" onclick="showModule('material')"><i data-lucide="package"></i> <span class="nav-label">材料信息</span></div>
+                <div class="nav-item" data-module="inventory" onclick="showModule('inventory')"><i data-lucide="bar-chart-2"></i> <span class="nav-label">库存管理</span></div>
+                <div class="nav-item" data-module="supplier" onclick="showModule('supplier')"><i data-lucide="building"></i> <span class="nav-label">供应商</span></div>
+                <div class="nav-item admin-only-nav" data-module="project" onclick="showModule('project')"><i data-lucide="folder-kanban"></i> <span class="nav-label">项目管理</span></div></div>
+                <div class="nav-group"><div class="nav-group-title">财务</div>
+                <div class="nav-item" data-module="reconciliation" onclick="showModule('reconciliation')"><i data-lucide="file-check"></i> <span class="nav-label">对账管理</span></div>
+                <div class="nav-item" data-module="report" onclick="showModule('report')"><i data-lucide="pie-chart"></i> <span class="nav-label">报表统计</span></div></div>
+                <div class="nav-group"><div class="nav-group-title">系统</div>
+                <div class="nav-item admin-only-nav" data-module="system" onclick="showModule('system')"><i data-lucide="settings"></i> <span class="nav-label">系统设置</span></div></div>
             </div>
             <div class="sidebar-footer">
                 <div class="user-info" id="userInfo">用户: -</div>
@@ -113,6 +119,76 @@
                 </div>
             </div>
 
+            <!-- 甲供材专项量控 -->
+            <div id="owner_suppliedModule" class="module hidden">
+                <div class="page-header owner-supplied-header">
+                    <div>
+                        <h1>甲供材专项量控</h1>
+                        <p>按项目动态跟踪控制量、供领存、需求计划与预警闭环</p>
+                    </div>
+                    <button class="btn btn-primary" id="ownerSuppliedAddBtn" onclick="openOwnerSuppliedCreate()">新增台账</button>
+                </div>
+                <div class="owner-summary">
+                    <button class="owner-metric" onclick="switchOwnerSuppliedTab('controls')"><span>材料记录</span><strong id="ownerMetricTotal">0</strong></button>
+                    <button class="owner-metric owner-metric-focus" onclick="switchOwnerSuppliedTab('controls')"><span>A 类重点</span><strong id="ownerMetricAClass">0</strong></button>
+                    <button class="owner-metric owner-metric-green" onclick="switchOwnerSuppliedTab('controls')"><span>绿色</span><strong id="ownerMetricGreen">0</strong></button>
+                    <button class="owner-metric owner-metric-yellow" onclick="switchOwnerSuppliedTab('controls')"><span>黄色</span><strong id="ownerMetricYellow">0</strong></button>
+                    <button class="owner-metric owner-metric-red" onclick="switchOwnerSuppliedTab('issues')"><span>红色</span><strong id="ownerMetricRed">0</strong></button>
+                    <button class="owner-metric owner-metric-open" onclick="switchOwnerSuppliedTab('issues')"><span>待闭环</span><strong id="ownerMetricOpen">0</strong></button>
+                </div>
+                <div class="owner-tabs" role="tablist">
+                    <button class="owner-tab active" data-owner-tab="controls" onclick="switchOwnerSuppliedTab('controls')">量控台账</button>
+                    <button class="owner-tab" data-owner-tab="demands" onclick="switchOwnerSuppliedTab('demands')">月度需求</button>
+                    <button class="owner-tab" data-owner-tab="transactions" onclick="switchOwnerSuppliedTab('transactions')">到货验收领用</button>
+                    <button class="owner-tab" data-owner-tab="issues" onclick="switchOwnerSuppliedTab('issues')">预警闭环</button>
+                </div>
+                <div class="owner-tab-panel" data-owner-panel="controls">
+                    <div class="table-container owner-table-wrap">
+                        <table class="owner-table">
+                            <thead><tr>
+                                <th>状态</th><th>等级</th><th>楼栋</th><th>分部分项</th><th>材料</th><th>规格</th><th>单位</th>
+                                <th>控制量</th><th>到货</th><th>领用</th><th>理论耗用</th><th>现场余料</th><th>账面库存</th>
+                                <th>在途</th><th>剩余需求</th><th>偏差量</th><th>损耗率</th><th>责任人</th><th>操作</th>
+                            </tr></thead>
+                            <tbody id="ownerControlsTable"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="owner-tab-panel hidden" data-owner-panel="demands">
+                    <div class="table-container owner-table-wrap">
+                        <table class="owner-table">
+                            <thead><tr>
+                                <th>计划月份</th><th>楼栋</th><th>施工部位</th><th>材料</th><th>规格</th><th>单位</th>
+                                <th>计划需求</th><th>当前库存</th><th>施工单位库存</th><th>在途</th><th>建议供货</th><th>要求到场</th><th>审核意见</th><th>操作</th>
+                            </tr></thead>
+                            <tbody id="ownerDemandsTable"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="owner-tab-panel hidden" data-owner-panel="transactions">
+                    <div class="table-container owner-table-wrap">
+                        <table class="owner-table">
+                            <thead><tr>
+                                <th>业务日期</th><th>类型</th><th>楼栋</th><th>施工部位</th><th>材料</th><th>规格</th><th>单位</th>
+                                <th>数量</th><th>供应商/来源</th><th>单据号</th><th>验收结果</th><th>领用单位</th><th>签收人</th><th>登记人</th><th>操作</th>
+                            </tr></thead>
+                            <tbody id="ownerTransactionsTable"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="owner-tab-panel hidden" data-owner-panel="issues">
+                    <div class="table-container owner-table-wrap">
+                        <table class="owner-table">
+                            <thead><tr>
+                                <th>预警日期</th><th>预警</th><th>楼栋</th><th>材料</th><th>规格</th><th>偏差量</th><th>损耗率</th>
+                                <th>问题描述</th><th>整改措施</th><th>责任人</th><th>完成期限</th><th>闭环状态</th><th>复核人</th><th>操作</th>
+                            </tr></thead>
+                            <tbody id="ownerIssuesTable"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
             <!-- 材料管理 -->
             <div id="materialModule" class="module hidden">
                 <div class="page-header">
@@ -122,16 +198,30 @@
                     </div>
                 </div>
                 <div class="toolbar">
-                    <div class="search-box">
-                        <input type="text" id="materialSearch" placeholder="搜索材料名称、编码或规格（支持拼音）">
-                        <button onclick="loadMaterials()">搜索</button>
+                    <div class="search-box" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <input type="text" id="filterName" placeholder="材料名称" oninput="onMaterialFilterChange()" style="padding:6px 10px;border:1px solid var(--border-light);border-radius:4px;font-size:13px;width:140px;">
+                        <select id="filterRegion" onchange="onMaterialFilterChange()" style="padding:6px 10px;border:1px solid var(--border-light);border-radius:4px;font-size:13px;width:100px;">
+                            <option value="">全部区域</option>
+                            <option value="AN">安宁</option>
+                            <option value="KM">昆明</option>
+                            <option value="BN">版纳</option>
+                            <option value="DL">大理</option>
+                            <option value="YX">玉溪</option>
+                            <option value="CD">成都</option>
+                        </select>
+                        <input type="text" id="filterSpec" placeholder="规格" oninput="onMaterialFilterChange()" style="padding:6px 10px;border:1px solid var(--border-light);border-radius:4px;font-size:13px;width:120px;">
+                        <input type="text" id="filterBrand" placeholder="品牌" oninput="onMaterialFilterChange()" style="padding:6px 10px;border:1px solid var(--border-light);border-radius:4px;font-size:13px;width:120px;">
+                        <button class="btn btn-secondary" onclick="clearMaterialFilters()" style="font-size:12px;">清空筛选</button>
                     </div>
                     <span id="materialStats" style="color:#666;font-size:12px;"></span>
                     <button class="btn btn-secondary" onclick="loadMaterials()">刷新</button>
+                    <button class="btn btn-primary" id="btnGenerateInquiry" onclick="generateInquiryFromSelection()" disabled>生成询价单</button>
+                    <span id="selectionCount" style="display:none;color:var(--primary);font-size:12px;font-weight:bold;"></span>
                 </div>
                 <div class="table-container" id="materialTableContainer" style="max-height:calc(100vh - 280px);">
                     <table id="materialTableEl">
                         <colgroup>
+                            <col style="width:40px">
                             <col style="width:90px">
                             <col style="width:180px">
                             <col style="width:130px">
@@ -142,11 +232,14 @@
                             <col style="width:50px">
                             <col style="width:90px">
                             <col style="width:90px">
+                            <col style="width:90px">
+                            <col style="width:90px">
                             <col style="width:180px">
                             <col style="width:180px">
                         </colgroup>
                         <thead>
                             <tr>
+                                <th class="col-select"><input type="checkbox" id="selectAllMaterials" title="全选当前页" onchange="toggleSelectAll(this.checked)"></th>
                                 <th class="col-code">区域</th>
                                 <th class="col-name">名称</th>
                                 <th class="col-spec">规格</th>
@@ -157,6 +250,8 @@
                                 <th class="col-rate">税率</th>
                                 <th class="col-price">含税价</th>
                                 <th class="col-no-tax">不含税价</th>
+                                <th class="col-no-tax">现金含税价</th>
+                                <th class="col-price">现金不含税价</th>
                                 <th class="col-supplier">供应商</th>
                                 <th class="col-actions">操作</th>
                             </tr>
@@ -175,7 +270,52 @@
                     </div>
                 </div>
                 <div class="toolbar">
+                    <div class="inquiry-filter-bar">
+                        <input type="text" id="inquiryFilterKeyword" placeholder="单号/备注" oninput="onInquiryFilterChange()">
+                        <input type="text" id="inquiryFilterApplicant" placeholder="申请人" oninput="onInquiryFilterChange()">
+                        <select id="inquiryFilterStatus" onchange="loadInquiries(false)">
+                            <option value="">全部状态</option>
+                            <option value="草稿">草稿</option>
+                            <option value="待审批">待审批</option>
+                            <option value="已同意">已同意</option>
+                            <option value="退回修改">退回修改</option>
+                            <option value="已驳回">已驳回</option>
+                        </select>
+                        <input type="date" id="inquiryFilterStartDate" onchange="loadInquiries(false)">
+                        <input type="date" id="inquiryFilterEndDate" onchange="loadInquiries(false)">
+                        <select id="inquiryFilterBelow" onchange="loadInquiries(false)">
+                            <option value="">库内价</option>
+                            <option value="1">低于库内价</option>
+                            <option value="0">不低于库内价</option>
+                        </select>
+                        <button class="btn btn-secondary" onclick="clearInquiryFilters()">清空筛选</button>
+                    </div>
                     <button class="btn btn-secondary" onclick="loadInquiries()">刷新</button>
+                </div>
+                <!-- 草稿区域 -->
+                <div id="draftsSection" style="margin-bottom:20px;display:none;">
+                    <h3 style="margin:0 0 10px 0;padding:8px 12px;background:#fff8e1;border-left:4px solid #f39c12;border-radius:4px;">
+                        草稿箱 <span id="draftsCount" style="font-size:13px;color:#999;"></span>
+                    </h3>
+                    <div class="table-container">
+                        <table>
+                            <colgroup>
+                                <col style="width:180px">
+                                <col style="width:100px">
+                                <col style="width:80px">
+                                <col style="width:200px">
+                            </colgroup>
+                            <thead>
+                                <tr>
+                                    <th>单号</th>
+                                    <th>日期</th>
+                                    <th>材料数</th>
+                                    <th>操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="draftsTable"></tbody>
+                        </table>
+                    </div>
                 </div>
                 <div class="table-container">
                     <table>
@@ -213,18 +353,19 @@
                     <button class="btn btn-secondary" onclick="loadStockIn()">刷新</button>
                 </div>
                 <div class="table-container">
-                    <table>
+                    <table style="table-layout:fixed;min-width:1458px;">
                         <colgroup>
-                            <col style="width:60px">
-                            <col style="width:150px">
-                            <col style="width:80px">
+                            <col style="width:56px">
+                            <col style="width:220px">
+                            <col style="width:100px">
+                            <col style="width:160px">
+                            <col style="width:100px">
+                            <col style="width:110px">
                             <col style="width:120px">
-                            <col style="width:90px">
-                            <col style="width:80px">
-                            <col style="width:120px">
                             <col style="width:150px">
-                            <col style="width:80px">
-                            <col style="width:80px">
+                            <col style="width:160px">
+                            <col style="width:170px">
+                            <col style="width:112px">
                         </colgroup>
                         <thead>
                             <tr>
@@ -234,7 +375,9 @@
                                 <th>供应商</th>
                                 <th>单价</th>
                                 <th>当前库存</th>
+                                <th>存放点</th>
                                 <th>项目</th>
+                                <th>关联询价单</th>
                                 <th>入库时间</th>
                                 <th>操作</th>
                             </tr>
@@ -260,6 +403,7 @@
                                 <th>材料名</th>
                                 <th>规格</th>
                                 <th>数量</th>
+                                <th>存放点</th>
                                 <th>出库时间</th>
                                 <th>领用班组</th>
                                 <th>领用人</th>
@@ -268,6 +412,62 @@
                             </tr>
                         </thead>
                         <tbody id="stockOutTable"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 材料调拨 -->
+            <div id="stock_transferModule" class="module hidden">
+                <div class="page-header">
+                    <h1>材料基地库存</h1>
+                    <div>
+                        <button class="btn btn-primary" onclick="openBaseStockInModal()">基地材料新增</button>
+                    </div>
+                </div>
+                <div class="toolbar">
+                    <button class="btn btn-secondary" onclick="loadBaseInventory()">刷新</button>
+                    <button class="btn btn-primary" id="btnBatchTransfer" onclick="openBatchTransferModal()" style="margin-left:auto;">批量调拨</button>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="width:30px;"><input type="checkbox" id="selectAllBaseInventory" onchange="toggleSelectAllBaseInventory()" title="全选/取消全选"></th>
+                                <th>材料编码</th>
+                                <th>材料名称</th>
+                                <th>规格</th>
+                                <th>详细规格</th>
+                                <th>单位</th>
+                                <th>数量</th>
+                                <th>单价</th>
+                                <th>金额</th>
+                                <th>更新时间</th>
+                                                                <th>备注</th>
+<th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="baseInventoryTable"></tbody>
+                    </table>
+                </div>
+                <h3 style="margin:20px 0 10px;">基地调拨记录</h3>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>调拨单号</th>
+                                <th>目标项目</th>
+                                <th>材料概览</th>
+                                <th>数量</th>
+                                <th>明细数</th>
+                                <th>总价（折旧前）</th>
+                                <th>运费</th>
+                                <th>调拨金额</th>
+                                <th>操作员</th>
+                                <th>调拨时间</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="baseTransferRecordsTable"></tbody>
                     </table>
                 </div>
             </div>
@@ -281,17 +481,35 @@
                     <button class="btn btn-secondary" onclick="loadInventory()">刷新</button>
                 </div>
                 <div class="table-container">
-                    <table>
+                    <table style="table-layout:fixed;min-width:1320px;">
+                        <colgroup>
+                            <col style="width:56px">
+                            <col style="width:130px">
+                            <col style="width:170px">
+                            <col style="width:120px">
+                            <col style="width:150px">
+                            <col style="width:70px">
+                            <col style="width:150px">
+                            <col style="width:150px">
+                            <col style="width:80px">
+                            <col style="width:90px">
+                            <col style="width:100px">
+                            <col style="width:160px">
+                        </colgroup>
                         <thead>
                             <tr>
                                 <th>序号</th>
+                                <th>材料编码</th>
                                 <th>材料名称</th>
                                 <th>规格</th>
-                                <th>仓库</th>
+                                <th>详细规格</th>
+                                <th>单位</th>
+                                <th>存放点</th>
+                                <th>项目</th>
                                 <th>数量</th>
                                 <th>单价</th>
                                 <th>金额</th>
-                                <th class="admin-only">操作</th>
+                                <th>操作</th>
                             </tr>
                         </thead>
                         <tbody id="inventoryTable"></tbody>
@@ -374,9 +592,43 @@
                 <div class="page-header">
                     <h1>报表统计</h1>
                 </div>
-                <div class="card">
-                    <h3>功能开发中...</h3>
-                    <p>报表统计功能即将上线</p>
+                <div class="card" style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;">
+                    <div style="padding:20px;border:1px dashed var(--border);border-radius:8px;text-align:center">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.5" style="margin-bottom:8px"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                        <p style="font-weight:600;margin-bottom:4px">采购统计表</p>
+                        <p style="font-size:12px;color:var(--text-muted)">按时间/供应商/材料统计</p>
+                        <span style="font-size:11px;color:var(--warning);background:#fffaf0;padding:2px 8px;border-radius:10px">即将上线</span>
+                    </div>
+                    <div style="padding:20px;border:1px dashed var(--border);border-radius:8px;text-align:center">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="1.5" style="margin-bottom:8px"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                        <p style="font-weight:600;margin-bottom:4px">销售统计表</p>
+                        <p style="font-size:12px;color:var(--text-muted)">按时间/客户/销售员统计</p>
+                        <span style="font-size:11px;color:var(--warning);background:#fffaf0;padding:2px 8px;border-radius:10px">即将上线</span>
+                    </div>
+                    <div style="padding:20px;border:1px dashed var(--border);border-radius:8px;text-align:center">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--info)" stroke-width="1.5" style="margin-bottom:8px"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                        <p style="font-weight:600;margin-bottom:4px">库存统计表</p>
+                        <p style="font-size:12px;color:var(--text-muted)">各仓库各材料当前库存</p>
+                        <span style="font-size:11px;color:var(--warning);background:#fffaf0;padding:2px 8px;border-radius:10px">即将上线</span>
+                    </div>
+                    <div style="padding:20px;border:1px dashed var(--border);border-radius:8px;text-align:center">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.5" style="margin-bottom:8px"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                        <p style="font-weight:600;margin-bottom:4px">出入库明细</p>
+                        <p style="font-size:12px;color:var(--text-muted)">某时间段内所有出入库记录</p>
+                        <span style="font-size:11px;color:var(--warning);background:#fffaf0;padding:2px 8px;border-radius:10px">即将上线</span>
+                    </div>
+                    <div style="padding:20px;border:1px dashed var(--border);border-radius:8px;text-align:center">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="1.5" style="margin-bottom:8px"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                        <p style="font-weight:600;margin-bottom:4px">利润统计表</p>
+                        <p style="font-size:12px;color:var(--text-muted)">销售收入 vs 采购成本毛利</p>
+                        <span style="font-size:11px;color:var(--warning);background:#fffaf0;padding:2px 8px;border-radius:10px">即将上线</span>
+                    </div>
+                    <div style="padding:20px;border:1px dashed var(--border);border-radius:8px;text-align:center">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="1.5" style="margin-bottom:8px"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                        <p style="font-weight:600;margin-bottom:4px">供应商报价对比</p>
+                        <p style="font-size:12px;color:var(--text-muted)">同一材料不同供应商价格对比</p>
+                        <span style="font-size:11px;color:var(--warning);background:#fffaf0;padding:2px 8px;border-radius:10px">即将上线</span>
+                    </div>
                 </div>
             </div>
 
@@ -393,11 +645,6 @@
                                 <tr>
                                     <th>项目编号</th>
                                     <th>项目名称</th>
-                                    <th>合同号</th>
-                                    <th>客户</th>
-                                    <th>开始日期</th>
-                                    <th>结束日期</th>
-                                    <th>备注</th>
                                     <th>操作</th>
                                 </tr>
                             </thead>
@@ -438,81 +685,191 @@
         </div>
     </div>
 
-    <!-- 材料模态框 -->
-    <div id="modal-material" class="modal">
-        <div class="modal-content">
+    <!-- 基地调拨到项目弹窗 -->
+    <div id="modal-base-transfer" class="modal">
+        <div class="modal-content" style="max-width:620px;">
             <div class="modal-header">
-                <h2 id="materialModalTitle">新建材料</h2>
-                <button class="modal-close" onclick="closeModal('modal-material')"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+                <h2>基地材料调拨到项目</h2>
+                <button class="modal-close" onclick="closeModal('modal-base-transfer')">&times;</button>
             </div>
-            <form id="materialForm">
-                <input type="hidden" id="materialId">
-                <input type="hidden" id="materialCode">
+            <form onsubmit="submitBaseTransfer(event)">
+                <input type="hidden" id="baseTransferInventoryId">
+                <div class="form-group">
+                    <label>基地材料</label>
+                    <input type="text" id="baseTransferMaterialName" readonly>
+                </div>
+                <div class="form-group">
+                    <label>目标项目 *</label>
+                    <select id="baseTransferProject" required></select>
+                </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>区域</label>
-                        <input type="text" id="materialRegion" readonly style="background:#f5f5f5;">
+                        <label>调拨数量 *</label>
+                        <input type="number" id="baseTransferQuantity" min="0.01" step="0.01" required>
                     </div>
                     <div class="form-group">
-                        <label>材料名称 *</label>
-                        <input type="text" id="materialName" required>
+                        <label>基地原单价</label>
+                        <input type="number" id="baseTransferOriginalPrice" readonly>
                     </div>
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>规格 *</label>
-                        <input type="text" id="materialSpec" required>
+                        <label>折旧后单价 *</label>
+                        <input type="number" id="baseTransferDepreciatedPrice" min="0" step="0.01" required>
                     </div>
                     <div class="form-group">
-                        <label>详细规格 *</label>
-                        <input type="text" id="materialDetailSpec" required placeholder="如自喷漆800毫升/瓶，或一箱12瓶/800毫升">
-                    </div>
-                    <div class="form-group">
-                        <label>是否国标 *</label>
-                        <select id="materialNationalStandard" required>
-                            <option value="0">否</option>
-                            <option value="1">是</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>品牌 *</label>
-                        <input type="text" id="materialBrand" required placeholder="品牌">
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>单位 *</label>
-                        <input type="text" id="materialUnit" required placeholder="如：个、根、米">
-                    </div>
-                    <div class="form-group">
-                        <label>含税价 *</label>
-                        <input type="number" step="0.01" id="materialTaxPrice" required>
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>税率 *</label>
-                        <select id="materialTaxRate" required>
-                            <option value="0.01">1%</option>
-                            <option value="0.06">6%</option>
-                            <option value="0.09">9%</option>
-                            <option value="0.13">13%</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>供应商 *</label>
-                        <select id="materialSupplier" required></select>
+                        <label>本次运费</label>
+                        <input type="number" id="baseTransferFreight" min="0" step="0.01" value="0">
                     </div>
                 </div>
                 <div class="form-group">
                     <label>备注</label>
-                    <textarea id="materialRemark"></textarea>
+                    <textarea id="baseTransferRemark"></textarea>
                 </div>
+
                 <div style="text-align:right;margin-top:20px;">
-                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-material')">取消</button>
-                    <button type="submit" class="btn btn-primary">保存</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-base-transfer')">取消</button>
+                    <button type="submit" class="btn btn-primary">确认调拨</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- 编辑基地调拨记录弹窗 -->
+    <div id="modal-base-transfer-edit" class="modal" style="z-index:1001;">
+        <div class="modal-content" style="max-width:620px;">
+            <div class="modal-header">
+                <h2>编辑调拨记录</h2>
+                <button class="modal-close" onclick="closeModal('modal-base-transfer-edit')">&times;</button>
+            </div>
+            <form onsubmit="submitEditBaseTransfer(event)">
+                <input type="hidden" id="editBaseTransferId">
+                <div class="form-group">
+                    <label>材料名称</label>
+                    <input type="text" id="editBaseTransferMaterialName" readonly>
+                </div>
+                <div class="form-group">
+                    <label>目标项目 *</label>
+                    <select id="editBaseTransferProject" required></select>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>调拨数量 *</label>
+                        <input type="number" id="editBaseTransferQuantity" min="0.01" step="0.01" required>
+                    </div>
+                    <div class="form-group">
+                        <label>折旧后单价 *</label>
+                        <input type="number" id="editBaseTransferDepreciatedPrice" min="0" step="0.01" required>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>运费</label>
+                        <input type="number" id="editBaseTransferFreight" min="0" step="0.01" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label>调拨时间</label>
+                        <input type="datetime-local" id="editBaseTransferTime">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>备注</label>
+                    <textarea id="editBaseTransferRemark"></textarea>
+                </div>
+                <div style="text-align:right;margin-top:20px;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-base-transfer-edit')">取消</button>
+                    <button type="submit" class="btn btn-primary">保存修改</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 批量调拨到项目弹窗 -->
+    <div id="modal-batch-transfer" class="modal">
+        <div class="modal-content" style="max-width:800px;">
+            <div class="modal-header">
+                <h2>批量调拨到项目</h2>
+                <button class="modal-close" onclick="closeModal('modal-batch-transfer')">&times;</button>
+            </div>
+            <form onsubmit="submitBatchTransfer(event)">
+                <div class="form-group">
+                    <label>目标项目 *</label>
+                    <select id="batchTransferProject" required></select>
+                </div>
+                <div style="overflow-x:auto;max-height:40vh;overflow-y:auto;margin-bottom:16px;">
+                    <table style="width:100%;border-collapse:collapse;font-size:13px;" id="batchTransferItemsTable">
+                        <thead style="position:sticky;top:0;background:#fff;z-index:1;">
+                            <tr style="background:#f0f2f5;">
+                                <th style="padding:6px;text-align:left;">材料名称</th>
+                                <th style="padding:6px;text-align:left;">规格</th>
+                                <th style="padding:6px;text-align:right;">可用数量</th>
+                                <th style="padding:6px;text-align:right;">调拨数量 *</th>
+                                <th style="padding:6px;text-align:right;">原单价</th>
+                                <th style="padding:6px;text-align:right;">折旧后单价 *</th>
+                            </tr>
+                        </thead>
+                        <tbody id="batchTransferItemsBody"></tbody>
+                    </table>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>本次运费</label>
+                        <input type="number" id="batchTransferFreight" min="0" step="0.01" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label>备注</label>
+                        <textarea id="batchTransferRemark" rows="2"></textarea>
+                    </div>
+                </div>
+                <div style="text-align:right;margin-top:20px;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-batch-transfer')">取消</button>
+                    <button type="submit" class="btn btn-primary">确认批量调拨</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 材料模态框 -->
+    <div id="modal-material" class="modal">
+        <div class="modal-content" style="max-width:1500px;width:95vw;">
+            <div class="modal-header">
+                <h2 id="materialModalTitle">新建材料</h2>
+                <button class="modal-close" onclick="closeModal('modal-material')"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
+            </div>
+            <div style="padding:8px 16px;background:#f8f9fa;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+                <span style="font-size:12px;color:#999;">区域: <input type="text" id="materialRegion" readonly style="background:#f5f5f5;width:60px;padding:2px 6px;border:1px solid var(--border-light);border-radius:3px;font-size:12px;"> 每行独立设置税率、供应商、是否国标</span>
+                <button type="button" class="btn btn-primary" style="padding:6px 12px;font-size:12px;" onclick="addMaterialRow()">+ 添加一行</button>
+            </div>
+            <!-- 批量表格 -->
+            <div style="overflow-x:auto;max-height:60vh;overflow-y:auto;">
+                <table id="materialBatchTable" style="width:100%;border-collapse:collapse;font-size:12px;">
+                    <thead style="position:sticky;top:0;background:#fff;z-index:2;">
+                        <tr style="background:#f0f2f5;border-bottom:2px solid var(--border);">
+                            <th style="padding:6px;width:30px;text-align:center;">#</th>
+                            <th style="padding:6px;min-width:100px;text-align:center;">材料名称 *</th>
+                            <th style="padding:6px;min-width:25px;text-align:center;">规格 *</th>
+                            <th style="padding:6px;min-width:70px;text-align:center;">详细规格 *</th>
+                            <th style="padding:6px;width:50px;text-align:center;">单位 *</th>
+                            <th style="padding:6px;width:170px;text-align:center;">供应商 *</th>
+                            <th style="padding:6px;width:70px;text-align:center;">税率</th>
+                            <th style="padding:6px;width:55px;text-align:center;">国标 *</th>
+                            <th style="padding:6px;width:65px;text-align:center;">含税价</th>
+                            <th style="padding:6px;width:56px;text-align:center;">现金价</th>
+                            <th style="padding:6px;width:81px;text-align:center;">现金含税价</th>
+                            <th style="padding:6px;width:100px;text-align:center;">备注</th>
+                            <th style="padding:6px;width:35px;text-align:center;">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="materialBatchBody"></tbody>
+                </table>
+            </div>
+            <div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+                <span id="materialBatchCount" style="color:var(--text-secondary);font-size:13px;">共 0 条</span>
+                <div>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-material')">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="saveAllMaterials()">保存全部</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -530,8 +887,8 @@
                         <input type="date" id="inquiryDate" value="">
                     </div>
                     <div class="form-group">
-                        <label>所属项目</label>
-                        <select id="inquiryProject">
+                        <label>所属项目 *</label>
+                        <select id="inquiryProject" required>
                             <option value="">--选择项目--</option>
                         </select>
                     </div>
@@ -543,9 +900,13 @@
                 <h4 style="margin:15px 0;">询价明细</h4>
                 <button type="button" class="btn btn-success" onclick="addInquiryItem()">+ 添加询价材料</button>
                 <div id="inquiryItemsContainer" style="margin-top:15px;"></div>
+                <div style="margin-top:10px;">
+                    <button type="button" class="btn btn-success" onclick="addInquiryItem()">+ 添加询价材料</button>
+                </div>
                 <div style="text-align:right;margin-top:20px;">
                     <strong>总金额: ¥<span id="inquiryTotal">0.00</span></strong>
                     <button type="button" class="btn btn-secondary" onclick="closeModal('modal-inquiry')" style="margin-left:20px;">取消</button>
+                    <button type="button" class="btn btn-warning" onclick="saveInquiryDraft()" style="margin-left:10px;">暂存</button>
                     <button type="button" class="btn btn-primary" onclick="submitInquiryForm()">提交询价</button>
                 </div>
             </form>
@@ -623,6 +984,10 @@
                         <input type="text" id="stockOutStockQty" readonly style="background:#f5f5f5;">
                     </div>
                 </div>
+                <div class="form-group">
+                    <label>出库存放点</label>
+                    <input type="text" id="stockOutWarehouse" readonly style="background:#f5f5f5;">
+                </div>
                 <div class="form-row">
                     <div class="form-group">
                         <label>出库数量 <span style="color:red;">*</span></label>
@@ -669,6 +1034,7 @@
                             <th>序号</th>
                             <th>出库单号</th>
                             <th>数量</th>
+                            <th>存放点</th>
                             <th>出库时间</th>
                             <th>领用班组</th>
                             <th>领用人</th>
@@ -678,6 +1044,57 @@
                     <tbody id="stockOutRecordsTable"></tbody>
                 </table>
             </div>
+        </div>
+    </div>
+
+    <!-- 基地材料入库弹窗 -->
+    <div id="modal-base-stock-in" class="modal">
+        <div class="modal-content" style="max-width:560px;">
+            <div class="modal-header">
+                <h2>基地材料新增</h2>
+                <button class="modal-close" onclick="closeModal('modal-base-stock-in')">&times;</button>
+            </div>
+            <form id="baseStockInForm" onsubmit="submitBaseStockIn(event)">
+                <input type="hidden" id="baseStockInMaterialId">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>材料名称 *</label>
+                        <input type="text" id="baseStockInMaterialName" required>
+                    </div>
+                    <div class="form-group">
+                        <label>单位</label>
+                        <input type="text" id="baseStockInUnitName">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>规格</label>
+                        <input type="text" id="baseStockInSpecification">
+                    </div>
+                    <div class="form-group">
+                        <label>详细规格</label>
+                        <input type="text" id="baseStockInDetailSpec">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>入库数量 *</label>
+                        <input type="number" id="baseStockInQuantity" min="0.01" step="0.01" required value="1">
+                    </div>
+                    <div class="form-group">
+                        <label>单价</label>
+                        <input type="number" id="baseStockInPrice" min="0" step="0.01" value="0">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>备注</label>
+                    <textarea id="baseStockInRemark" rows="2" placeholder="备注信息"></textarea>
+                </div>
+                <div style="text-align:right;margin-top:20px;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-base-stock-in')">取消</button>
+                    <button type="submit" class="btn btn-primary">确认入库基地</button>
+                </div>
+            </form>
         </div>
     </div>
 
@@ -861,8 +1278,8 @@
                 <!-- 基本信息 -->
                 <div class="recon-info-grid">
                     <div class="form-group">
-                        <label>对账单编号 *</label>
-                        <input type="text" id="reconNo" required placeholder="请输入对账单编号">
+                        <label>对账单号 *</label>
+                        <input type="text" id="reconStatementNo" placeholder="请输入对账单号">
                     </div>
                     <div class="form-group">
                         <label>供货单位 *</label>
@@ -966,7 +1383,7 @@
 
     <!-- 详情模态框 -->
     <div id="modal-detail" class="modal">
-        <div class="modal-content" style="max-width:800px;">
+        <div class="modal-content" style="max-width:1100px;">
             <div class="modal-header">
                 <h2 id="detailTitle">详情</h2>
                 <button class="modal-close" onclick="closeModal('modal-detail')">&times;</button>
@@ -1070,6 +1487,48 @@
         <span id="cartBadge" class="cart-badge" style="display:none;">0</span>
     </div>
 
-    <script src="/static/js/app.js?v=20260501"></script>
+    <!-- 材料选择弹窗 -->
+    <div id="materialPickerOverlay" class="modal" style="background:rgba(0,0,0,0.3);z-index:2000;" onclick="closeMaterialPicker()"></div>
+    <div id="materialPickerPanel" class="drawer" style="z-index:2001;max-width:600px;left:50%;transform:translateX(-50%);right:auto;bottom:auto;top:10%;max-height:80vh;border-radius:12px;">
+        <div class="drawer-header" style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;border-radius:12px 12px 0 0;">
+            <h2>选择材料</h2>
+            <button class="modal-close" onclick="closeMaterialPicker()" style="color:#fff;">&times;</button>
+        </div>
+        <!-- 搜索栏 -->
+        <div style="padding:12px 16px;background:#f8f9fa;border-bottom:1px solid #eee;">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <input type="text" id="mpSearch" placeholder="搜索名称/编码/规格..." oninput="filterMaterialPicker()"
+                       style="flex:2;min-width:150px;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:13px;">
+                <input type="text" id="mpSpec" placeholder="规格" oninput="filterMaterialPicker()"
+                       style="flex:1;min-width:80px;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:13px;">
+                <input type="text" id="mpBrand" placeholder="品牌" oninput="filterMaterialPicker()"
+                       style="flex:1;min-width:80px;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:13px;">
+                <button type="button" class="btn btn-secondary" onclick="clearMaterialPickerFilters()" style="font-size:12px;padding:8px 12px;">清空</button>
+            </div>
+        </div>
+        <!-- 材料列表 -->
+        <div class="drawer-body" style="padding:0;">
+            <div id="mpList" style="max-height:calc(80vh - 180px);overflow-y:auto;"></div>
+        </div>
+    </div>
+
+    <!-- 甲供材专项量控录入弹窗 -->
+    <div id="modal-owner-supplied" class="modal">
+        <div class="modal-content owner-modal-content">
+            <div class="modal-header">
+                <h2 id="ownerSuppliedModalTitle">新增量控台账</h2>
+                <button class="modal-close" onclick="closeModal('modal-owner-supplied')">&times;</button>
+            </div>
+            <form id="ownerSuppliedForm" onsubmit="submitOwnerSuppliedForm(event)">
+                <div id="ownerSuppliedFields" class="owner-form-grid"></div>
+                <div class="owner-modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-owner-supplied')">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js?v=2026060403"></script>
 </body>
 </html>

@@ -6,23 +6,141 @@ from datetime import datetime
 from html import escape
 from helpers import amount_to_chinese, get_db, generate_inquiry_no
 import sys
+import logging
+import config
 sys.path.insert(0, '.')
 from helpers.generate_inquiry_no import generate_inquiry_no_by_project
 
+logger = logging.getLogger(__name__)
+
 inquiry_bp = Blueprint('inquiries', __name__, url_prefix='/api')
+
+SPECIAL_APPROVER_USERNAMES = ('leikefeng', 'tanxiang')
+
+
+def _get_special_approval_context(cursor, inquiry_id):
+    cursor.execute("PRAGMA table_info(purchase_inquiries)")
+    inquiry_columns = {row[1] for row in cursor.fetchall()}
+    if 'project_id' in inquiry_columns:
+        cursor.execute("""
+            SELECT pi.id, pi.approval_status, pi.applicant_id,
+                   p.project_code,
+                   applicant.username AS applicant_username
+            FROM purchase_inquiries pi
+            LEFT JOIN projects p ON pi.project_id = p.id
+            LEFT JOIN users applicant ON pi.applicant_id = applicant.id
+            WHERE pi.id = ?
+        """, (inquiry_id,))
+    else:
+        cursor.execute("""
+            SELECT pi.id, pi.approval_status, pi.applicant_id,
+                   NULL AS project_code,
+                   applicant.username AS applicant_username
+            FROM purchase_inquiries pi
+            LEFT JOIN users applicant ON pi.applicant_id = applicant.id
+            WHERE pi.id = ?
+        """, (inquiry_id,))
+    row = cursor.fetchone()
+    if not row:
+        return None, False
+    ctx = dict(row)
+    project_code = (ctx.get('project_code') or '').upper()
+    applicant_username = (ctx.get('applicant_username') or '').lower()
+    is_special = project_code.startswith('GX') or applicant_username == 'wanglihua'
+    return ctx, is_special
+
+
+def _get_recorded_special_approvers(cursor, inquiry_id):
+    cursor.execute("""
+        SELECT DISTINCT u.username
+        FROM approval_records ar
+        JOIN users u ON ar.approver_id = u.id
+        WHERE ar.order_type = 'purchase_inquiry'
+          AND ar.order_id = ?
+          AND u.username IN (?, ?)
+          AND (ar.result LIKE '%同意%' OR ar.result = '专项审批同意' OR ar.result = '主管同意')
+    """, (inquiry_id, *SPECIAL_APPROVER_USERNAMES))
+    return {row['username'] for row in cursor.fetchall()}
 
 
 @inquiry_bp.route('/purchase-inquiries', methods=['GET'])
 def get_inquiries():
-    """获取所有询价单"""
+    """获取询价单列表（根据用户权限过滤）"""
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT pi.*, u.real_name as applicant_name
-        FROM purchase_inquiries pi
-        LEFT JOIN users u ON pi.applicant_id = u.id
-        ORDER BY pi.create_time DESC
-    """)
+
+    # 检查用户角色
+    cursor.execute("SELECT r.role_name FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.id = ?", (user['id'],))
+    role_row = cursor.fetchone()
+    role_name = dict(role_row)['role_name'] if role_row else None
+    cursor.execute("PRAGMA table_info(purchase_inquiries)")
+    inquiry_columns = {row[1] for row in cursor.fetchall()}
+    project_select = "p.project_code" if 'project_id' in inquiry_columns else "NULL AS project_code"
+    project_join = "LEFT JOIN projects p ON pi.project_id = p.id" if 'project_id' in inquiry_columns else ""
+
+    keyword = (request.args.get('keyword') or '').strip()
+    applicant = (request.args.get('applicant') or '').strip()
+    status = (request.args.get('status') or '').strip()
+    start_date = (request.args.get('start_date') or '').strip()
+    end_date = (request.args.get('end_date') or '').strip()
+    is_below = (request.args.get('is_below') or '').strip()
+
+    filters = []
+    params = []
+    if keyword:
+        filters.append("(pi.inquiry_no LIKE ? OR pi.remark LIKE ?)")
+        like_keyword = f"%{keyword}%"
+        params.extend([like_keyword, like_keyword])
+    if applicant:
+        filters.append("u.real_name LIKE ?")
+        params.append(f"%{applicant}%")
+    if status:
+        filters.append("pi.approval_status = ?")
+        params.append(status)
+    if start_date:
+        filters.append("pi.inquiry_date >= ?")
+        params.append(start_date)
+    if end_date:
+        filters.append("pi.inquiry_date <= ?")
+        params.append(end_date)
+    if is_below in ('0', '1'):
+        filters.append("pi.is_below_library_price = ?")
+        params.append(int(is_below))
+
+    if role_name == '系统管理员':
+        # 管理员可以看到所有
+        where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+        cursor.execute(f"""
+            SELECT pi.*, u.real_name as applicant_name, u.username as applicant_username,
+                   {project_select}
+            FROM purchase_inquiries pi
+            LEFT JOIN users u ON pi.applicant_id = u.id
+            {project_join}
+            {where_sql}
+            ORDER BY pi.create_time DESC
+        """, params)
+    else:
+        # 普通用户只能看到自己绑定项目的询价单
+        permission_sql = """(
+                pi.project_id IN (
+                    SELECT project_id FROM user_projects WHERE user_id = ?
+                ) OR pi.applicant_id = ?
+            )"""
+        where_parts = [permission_sql] + filters
+        cursor.execute(f"""
+            SELECT pi.*, u.real_name as applicant_name, u.username as applicant_username,
+                   {project_select}
+            FROM purchase_inquiries pi
+            LEFT JOIN users u ON pi.applicant_id = u.id
+            {project_join}
+            WHERE {' AND '.join(where_parts)}
+            ORDER BY pi.create_time DESC
+        """, [user['id'], user['id'], *params])
+
     inquiries = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return jsonify({'success': True, 'data': inquiries})
@@ -33,10 +151,16 @@ def get_inquiry(inquiry_id):
     """获取询价单详情（嵌套结构）"""
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT pi.*, u.real_name as applicant_name
+    cursor.execute("PRAGMA table_info(purchase_inquiries)")
+    inquiry_columns = {row[1] for row in cursor.fetchall()}
+    project_select = "p.project_code" if 'project_id' in inquiry_columns else "NULL AS project_code"
+    project_join = "LEFT JOIN projects p ON pi.project_id = p.id" if 'project_id' in inquiry_columns else ""
+    cursor.execute(f"""
+        SELECT pi.*, u.real_name as applicant_name, u.username as applicant_username,
+               {project_select}
         FROM purchase_inquiries pi
         LEFT JOIN users u ON pi.applicant_id = u.id
+        {project_join}
         WHERE pi.id = ?
     """, (inquiry_id,))
     row = cursor.fetchone()
@@ -90,15 +214,13 @@ def create_inquiry():
     """创建询价单（支持新的 items/quotes 嵌套结构）"""
     import json as json_module
 
-    print("=== create_inquiry called ===")
-    print("Raw request.data:", request.data)
+    logger.info("=== create_inquiry called ===")
 
     # 手动解析 JSON
     try:
         data = json_module.loads(request.data)
-        print("Manually parsed data:", data)
     except Exception as e:
-        print("JSON parse error:", e)
+        logger.error("JSON parse error: %s", e)
         return jsonify({'success': False, 'message': 'JSON解析失败: ' + str(e)})
 
     if data is None:
@@ -111,21 +233,15 @@ def create_inquiry():
     conn = get_db()
     cursor = conn.cursor()
 
-    # 详细检查 items 结构
-    print("All keys in data:", list(data.keys()))
-
     # 判断数据格式：items 字段存在则走新结构，否则走旧结构兼容
     has_items_key = 'items' in data
     items_data = data.get('items', []) if has_items_key else []
-    print("has_items_key:", has_items_key, "items_data:", items_data)
 
     # 如果 items 字段不存在，尝试 details（旧结构兼容）
     if not has_items_key:
         items_data = data.get('details', [])
-        print("items_data from get('details', []):", items_data)
 
     is_new_format = has_items_key and isinstance(items_data, list)
-    print("is_new_format:", is_new_format)
 
     if is_new_format:
         # 新结构：items 格式
@@ -134,15 +250,19 @@ def create_inquiry():
 
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-        # 计算总金额（只计算选定的报价）
+        # 计算总金额（仅计算选定报价）
         total_amount = 0
         for item in items_data:
+            selected_id = item.get('selected_quote_id')
             quantity = float(item.get('quantity', 1) or 1)
             for quote in item.get('quotes', []):
-                if quote.get('is_selected') and float(quote.get('tax_price', 0) or 0) > 0:
-                    tax_price = float(quote.get('tax_price', 0) or 0)
+                tax_price = float(quote.get('tax_price', 0) or 0)
+                # 只计入选定供应商的报价
+                if selected_id and quote.get('supplier_id') == selected_id:
                     total_amount += tax_price * quantity
-                    break
+                # 如果没有选定，计入最低价
+                elif not selected_id and quote.get('is_lowest'):
+                    total_amount += tax_price * quantity
 
         # 判断是否低于库内价
         is_below = 0
@@ -166,12 +286,12 @@ def create_inquiry():
         has_project_id = 'project_id' in columns
         
         if not has_project_id:
-            print("警告: purchase_inquiries 表缺少 project_id 列，正在添加...")
+            logger.warning("purchase_inquiries 表缺少 project_id 列，正在添加...")
             try:
                 cursor.execute("ALTER TABLE purchase_inquiries ADD COLUMN project_id INTEGER")
                 has_project_id = True
             except Exception as e:
-                print(f"添加 project_id 列失败: {e}")
+                logger.error("添加 project_id 列失败: %s", e)
         
         for attempt in range(5):
             try:
@@ -209,7 +329,7 @@ def create_inquiry():
             except Exception as insert_err:
                 err_str = str(insert_err)
                 if 'UNIQUE constraint failed' in err_str and attempt < 4:
-                    print(f"inquiry_no冲突，第{attempt + 1}次重试")
+                    logger.info("inquiry_no冲突，第%d次重试", attempt + 1)
                     conn.rollback()
                     continue
                 conn.close()
@@ -227,17 +347,27 @@ def create_inquiry():
                 library_price = float(item.get('library_price', 0) or 0)
                 selected_quote_id = item.get('selected_quote_id')
                 tax_rate = float(item.get('tax_rate', 0.01) or 0.01)
+                is_national_standard = item.get('is_national_standard', 0)
+                is_cash_price = item.get('is_cash_price', 0)
+                detail_spec = item.get('detail_spec', '')
+                brand = item.get('brand', '')
+
+                # 如果选择了现金含税价，默认税率为1%
+                if is_cash_price:
+                    tax_rate = 0.01
 
                 cursor.execute("""
                     INSERT INTO purchase_inquiry_items (
                         inquiry_id, material_id, quantity, library_price,
-                        selected_quote_id, tax_rate, create_time
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        selected_quote_id, tax_rate, is_national_standard, is_cash_price,
+                        detail_spec, brand, create_time
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     inquiry_id,
                     material_id if material_id else None,
                     quantity, library_price,
-                    selected_quote_id, tax_rate, now
+                    selected_quote_id, tax_rate, is_national_standard, is_cash_price,
+                    detail_spec, brand, now
                 ))
                 item_id = cursor.lastrowid
 
@@ -246,8 +376,8 @@ def create_inquiry():
                 valid_quotes = [q for q in quotes if q.get('supplier_id') and q.get('tax_price', 0) > 0]
 
                 if valid_quotes:
-                    # 计算最低价
-                    prices_with_idx = [(float(q['tax_price']) * quantity, i) for i, q in enumerate(valid_quotes)]
+                    # 计算最低价（基于不含税单价）
+                    prices_with_idx = [(float(q.get('tax_exempt_price', 0) or float(q.get('tax_price', 0)) / (1 + float(q.get('tax_rate', 0.13) or 0.13))), i) for i, q in enumerate(valid_quotes)]
                     lowest_idx = min(prices_with_idx, key=lambda x: x[0])[1] if prices_with_idx else -1
 
                     for i, quote in enumerate(valid_quotes):
@@ -286,7 +416,7 @@ def create_inquiry():
             return jsonify({'success': True, 'inquiry_no': inquiry_no, 'id': inquiry_id})
 
         except Exception as e:
-            print("Error:", str(e))
+            logger.error("Error: %s", e)
             import traceback
             traceback.print_exc()
             conn.rollback()
@@ -314,12 +444,12 @@ def create_inquiry():
         has_project_id = 'project_id' in columns
         
         if not has_project_id:
-            print("警告: purchase_inquiries 表缺少 project_id 列，正在添加...")
+            logger.warning("purchase_inquiries 表缺少 project_id 列，正在添加...")
             try:
                 cursor.execute("ALTER TABLE purchase_inquiries ADD COLUMN project_id INTEGER")
                 has_project_id = True
             except Exception as e:
-                print(f"添加 project_id 列失败: {e}")
+                logger.error("添加 project_id 列失败: %s", e)
 
         for attempt in range(5):
             try:
@@ -357,7 +487,7 @@ def create_inquiry():
             except Exception as insert_err:
                 err_str = str(insert_err)
                 if 'UNIQUE constraint failed' in err_str and attempt < 4:
-                    print(f"inquiry_no冲突，第{attempt + 1}次重试")
+                    logger.info("inquiry_no冲突，第%d次重试", attempt + 1)
                     conn.rollback()
                     continue
                 conn.close()
@@ -403,7 +533,7 @@ def create_inquiry():
             return jsonify({'success': True, 'inquiry_no': inquiry_no, 'id': inquiry_id})
 
         except Exception as e:
-            print("Error:", str(e))
+            logger.error("Error: %s", e)
             import traceback
             traceback.print_exc()
             conn.rollback()
@@ -413,127 +543,457 @@ def create_inquiry():
 
 @inquiry_bp.route('/purchase-inquiries/<int:inquiry_id>', methods=['DELETE'])
 def delete_inquiry(inquiry_id):
-    """删除询价单"""
+    """删除询价单（含级联清理：入库单、库存、跨区域创建的材料）"""
     user = session.get('user')
     if not user:
         return jsonify({'success': False, 'message': '未登录'})
 
-    if user.get('role_name') != '系统管理员':
-        return jsonify({'success': False, 'message': '仅管理员可删除询价单'})
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # 获取询价单信息
+    cursor.execute("SELECT * FROM purchase_inquiries WHERE id = ?", (inquiry_id,))
+    inq = cursor.fetchone()
+    if not inq:
+        conn.close()
+        return jsonify({'success': False, 'message': '询价单不存在'})
+    inq = dict(inq)
+    inquiry_no = inq.get('inquiry_no', '')
+    inquiry_project_id = inq.get('project_id')
+
+    role_name = user.get('role_name')
+    if not role_name:
+        cursor.execute("SELECT r.role_name FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.id = ?", (user['id'],))
+        role_row = cursor.fetchone()
+        role_name = dict(role_row)['role_name'] if role_row else None
+
+    can_delete = role_name == '系统管理员' or (
+        role_name == '材料员' and inq.get('approval_status') == '草稿'
+    )
+    if not can_delete:
+        conn.close()
+        return jsonify({'success': False, 'message': '仅管理员或材料员可删除草稿询价单'})
+
+    # 获取询价单所属项目的编码前缀
+    inquiry_prefix = ''
+    if inquiry_project_id:
+        cursor.execute("SELECT project_code FROM projects WHERE id = ?", (inquiry_project_id,))
+        proj_row = cursor.fetchone()
+        if proj_row:
+            inquiry_prefix = (proj_row[0] or '')[:2].upper()
+
+    # 获取询价单关联的材料ID列表，识别跨区域创建的材料
+    # 跨区域材料条件：(1) 编码前缀与项目前缀一致 (2) 仅被本询价单引用
+    cursor.execute("SELECT material_id FROM purchase_inquiry_items WHERE inquiry_id = ?", (inquiry_id,))
+    material_ids = [r[0] for r in cursor.fetchall()]
+
+    cross_region_material_ids = []
+    for mid in material_ids:
+        # 检查该材料是否被其他询价单引用
+        cursor.execute(
+            "SELECT COUNT(*) FROM purchase_inquiry_items WHERE material_id = ? AND inquiry_id != ?",
+            (mid, inquiry_id))
+        if cursor.fetchone()[0] > 0:
+            continue  # 材料被其他询价单共享，不删除
+
+        # 检查该材料是否被入库明细引用
+        cursor.execute("SELECT COUNT(*) FROM stock_in_details WHERE material_id = ?", (mid,))
+        if cursor.fetchone()[0] > 0:
+            continue  # 材料已入库，不删除
+
+        cursor.execute("SELECT material_code FROM materials WHERE id = ?", (mid,))
+        mat_row = cursor.fetchone()
+        if mat_row:
+            mat_prefix = (mat_row[0] or '')[:2].upper()
+            if mat_prefix == inquiry_prefix and inquiry_prefix:
+                cross_region_material_ids.append(mid)
+
+    try:
+        # 1. 删除关联的入库单及明细，并扣减库存
+        cursor.execute("SELECT id FROM stock_in_orders WHERE related_order_no = ?", (inquiry_no,))
+        stock_in_ids = [r[0] for r in cursor.fetchall()]
+        for si_id in stock_in_ids:
+            cursor.execute("SELECT material_id, quantity, warehouse_id FROM stock_in_details WHERE order_id = ?", (si_id,))
+            for detail in cursor.fetchall():
+                mat_id = detail['material_id']
+                qty = float(detail['quantity'] or 0)
+                wh_id = detail['warehouse_id'] or 1
+                cursor.execute("""
+                    UPDATE inventory SET quantity = MAX(0, quantity - ?), update_time = ?
+                    WHERE material_id = ? AND warehouse_id = ?
+                """, (qty, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), mat_id, wh_id))
+            cursor.execute("DELETE FROM stock_in_details WHERE order_id = ?", (si_id,))
+        cursor.execute("DELETE FROM stock_in_orders WHERE related_order_no = ?", (inquiry_no,))
+
+        # 2. 删除跨区域创建的材料及其库存记录
+        for mid in cross_region_material_ids:
+            cursor.execute("DELETE FROM inventory WHERE material_id = ?", (mid,))
+            cursor.execute("DELETE FROM materials WHERE id = ?", (mid,))
+
+        # 3. 删除询价单明细和报价（含旧版 purchase_inquiry_details 表）
+        cursor.execute("DELETE FROM purchase_inquiry_quotes WHERE item_id IN (SELECT id FROM purchase_inquiry_items WHERE inquiry_id = ?)", (inquiry_id,))
+        cursor.execute("DELETE FROM purchase_inquiry_items WHERE inquiry_id = ?", (inquiry_id,))
+        cursor.execute("DELETE FROM purchase_inquiry_details WHERE inquiry_id = ?", (inquiry_id,))
+        cursor.execute("DELETE FROM approval_records WHERE order_type = 'purchase_inquiry' AND order_id = ?", (inquiry_id,))
+        cursor.execute("DELETE FROM purchase_inquiries WHERE id = ?", (inquiry_id,))
+
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True, 'message': '删除成功'})
+
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        logger.error("删除询价单失败 inquiry_id=%s: %s", inquiry_id, e)
+        return jsonify({'success': False, 'message': '删除失败: ' + str(e)})
+
+
+@inquiry_bp.route('/purchase-inquiries/<int:inquiry_id>', methods=['PUT'])
+def update_inquiry(inquiry_id):
+    """编辑退回修改的询价单并重新提交"""
+    import json as json_module
+
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
+    try:
+        data = json_module.loads(request.data)
+    except Exception as e:
+        return jsonify({'success': False, 'message': 'JSON解析失败: ' + str(e)})
 
     conn = get_db()
     cursor = conn.cursor()
 
-    cursor.execute("DELETE FROM purchase_inquiry_items WHERE inquiry_id = ?", (inquiry_id,))
-    cursor.execute("DELETE FROM purchase_inquiry_quotes WHERE item_id IN (SELECT id FROM purchase_inquiry_items WHERE inquiry_id = ?)", (inquiry_id,))
-    cursor.execute("DELETE FROM purchase_inquiries WHERE id = ?", (inquiry_id,))
+    # 校验：只有申请人可以编辑，且状态必须为退回修改
+    cursor.execute("SELECT * FROM purchase_inquiries WHERE id = ?", (inquiry_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({'success': False, 'message': '询价单不存在'})
 
-    conn.commit()
-    conn.close()
+    inquiry = dict(row)
+    if inquiry['approval_status'] not in ('退回修改', '草稿'):
+        conn.close()
+        return jsonify({'success': False, 'message': '只有退回修改或草稿状态的询价单才能编辑'})
+    if inquiry['applicant_id'] != user['id']:
+        conn.close()
+        return jsonify({'success': False, 'message': '只有申请人可以编辑此询价单'})
 
-    return jsonify({'success': True, 'message': '删除成功'})
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    # 解析新明细数据
+    items_data = data.get('items', [])
+    if not items_data:
+        conn.close()
+        return jsonify({'success': False, 'message': '明细不能为空'})
+
+    try:
+        # 删除旧的 items 和 quotes
+        cursor.execute("SELECT id FROM purchase_inquiry_items WHERE inquiry_id = ?", (inquiry_id,))
+        old_item_ids = [r[0] for r in cursor.fetchall()]
+        if old_item_ids:
+            placeholders = ','.join('?' * len(old_item_ids))
+            cursor.execute(f"DELETE FROM purchase_inquiry_quotes WHERE item_id IN ({placeholders})", old_item_ids)
+        cursor.execute("DELETE FROM purchase_inquiry_items WHERE inquiry_id = ?", (inquiry_id,))
+
+        # 重新计算总金额和是否低于库内价
+        total_amount = 0
+        is_below = 0
+        for item in items_data:
+            selected_id = item.get('selected_quote_id')
+            quantity = float(item.get('quantity', 1) or 1)
+            for quote in item.get('quotes', []):
+                tax_price = float(quote.get('tax_price', 0) or 0)
+                if selected_id and quote.get('supplier_id') == selected_id:
+                    total_amount += tax_price * quantity
+                elif not selected_id and quote.get('is_lowest'):
+                    total_amount += tax_price * quantity
+            library_price = float(item.get('library_price', 0) or 0)
+            for quote in item.get('quotes', []):
+                tp = float(quote.get('tax_price', 0) or 0)
+                if library_price > 0 and tp < library_price:
+                    is_below = 1
+                    break
+
+        # 写入新 items + quotes
+        for item in items_data:
+            material_id = item.get('material_id')
+            quantity = float(item.get('quantity', 1) or 1)
+            library_price = float(item.get('library_price', 0) or 0)
+            selected_quote_id = item.get('selected_quote_id')
+            tax_rate = float(item.get('tax_rate', 0.01) or 0.01)
+            is_national_standard = item.get('is_national_standard', 0)
+            is_cash_price = item.get('is_cash_price', 0)
+            detail_spec = item.get('detail_spec', '')
+            brand = item.get('brand', '')
+
+            if is_cash_price:
+                tax_rate = 0.01
+
+            cursor.execute("""
+                INSERT INTO purchase_inquiry_items (
+                    inquiry_id, material_id, quantity, library_price,
+                    selected_quote_id, tax_rate, is_national_standard, is_cash_price,
+                    detail_spec, brand, create_time
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                inquiry_id, material_id if material_id else None,
+                quantity, library_price, selected_quote_id,
+                tax_rate, is_national_standard, is_cash_price,
+                detail_spec, brand, now
+            ))
+            item_id = cursor.lastrowid
+
+            quotes = item.get('quotes', [])
+            valid_quotes = [q for q in quotes if q.get('supplier_id') and q.get('tax_price', 0) > 0]
+
+            if valid_quotes:
+                # 计算最低价（基于不含税单价）
+                prices_with_idx = [(float(q.get('tax_exempt_price', 0) or float(q.get('tax_price', 0)) / (1 + float(q.get('tax_rate', 0.13) or 0.13))), i) for i, q in enumerate(valid_quotes)]
+                lowest_idx = min(prices_with_idx, key=lambda x: x[0])[1] if prices_with_idx else -1
+
+                for i, quote in enumerate(valid_quotes):
+                    tp = float(quote.get('tax_price', 0) or 0)
+                    tep = float(quote.get('tax_exempt_price', 0) or 0)
+                    tr = float(quote.get('tax_rate', 0.13) or 0.13)
+                    total = tp * quantity
+
+                    if tep == 0 and tp > 0:
+                        tep = round(tp / (1 + tr), 2)
+
+                    cursor.execute("""
+                        INSERT INTO purchase_inquiry_quotes (
+                            item_id, supplier_id, tax_price, tax_exempt_price,
+                            tax_rate, total_amount, is_lowest, is_selected, create_time
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        item_id, quote.get('supplier_id'),
+                        tp, tep, tr, total,
+                        1 if i == lowest_idx else 0,
+                        1 if selected_quote_id and quote.get('supplier_id') == selected_quote_id else 0,
+                        now
+                    ))
+
+        # 更新主表并改为待审批
+        cursor.execute("""
+            UPDATE purchase_inquiries
+            SET inquiry_date = ?, project_id = ?, total_amount = ?,
+                is_below_library_price = ?, approval_status = '待审批',
+                approver_id = NULL, approve_time = NULL, approval_remark = NULL,
+                remark = ?
+            WHERE id = ?
+        """, (
+            data.get('inquiry_date', inquiry['inquiry_date']),
+            data.get('project_id', inquiry.get('project_id')),
+            total_amount, is_below,
+            data.get('remark', inquiry.get('remark', '')),
+            inquiry_id
+        ))
+
+        # 记录重新提交审批
+        cursor.execute("""
+            INSERT INTO approval_records (order_type, order_id, approver_id, approver_name, result, remark, approval_time)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, ('purchase_inquiry', inquiry_id, user['id'], user['real_name'], '重新提交', '', now))
+
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True, 'message': '询价单已重新提交'})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        conn.rollback()
+        conn.close()
+        return jsonify({'success': False, 'message': str(e)})
 
 
 @inquiry_bp.route('/purchase-inquiries/<int:inquiry_id>/approve', methods=['POST'])
 def approve_inquiry(inquiry_id):
     """审批询价单（支持新的 items/quotes 结构）"""
     try:
-        try:
-            data = request.json or {}
-        except Exception:
-            data = {}
-        user = session.get('user')
-        if not user:
-            return jsonify({'success': False, 'message': '未登录'})
+        return _approve_inquiry_impl(inquiry_id)
+    except Exception as e:
+        logger.error("审批异常: %s", e, exc_info=True)
+        return jsonify({'success': False, 'message': f'审批失败: {str(e)}'})
 
-        # 权限校验：只有系统管理员和材料员可以审批
-        conn_check = get_db()
-        cursor_check = conn_check.cursor()
-        cursor_check.execute("SELECT r.role_name FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.id = ?", (user['id'],))
-        role_row = cursor_check.fetchone()
-        conn_check.close()
-        role_name = dict(role_row)['role_name'] if role_row else None
-        if role_name not in ('系统管理员', '材料员'):
-            return jsonify({'success': False, 'message': '您没有审批权限，仅系统管理员或材料员可审批'})
 
-        action = data.get('action')
-        remark = data.get('remark', '')
+def _approve_inquiry_impl(inquiry_id):
+    """审批询价单的实际实现"""
+    data = request.json
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
 
-        conn = get_db()
-        cursor = conn.cursor()
-        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    # 权限校验：只有系统管理员、材料员和材料审批负责人可以审批
+    conn_check = get_db()
+    cursor_check = conn_check.cursor()
+    cursor_check.execute("SELECT r.role_name FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.id = ?", (user['id'],))
+    role_row = cursor_check.fetchone()
+    role_name = dict(role_row)['role_name'] if role_row else None
+    if role_name not in ('系统管理员', '材料员', '材料审批负责人'):
+        return jsonify({'success': False, 'message': '您没有审批权限，仅系统管理员、材料员或材料审批负责人可审批'})
 
-        if action == 'reject':
+    action = data.get('action')
+    remark = data.get('remark', '')
+
+    conn = get_db()
+    cursor = conn.cursor()
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    special_ctx, requires_special_approval = _get_special_approval_context(cursor, inquiry_id)
+
+    if requires_special_approval and role_name == '系统管理员':
+        conn.close()
+        return jsonify({'success': False, 'message': 'GX项目或王利华提交的询价单必须由雷克峰和谭香审批，admin不可审批'})
+
+    if action == 'reject':
+        cursor.execute("""
+            UPDATE purchase_inquiries
+            SET approval_status = '已驳回', approver_id = ?, approve_time = ?, approval_remark = ?
+            WHERE id = ? AND approval_status IN ('待审批', '材料员已审')
+        """, (user['id'], now, remark, inquiry_id))
+        updated_rows = cursor.rowcount
+    elif action == 'return':
+        # 退回：状态改回待修改，退回给申请人（支持已同意状态退回）
+        # 先获取当前状态和询价单号
+        cursor.execute("SELECT approval_status, inquiry_no FROM purchase_inquiries WHERE id = ?", (inquiry_id,))
+        inq_row = cursor.fetchone()
+        if not inq_row:
+            conn.close()
+            return jsonify({'success': False, 'message': '询价单不存在'})
+        current_status = inq_row['approval_status']
+        inquiry_no = inq_row['inquiry_no']
+
+        # 如果当前是已同意状态，需要反向处理自动入库的库存
+        if current_status == '已同意':
+            # 查找关联的入库单
             cursor.execute("""
-                UPDATE purchase_inquiries
-                SET approval_status = '已驳回', approver_id = ?, approve_time = ?, approval_remark = ?
-                WHERE id = ? AND approval_status IN ('待审批', '材料员已审')
-            """, (user['id'], now, remark, inquiry_id))
-            updated_rows = cursor.rowcount
-        elif action == 'material_clerk':
-            cursor.execute("""
-                UPDATE purchase_inquiries
-                SET approval_status = '材料员已审', approver_id = ?, approve_time = ?, approval_remark = ?
-                WHERE id = ? AND approval_status = '待审批'
-            """, (user['id'], now, remark, inquiry_id))
-            updated_rows = cursor.rowcount
-        elif action == 'manager':
-            # 主管审批：待审批 或 材料员已审 都可直接通过
-            cursor.execute("""
-                UPDATE purchase_inquiries
-                SET approval_status = '已同意', approver_id = ?, approve_time = ?, approval_remark = ?
-                WHERE id = ? AND approval_status IN ('待审批', '材料员已审')
-            """, (user['id'], now, remark, inquiry_id))
-            updated_rows = cursor.rowcount
+                SELECT id, warehouse_id FROM stock_in_orders
+                WHERE related_order_no = ? AND source_type = '采购入库' AND status = '已入库'
+                ORDER BY create_time DESC LIMIT 1
+            """, (inquiry_no,))
+            stock_in = cursor.fetchone()
+            if stock_in:
+                stock_in_id = stock_in['id']
+                warehouse_id = stock_in['warehouse_id'] or 1
 
-        # 尝试获取新的 items 结构
-        items = []
-        try:
-            cursor.execute("SELECT * FROM purchase_inquiry_items WHERE inquiry_id = ?", (inquiry_id,))
-            items = cursor.fetchall()
-        except Exception as e:
-            print(f"获取询价单明细失败: {e}")
+                # 遍历入库明细，逐一扣减库存
+                cursor.execute("SELECT * FROM stock_in_details WHERE order_id = ?", (stock_in_id,))
+                for detail in cursor.fetchall():
+                    material_id = detail['material_id']
+                    detail_qty = float(detail['quantity'])
+
+                    # 检查当前库存是否足够退回
+                    cursor.execute("SELECT quantity FROM inventory WHERE material_id = ? AND warehouse_id = ?",
+                                   (material_id, warehouse_id))
+                    inv = cursor.fetchone()
+                    current_qty = float(inv['quantity']) if inv else 0
+
+                    if current_qty < detail_qty:
+                        cursor.execute("SELECT material_name FROM materials WHERE id = ?", (material_id,))
+                        mat = cursor.fetchone()
+                        mat_name = mat['material_name'] if mat else f'ID:{material_id}'
+                        conn.rollback()
+                        conn.close()
+                        return jsonify({
+                            'success': False,
+                            'message': f'无法退回：材料「{mat_name}」已有出库记录（库存 {current_qty} < 入库 {detail_qty}），请先处理出库单据后再退回'
+                        })
+
+                    # 扣减库存
+                    cursor.execute("""
+                        UPDATE inventory SET quantity = quantity - ?, update_time = ?
+                        WHERE material_id = ? AND warehouse_id = ?
+                    """, (detail_qty, now, material_id, warehouse_id))
+
+                # 删除入库明细和入库单
+                cursor.execute("DELETE FROM stock_in_details WHERE order_id = ?", (stock_in_id,))
+                cursor.execute("DELETE FROM stock_in_orders WHERE id = ?", (stock_in_id,))
+
+        # 更新询价单状态
+        cursor.execute("""
+            UPDATE purchase_inquiries
+            SET approval_status = '退回修改', approver_id = ?, approve_time = ?, approval_remark = ?
+            WHERE id = ? AND approval_status IN ('待审批', '材料员已审', '已同意')
+        """, (user['id'], now, remark, inquiry_id))
+        updated_rows = cursor.rowcount
+    elif action == 'material_clerk':
+        cursor.execute("""
+            UPDATE purchase_inquiries
+            SET approval_status = '材料员已审', approver_id = ?, approve_time = ?, approval_remark = ?
+            WHERE id = ? AND approval_status = '待审批'
+        """, (user['id'], now, remark, inquiry_id))
+        updated_rows = cursor.rowcount
+    elif action == 'manager':
+        if requires_special_approval:
+            username = (user.get('username') or '').lower()
+            if username not in SPECIAL_APPROVER_USERNAMES:
+                conn.close()
+                return jsonify({'success': False, 'message': '该询价单必须由雷克峰和谭香审批'})
+            if special_ctx['approval_status'] not in ('待审批', '材料员已审', '退回修改'):
+                conn.close()
+                return jsonify({'success': False, 'message': '操作失败，状态已更新'})
+
+            approved_usernames = _get_recorded_special_approvers(cursor, inquiry_id)
+            if username in approved_usernames:
+                conn.close()
+                return jsonify({'success': False, 'message': '您已审批过该询价单，需等待另一位负责人审批'})
+
+            approved_after_current = approved_usernames | {username}
+            if not all(name in approved_after_current for name in SPECIAL_APPROVER_USERNAMES):
+                cursor.execute("""
+                    INSERT INTO approval_records (order_type, order_id, approver_id, approver_name, result, remark, approval_time)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, ('purchase_inquiry', inquiry_id, user['id'], user['real_name'], '专项审批同意', remark, now))
+                conn.commit()
+                conn.close()
+                return jsonify({'success': True, 'message': '已记录专项审批，待另一位负责人审批后方可同意'})
+
+        # 主管审批：待审批、材料员已审、退回修改 都可直接通过
+        cursor.execute("""
+            UPDATE purchase_inquiries
+            SET approval_status = '已同意', approver_id = ?, approve_time = ?, approval_remark = ?
+            WHERE id = ? AND approval_status IN ('待审批', '材料员已审', '退回修改')
+        """, (user['id'], now, remark, inquiry_id))
+        updated_rows = cursor.rowcount
+
+        # 尝试新的 items 结构
+        cursor.execute("SELECT * FROM purchase_inquiry_items WHERE inquiry_id = ?", (inquiry_id,))
+        items = cursor.fetchall()
 
         # 获取询价单所属项目的信息（用于生成新编号）
-        inq = None
-        try:
-            cursor.execute("SELECT * FROM purchase_inquiries WHERE id = ?", (inquiry_id,))
-            inq_row = cursor.fetchone()
-            inq = dict(inq_row) if inq_row else {}
-        except Exception as e:
-            print(f"获取询价单失败: {e}")
-            inq = {}
-
-        inquiry_project_id = inq.get('project_id') if inq else None
+        cursor.execute("SELECT * FROM purchase_inquiries WHERE id = ?", (inquiry_id,))
+        inq = dict(cursor.fetchone())
+        inquiry_project_id = inq.get('project_id')
 
         # 获取询价单所在项目的前缀（用于判断是否需要生成新编号）
-        inquiry_project_code = ''
-        inquiry_prefix = ''
-        if inquiry_project_id:
-            try:
-                cursor.execute("SELECT project_code FROM projects WHERE id = ?", (inquiry_project_id,))
-                proj_row = cursor.fetchone()
-                inquiry_project_code = proj_row[0] if proj_row else ''
-                inquiry_prefix = inquiry_project_code[:2].upper() if inquiry_project_code else ''
-            except Exception as e:
-                print(f"获取项目信息失败: {e}")
+        cursor.execute("SELECT project_code FROM projects WHERE id = ?", (inquiry_project_id,))
+        proj_row = cursor.fetchone()
+        inquiry_project_code = proj_row[0] if proj_row else ''
+        inquiry_prefix = inquiry_project_code[:2].upper() if inquiry_project_code else ''
 
         def generate_new_material_code(cursor, project_code):
-            """根据项目编码生成新的材料编号"""
+            """根据项目编码生成新的材料编号（确保不重复）"""
             prefix = project_code[:2].upper() + 'LX'
-            cursor.execute("SELECT material_code FROM materials WHERE material_code LIKE ? ORDER BY id DESC LIMIT 1",
+            cursor.execute("SELECT material_code FROM materials WHERE material_code LIKE ? ORDER BY material_code DESC LIMIT 1",
                            (prefix + '%',))
             last_row = cursor.fetchone()
             if last_row:
                 last_code = last_row[0]
                 try:
-                    num = int(last_code[len(prefix):])
-                    next_num = num + 1
+                    next_num = int(last_code[len(prefix):]) + 1
                 except ValueError:
                     next_num = 1
             else:
                 next_num = 1
-            return prefix + str(next_num).zfill(5)
+            new_code = prefix + str(next_num).zfill(5)
+            while True:
+                cursor.execute("SELECT 1 FROM materials WHERE material_code = ?", (new_code,))
+                if not cursor.fetchone():
+                    return new_code
+                next_num += 1
+                new_code = prefix + str(next_num).zfill(5)
 
         if items:
             for item in items:
@@ -546,13 +1006,50 @@ def approve_inquiry(inquiry_id):
                 material_code = mat_row[0] if mat_row else ''
                 material_prefix = material_code[:2].upper() if material_code and len(material_code) >= 2 else ''
 
-                # 判断是否需要生成新编号
+                # 判断是否需要生成新编号（跨区域引用）
                 need_new_code = (material_prefix != inquiry_prefix) and inquiry_prefix
 
                 if need_new_code:
                     # 生成新编号
                     new_code = generate_new_material_code(cursor, inquiry_project_code)
-                    print(f"材料 {material_id} 编号变更: {material_code} -> {new_code}")
+                    logger.info("材料 %s 跨区域引用，创建新材料: %s -> %s", material_id, material_code, new_code)
+
+                    # 查询原始材料完整信息
+                    cursor.execute("SELECT * FROM materials WHERE id = ?", (material_id,))
+                    orig_mat = dict(cursor.fetchone())
+
+                    # 创建新材料（复制原始材料，更新编号和项目归属）
+                    now_mat = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    # 优先使用询价单明细中用户填写的详细规格和品牌
+                    new_brand = item_dict.get('brand') or orig_mat.get('brand', '')
+                    new_detail_spec = item_dict.get('detail_spec') or orig_mat.get('detail_spec', '')
+                    new_is_national_standard = item_dict.get('is_national_standard') if item_dict.get('is_national_standard') is not None else orig_mat.get('is_national_standard', 0)
+
+                    cursor.execute("""
+                        INSERT INTO materials (
+                            material_code, material_name, specification, unit_id,
+                            tax_price, tax_exempt_price, freight, remark,
+                            default_supplier_id, inventory_min, inventory_max,
+                            create_time, tax_rate, project_id, weight,
+                            brand, is_national_standard, detail_spec,
+                            cash_price, is_cash_price, cash_tax_price
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        new_code, orig_mat['material_name'], orig_mat['specification'],
+                        orig_mat['unit_id'], orig_mat['tax_price'], orig_mat['tax_exempt_price'],
+                        orig_mat['freight'], orig_mat['remark'], orig_mat['default_supplier_id'],
+                        orig_mat['inventory_min'], orig_mat['inventory_max'], now_mat,
+                        orig_mat['tax_rate'], inquiry_project_id, orig_mat.get('weight', 0),
+                        new_brand, new_is_national_standard, new_detail_spec,
+                        orig_mat['cash_price'], orig_mat['is_cash_price'], orig_mat['cash_tax_price']
+                    ))
+                    new_material_id = cursor.lastrowid
+
+                    # 更新询价单明细，指向新材料
+                    cursor.execute("UPDATE purchase_inquiry_items SET material_id = ? WHERE id = ?",
+                                   (new_material_id, item_dict['id']))
+                    material_id = new_material_id
+                    logger.info("已创建新材料 id=%s，询价明细 item_id=%s 已更新关联", new_material_id, item_dict['id'])
 
                 # 查找选定的报价（is_selected=1）
                 cursor.execute("""
@@ -562,27 +1059,17 @@ def approve_inquiry(inquiry_id):
                 selected_quote = cursor.fetchone()
 
                 if selected_quote:
+                    selected_quote = dict(selected_quote)
                     quote_tax_rate = float(selected_quote.get('tax_rate', 0.01) or 0.01)
-                    # 根据选定的报价更新材料价格
-                    if need_new_code:
-                        # 新编号 + 完整更新
-                        cursor.execute("""
-                            UPDATE materials SET material_code = ?, tax_price = ?, tax_exempt_price = ?,
-                            default_supplier_id = ?, detail_spec = ?, is_national_standard = ?, brand = ?, tax_rate = ?
-                            WHERE id = ?
-                        """, (
-                            new_code,
-                            selected_quote['tax_price'],
-                            selected_quote['tax_exempt_price'],
-                            selected_quote['supplier_id'],
-                            escape(data.get('detail_spec', '')),
-                            data.get('is_national_standard', 0),
-                            escape(data.get('brand', '')),
-                            quote_tax_rate,
-                            material_id
-                        ))
+                    is_cash = item_dict.get('is_cash_price', 0)
+                    # 根据选定的报价更新材料价格（need_new_code时material_id已指向新材料）
+                    if is_cash:
+                        cash_tax = round(selected_quote['tax_price'] / (1 + quote_tax_rate), 2) if quote_tax_rate else selected_quote['tax_price']
+                        cursor.execute(
+                            "UPDATE materials SET cash_price = ?, cash_tax_price = ?, default_supplier_id = ?, tax_rate = ?, is_cash_price = 1 WHERE id = ?",
+                            (selected_quote['tax_price'], cash_tax, selected_quote['supplier_id'], quote_tax_rate, material_id)
+                        )
                     else:
-                        # 同项目只更新价格
                         cursor.execute(
                             "UPDATE materials SET tax_price = ?, tax_exempt_price = ?, default_supplier_id = ?, tax_rate = ? WHERE id = ?",
                             (selected_quote['tax_price'], selected_quote['tax_exempt_price'], selected_quote['supplier_id'], quote_tax_rate, material_id)
@@ -595,23 +1082,15 @@ def approve_inquiry(inquiry_id):
                     """, (item_dict['id'],))
                     lowest_quote = cursor.fetchone()
                     if lowest_quote:
+                        lowest_quote = dict(lowest_quote)
                         quote_tax_rate = float(lowest_quote.get('tax_rate', 0.01) or 0.01)
-                        if need_new_code:
-                            cursor.execute("""
-                                UPDATE materials SET material_code = ?, tax_price = ?, tax_exempt_price = ?,
-                                default_supplier_id = ?, detail_spec = ?, is_national_standard = ?, brand = ?, tax_rate = ?
-                                WHERE id = ?
-                            """, (
-                                new_code,
-                                lowest_quote['tax_price'],
-                                lowest_quote['tax_exempt_price'],
-                                lowest_quote['supplier_id'],
-                                escape(data.get('detail_spec', '')),
-                                data.get('is_national_standard', 0),
-                                escape(data.get('brand', '')),
-                                quote_tax_rate,
-                                material_id
-                            ))
+                        is_cash = item_dict.get('is_cash_price', 0)
+                        if is_cash:
+                            cash_tax = round(lowest_quote['tax_price'] / (1 + quote_tax_rate), 2) if quote_tax_rate else lowest_quote['tax_price']
+                            cursor.execute(
+                                "UPDATE materials SET cash_price = ?, cash_tax_price = ?, default_supplier_id = ?, tax_rate = ?, is_cash_price = 1 WHERE id = ?",
+                                (lowest_quote['tax_price'], cash_tax, lowest_quote['supplier_id'], quote_tax_rate, material_id)
+                            )
                         else:
                             cursor.execute(
                                 "UPDATE materials SET tax_price = ?, tax_exempt_price = ?, default_supplier_id = ?, tax_rate = ? WHERE id = ?",
@@ -632,50 +1111,104 @@ def approve_inquiry(inquiry_id):
                 material_code = mat_row[0] if mat_row else ''
                 material_prefix = material_code[:2].upper() if material_code and len(material_code) >= 2 else ''
 
-                # 判断是否需要生成新编号
+                # 判断是否需要生成新编号（跨区域引用）
                 need_new_code = (material_prefix != inquiry_prefix) and inquiry_prefix
 
                 if need_new_code:
                     # 生成新编号
                     new_code = generate_new_material_code(cursor, inquiry_project_code)
-                    print(f"材料 {material_id} 编号变更: {material_code} -> {new_code}")
-                    if supplier_id:
-                        cursor.execute("""
-                            UPDATE materials SET material_code = ?, tax_price = ?, tax_exempt_price = ?,
-                            default_supplier_id = ?, detail_spec = ?, is_national_standard = ?, brand = ?
-                            WHERE id = ?
-                        """, (new_code, tax_price, tax_exempt, supplier_id, '', 0, '', material_id))
-                    else:
-                        cursor.execute("""
-                            UPDATE materials SET material_code = ?, tax_price = ?, tax_exempt_price = ?,
-                            detail_spec = ?, is_national_standard = ?, brand = ?
-                            WHERE id = ?
-                        """, (new_code, tax_price, tax_exempt, '', 0, '', material_id))
+                    logger.info("材料 %s 跨区域引用，创建新材料: %s -> %s", material_id, material_code, new_code)
+
+                    # 查询原始材料完整信息
+                    cursor.execute("SELECT * FROM materials WHERE id = ?", (material_id,))
+                    orig_mat = dict(cursor.fetchone())
+
+                    # 创建新材料（复制原始材料，更新编号和项目归属）
+                    now_mat = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    cursor.execute("""
+                        INSERT INTO materials (
+                            material_code, material_name, specification, unit_id,
+                            tax_price, tax_exempt_price, freight, remark,
+                            default_supplier_id, inventory_min, inventory_max,
+                            create_time, tax_rate, project_id, weight,
+                            brand, is_national_standard, detail_spec,
+                            cash_price, is_cash_price, cash_tax_price
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        new_code, orig_mat['material_name'], orig_mat['specification'],
+                        orig_mat['unit_id'], orig_mat['tax_price'], orig_mat['tax_exempt_price'],
+                        orig_mat['freight'], orig_mat['remark'], orig_mat['default_supplier_id'],
+                        orig_mat['inventory_min'], orig_mat['inventory_max'], now_mat,
+                        orig_mat['tax_rate'], inquiry_project_id, orig_mat.get('weight', 0),
+                        orig_mat['brand'], orig_mat['is_national_standard'], orig_mat['detail_spec'],
+                        orig_mat['cash_price'], orig_mat['is_cash_price'], orig_mat['cash_tax_price']
+                    ))
+                    new_material_id = cursor.lastrowid
+
+                    # 更新询价单明细，指向新材料
+                    cursor.execute("UPDATE purchase_inquiry_details SET material_id = ? WHERE id = ?",
+                                   (new_material_id, d['id']))
+                    material_id = new_material_id
+                    logger.info("已创建新材料 id=%s，询价明细已更新关联", new_material_id)
+
+                # 更新价格
+                if supplier_id:
+                    cursor.execute(
+                        "UPDATE materials SET tax_price = ?, tax_exempt_price = ?, default_supplier_id = ? WHERE id = ?",
+                        (tax_price, tax_exempt, supplier_id, material_id)
+                    )
                 else:
-                    # 同项目只更新价格
-                    if supplier_id:
-                        cursor.execute(
-                            "UPDATE materials SET tax_price = ?, tax_exempt_price = ?, default_supplier_id = ? WHERE id = ?",
-                            (tax_price, tax_exempt, supplier_id, material_id)
-                        )
-                    else:
-                        cursor.execute(
-                            "UPDATE materials SET tax_price = ?, tax_exempt_price = ? WHERE id = ?",
-                            (tax_price, tax_exempt, material_id)
-                        )
+                    cursor.execute(
+                        "UPDATE materials SET tax_price = ?, tax_exempt_price = ? WHERE id = ?",
+                        (tax_price, tax_exempt, material_id)
+                    )
 
         cursor.execute("UPDATE purchase_inquiries SET library_price_updated = 1 WHERE id = ?", (inquiry_id,))
-
-        # ===== 审批通过后自动入库 =====
-        # 生成入库单号
-        today_str = datetime.now().strftime('%Y%m%d')
-        cursor.execute("SELECT COUNT(*) FROM stock_in_orders WHERE order_no LIKE ?", (f'JH-{today_str}%',))
-        stk_count = cursor.fetchone()[0] + 1
-        stock_in_no = f'JH-{today_str}-{str(stk_count).zfill(3)}'
 
         # 获取询价单信息
         cursor.execute("SELECT * FROM purchase_inquiries WHERE id = ?", (inquiry_id,))
         inq = dict(cursor.fetchone())
+        inquiry_no = inq.get('inquiry_no', '')
+
+        # ===== 审批通过后自动入库 =====
+        # 安全防护：删除旧的活跃入库单（防止重复入库）
+        cursor.execute("""
+            SELECT id, warehouse_id FROM stock_in_orders
+            WHERE related_order_no = ? AND source_type = '采购入库' AND status = '已入库'
+        """, (inquiry_no,))
+        old_stock_ins = cursor.fetchall()
+        for old_si in old_stock_ins:
+            old_si_id = old_si['id']
+            old_warehouse_id = old_si['warehouse_id'] or 1
+            # 反向扣减旧入库单的库存（使用 MAX 防止负库存）
+            cursor.execute("SELECT * FROM stock_in_details WHERE order_id = ?", (old_si_id,))
+            for old_detail in cursor.fetchall():
+                old_material_id = old_detail['material_id']
+                old_qty = float(old_detail['quantity'])
+                cursor.execute("""
+                    UPDATE inventory SET quantity = MAX(0, quantity - ?), update_time = ?
+                    WHERE material_id = ? AND warehouse_id = ?
+                """, (old_qty, now, old_material_id, old_warehouse_id))
+            # 删除旧入库单及明细
+            cursor.execute("DELETE FROM stock_in_details WHERE order_id = ?", (old_si_id,))
+            cursor.execute("DELETE FROM stock_in_orders WHERE id = ?", (old_si_id,))
+
+        # 生成入库单号（取当日最大编号+1，避免删除后COUNT冲突）
+        today_str = datetime.now().strftime('%Y%m%d')
+        cursor.execute(
+            "SELECT order_no FROM stock_in_orders WHERE order_no LIKE ? ORDER BY order_no DESC LIMIT 1",
+            (f'JH-{today_str}%',)
+        )
+        last_row = cursor.fetchone()
+        if last_row:
+            try:
+                last_num = int(last_row[0].split('-')[-1])
+            except (ValueError, IndexError):
+                last_num = 0
+            stk_count = last_num + 1
+        else:
+            stk_count = 1
+        stock_in_no = f'JH-{today_str}-{str(stk_count).zfill(3)}'
 
         now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
@@ -686,7 +1219,7 @@ def approve_inquiry(inquiry_id):
                 warehouse_id, project_id, operator_id, in_time, status, create_time, remark
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            stock_in_no, '采购入库', inq.get('inquiry_no', ''), None,
+            stock_in_no, '采购入库', inquiry_no, None,
             1, inq.get('project_id'), user['id'], now_str, '已入库', now_str,
             f'询价单{inq.get("inquiry_no", "")}审批通过自动入库'
         ))
@@ -696,7 +1229,10 @@ def approve_inquiry(inquiry_id):
         if items:
             for item in items:
                 item_dict = dict(item)
-                material_id = item_dict['material_id']
+                # 重新查询material_id（前面审批可能已创建新材料并更新了关联）
+                cursor.execute("SELECT material_id FROM purchase_inquiry_items WHERE id = ?", (item_dict['id'],))
+                mid_row = cursor.fetchone()
+                material_id = mid_row[0] if mid_row else item_dict['material_id']
                 quantity = item_dict.get('quantity', 1)
 
                 unit_price = 0
@@ -731,11 +1267,11 @@ def approve_inquiry(inquiry_id):
 
                 if unit_price > 0 and quantity > 0:
                     amount = unit_price * quantity
-                    # 入库明细
+                    # 入库明细（记录每个材料对应的供应商）
                     cursor.execute("""
-                        INSERT INTO stock_in_details (order_id, material_id, quantity, unit_price, amount)
-                        VALUES (?, ?, ?, ?, ?)
-                    """, (stock_in_id, material_id, quantity, unit_price, amount))
+                        INSERT INTO stock_in_details (order_id, material_id, quantity, unit_price, amount, supplier_id)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (stock_in_id, material_id, quantity, unit_price, amount, supplier_id))
 
                     # 更新库存
                     cursor.execute("""
@@ -800,7 +1336,7 @@ def approve_inquiry(inquiry_id):
         conn.close()
         return jsonify({'success': False, 'message': '操作失败，状态已更新'})
 
-    result_text = {'reject': '驳回', 'material_clerk': '材料员同意', 'manager': '主管同意'}.get(action, action)
+    result_text = {'reject': '驳回', 'return': '退回', 'material_clerk': '材料员同意', 'manager': '主管同意'}.get(action, action)
     cursor.execute("""
         INSERT INTO approval_records (order_type, order_id, approver_id, approver_name, result, remark, approval_time)
         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -810,15 +1346,60 @@ def approve_inquiry(inquiry_id):
     conn.close()
     return jsonify({'success': True})
 
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        try:
-            conn.rollback()
-            conn.close()
-        except Exception:
-            pass
-        return jsonify({'success': False, 'message': f'审批失败: {str(e)}'})
+
+@inquiry_bp.route('/purchase-inquiries/<int:inquiry_id>/recall', methods=['POST'])
+def recall_inquiry(inquiry_id):
+    """撤回询价单（仅申请人在待审批状态下可撤回，撤回后状态变为草稿）"""
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # 查询询价单
+    cursor.execute("SELECT * FROM purchase_inquiries WHERE id = ?", (inquiry_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({'success': False, 'message': '询价单不存在'})
+
+    inquiry = dict(row)
+
+    # 校验：只有申请人可以撤回
+    if inquiry['applicant_id'] != user['id']:
+        conn.close()
+        return jsonify({'success': False, 'message': '只有申请人可以撤回此询价单'})
+
+    # 校验：只有待审批状态可以撤回
+    if inquiry['approval_status'] != '待审批':
+        conn.close()
+        return jsonify({'success': False, 'message': '只有待审批状态的询价单才能撤回'})
+
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    # 更新状态为草稿，清除审批信息
+    cursor.execute("""
+        UPDATE purchase_inquiries
+        SET approval_status = '草稿', approver_id = NULL, approve_time = NULL, approval_remark = NULL
+        WHERE id = ? AND approval_status = '待审批'
+    """, (inquiry_id,))
+    updated_rows = cursor.rowcount
+
+    if updated_rows == 0:
+        conn.rollback()
+        conn.close()
+        return jsonify({'success': False, 'message': '操作失败，状态已更新'})
+
+    # 记录撤回操作到审批记录
+    cursor.execute("""
+        INSERT INTO approval_records (order_type, order_id, approver_id, approver_name, result, remark, approval_time)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, ('purchase_inquiry', inquiry_id, user['id'], user['real_name'], '撤回', '', now))
+
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'message': '询价单已撤回'})
 
 
 @inquiry_bp.route('/purchase-inquiries/<int:inquiry_id>/approval-history', methods=['GET'])
@@ -845,9 +1426,10 @@ def print_inquiry_approval(inquiry_id):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT pi.*, u.real_name as applicant_name
+        SELECT pi.*, u.real_name as applicant_name, p.project_name
         FROM purchase_inquiries pi
         LEFT JOIN users u ON pi.applicant_id = u.id
+        LEFT JOIN projects p ON pi.project_id = p.id
         WHERE pi.id = ?
     """, (inquiry_id,))
     row = cursor.fetchone()
@@ -914,24 +1496,41 @@ def print_inquiry_approval(inquiry_id):
         <meta charset="UTF-8">
         <title>询价单审批签字单 - {inquiry['inquiry_no']}</title>
         <style>
-            @page {{ size: A4; margin: 0; }}
-            body {{ font-family: "微软雅黑", "Microsoft YaHei", Arial, sans-serif; margin: 0; padding: 20px; }}
-            .print-page {{ width: 100%; max-width: 210mm; margin: 0 auto; background: white; }}
-            .print-header {{ text-align: center; margin-bottom: 20px; border-bottom: 2px solid #333; padding-bottom: 10px; }}
-            .print-header h1 {{ margin: 0 0 5px 0; font-size: 24px; }}
-            table {{ width: 100%; border-collapse: collapse; margin: 15px 0; }}
-            th, td {{ border: 1px solid #333; padding: 8px; font-size: 12px; }}
-            th {{ background: #f0f0f0; }}
-            .info-row {{ display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; }}
-            .info-item {{ flex: 1; min-width: 200px; }}
-            .info-item label {{ font-weight: bold; }}
-            .approval-section {{ margin-top: 30px; }}
-            .approval-title {{ font-size: 16px; font-weight: bold; margin-bottom: 15px; border-bottom: 1px solid #333; padding-bottom: 5px; }}
-            .approval-table {{ margin-bottom: 20px; }}
-            .signatures {{ display: flex; justify-content: space-between; margin-top: 40px; }}
+            @page {{ size: A4 landscape; margin: 5mm; }}
+            body {{ font-family: "微软雅黑", "Microsoft YaHei", Arial, sans-serif; margin: 0; padding: 10px; box-sizing: border-box; }}
+            .print-page {{ width: 100%; max-width: 287mm; margin: 0 auto; background: white; box-sizing: border-box; overflow: visible; }}
+            .print-header {{ text-align: center; margin-bottom: 8px; border-bottom: 2px solid #333; padding-bottom: 6px; }}
+            .print-header h1 {{ margin: 0 0 3px 0; font-size: 18px; }}
+            .print-header div {{ font-size: 12px; }}
+            table {{ width: 100%; border-collapse: collapse; margin: 5px 0; table-layout: fixed; }}
+            th, td {{ border: 1px solid #333; padding: 3px 4px; font-size: 9px; word-wrap: break-word; overflow-wrap: break-word; line-height: 1.2; }}
+            th {{ background: #f0f0f0; font-size: 9px; }}
+            .col-seq {{ width: 3%; }}
+            .col-name {{ width: 9%; }}
+            .col-spec {{ width: 6%; }}
+            .col-detail {{ width: 8%; }}
+            .col-unit {{ width: 4%; }}
+            .col-qty {{ width: 4%; }}
+            .col-lib {{ width: 5%; }}
+            .col-supplier {{ width: 14%; }}
+            .col-price {{ width: 7%; }}
+            .col-tax {{ width: 4%; }}
+            .col-tax-exempt {{ width: 7%; }}
+            .col-amount {{ width: 7%; }}
+            .col-lowest {{ width: 4%; }}
+            .col-selected {{ width: 4%; }}
+            .info-row {{ display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; font-size: 11px; }}
+            .info-item {{ flex: 1; min-width: 180px; }}
+            .info-item label {{ font-weight: bold; font-size: 11px; }}
+            .approval-section {{ margin-top: 8px; }}
+            .approval-title {{ font-size: 12px; font-weight: bold; margin-bottom: 5px; border-bottom: 1px solid #333; padding-bottom: 3px; }}
+            .approval-table {{ margin-bottom: 8px; }}
+            .approval-table th, .approval-table td {{ font-size: 9px; padding: 2px 4px; }}
+            .signatures {{ display: flex; justify-content: space-between; margin-top: 10px; }}
             .signature-item {{ text-align: center; width: 20%; }}
-            .signature-line {{ border-top: 1px solid #333; margin-top: 40px; padding-top: 5px; }}
-            .amount-chinese {{ font-size: 18px; font-weight: bold; color: #c0392b; margin-top: 10px; }}
+            .signature-line {{ border-top: 1px solid #333; margin-top: 10px; padding-top: 3px; font-size: 10px; }}
+            .amount-chinese {{ font-size: 12px; font-weight: bold; color: #c0392b; margin-top: 5px; }}
+            .total-section {{ clear: both; text-align: right; margin: 5px 0; padding: 5px; background: #f9f9f9; border: 1px solid #ddd; font-size: 11px; }}
             .item-card {{ border: 1px solid #ddd; margin-bottom: 15px; border-radius: 4px; }}
             .item-header {{ background: #f5f5f5; padding: 8px 10px; border-bottom: 1px solid #ddd; font-weight: bold; }}
             .quote-row {{ display: flex; padding: 6px 10px; border-bottom: 1px solid #eee; }}
@@ -941,10 +1540,29 @@ def print_inquiry_approval(inquiry_id):
             .quote-price {{ width: 100px; text-align: right; }}
             .quote-amount {{ width: 100px; text-align: right; font-weight: bold; }}
             .quote-selected {{ width: 60px; color: #27ae60; font-weight: bold; }}
-            .lowest-tag {{ color: #27ae60; font-size: 11px; }}
+            .lowest-tag {{ color: #27ae60; font-size: 9px; }}
+            .print-btn {{ display: inline-block; padding: 8px 25px; background: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; margin: 10px auto; }}
+            .print-btn:hover {{ background: #2980b9; }}
+            @media print {{
+                .no-print {{ display: none !important; }}
+                body {{ padding: 0; margin: 0; }}
+                .print-page {{ max-width: 100%; padding: 5px; }}
+                table {{ font-size: 9px; margin: 3px 0; }}
+                th, td {{ padding: 2px 3px; }}
+                .approval-section {{ margin-top: 5px; }}
+                .approval-title {{ margin-bottom: 3px; }}
+                .approval-table th, .approval-table td {{ padding: 2px 3px; }}
+                .signatures {{ margin-top: 8px; }}
+                .signature-line {{ margin-top: 8px; padding-top: 2px; }}
+                .total-section {{ margin: 3px 0; padding: 3px; }}
+                .info-row {{ margin-bottom: 3px; gap: 3px; }}
+            }}
         </style>
     </head>
     <body>
+        <div class="no-print" style="text-align:right;margin:10px 20px;">
+            <button class="print-btn" onclick="window.print()">打印签字单</button>
+        </div>
         <div class="print-page">
             <div class="print-header">
                 <h1>采购询比价审批签字单</h1>
@@ -954,10 +1572,11 @@ def print_inquiry_approval(inquiry_id):
             <div class="info-row">
                 <div class="info-item"><label>申请日期：</label>{escape(inquiry.get('inquiry_date', '-'))}</div>
                 <div class="info-item"><label>申请人：</label>{escape(inquiry.get('applicant_name', '-'))}</div>
+                <div class="info-item"><label>低于库内价：</label>{'是' if inquiry.get('is_below_library_price') == 1 else '否'}</div>
+                <div class="info-item"><label>项目：</label>{escape(inquiry.get('project_name') or '-')}</div>
             </div>
             <div class="info-row">
                 <div class="info-item"><label>当前状态：</label><strong>{escape(inquiry.get('approval_status', '-'))}</strong></div>
-                <div class="info-item"><label>低于库内价：</label>{'是' if inquiry.get('is_below_library_price') == 1 else '否'}</div>
             </div>
 """
 
@@ -966,23 +1585,28 @@ def print_inquiry_approval(inquiry_id):
         html += """<table>
                 <thead>
                     <tr>
-                        <th>名称</th>
-                        <th>规格</th>
-                        <th>单位</th>
-                        <th>数量</th>
-                        <th>库内价</th>
-                        <th>供应商</th>
-                        <th>含税单价</th>
-                        <th>报价金额</th>
-                        <th>最低价</th>
-                        <th>拟定</th>
+                        <th class="col-seq">序号</th>
+                        <th class="col-name">名称</th>
+                        <th class="col-spec">规格</th>
+                        <th class="col-detail">详细规格</th>
+                        <th class="col-unit">单位</th>
+                        <th class="col-qty">数量</th>
+                        <th class="col-lib">库内价</th>
+                        <th class="col-supplier">供应商</th>
+                        <th class="col-price">含税单价</th>
+                        <th class="col-tax">税率</th>
+                        <th class="col-tax-exempt">不含税单价</th>
+                        <th class="col-amount">报价金额</th>
+                        <th class="col-lowest">最低价</th>
+                        <th class="col-selected">拟定</th>
                     </tr>
                 </thead>
                 <tbody>
 """
-        for item in items:
+        for idx, item in enumerate(items):
             material_name = item.get('material_name', '')
             specification = item.get('specification', '-')
+            detail_spec = item.get('detail_spec', '')
             unit_name = item.get('unit_name', '-')
             quantity = item.get('quantity', 1)
             library_price = item.get('library_price', 0)
@@ -992,11 +1616,15 @@ def print_inquiry_approval(inquiry_id):
                 # 无报价时单行显示
                 html += f"""
                     <tr>
+                        <td>{idx + 1}</td>
                         <td style="font-weight:500;">{escape(material_name)}</td>
                         <td>{escape(specification)}</td>
+                        <td>{escape(detail_spec)}</td>
                         <td>{escape(unit_name)}</td>
                         <td>{quantity}</td>
                         <td>¥{library_price:.2f}</td>
+                        <td>-</td>
+                        <td>-</td>
                         <td>-</td>
                         <td>-</td>
                         <td>-</td>
@@ -1007,15 +1635,22 @@ def print_inquiry_approval(inquiry_id):
             else:
                 rowspan = f' rowspan="{len(quotes)}"' if len(quotes) > 1 else ''
                 for qi, quote in enumerate(quotes):
+                    tax_rate = float(quote.get('tax_rate', 0.01) or 0.01)
                     html += "<tr>"
                     if qi == 0:
+                        html += f'<td{rowspan} style="vertical-align:middle;">{idx + 1}</td>'
                         html += f'<td{rowspan} style="font-weight:500;vertical-align:middle;">{escape(material_name)}</td>'
                         html += f'<td{rowspan} style="vertical-align:middle;">{escape(specification)}</td>'
+                        html += f'<td{rowspan} style="vertical-align:middle;">{escape(detail_spec)}</td>'
                         html += f'<td{rowspan} style="vertical-align:middle;">{escape(unit_name)}</td>'
                         html += f'<td{rowspan} style="vertical-align:middle;">{quantity}</td>'
                         html += f'<td{rowspan} style="vertical-align:middle;">¥{library_price:.2f}</td>'
+                    tax_price = float(quote.get('tax_price', 0) or 0)
+                    tax_exempt_price = round(tax_price / (1 + tax_rate), 2) if tax_rate > -1 else tax_price
                     html += f'<td>{escape(quote.get("supplier_name", "-"))}</td>'
-                    html += f'<td>¥{quote.get("tax_price", 0):.2f}</td>'
+                    html += f'<td>¥{tax_price:.2f}</td>'
+                    html += f'<td>{tax_rate * 100:.0f}%</td>'
+                    html += f'<td>¥{tax_exempt_price:.2f}</td>'
                     html += f'<td>¥{quote.get("total_amount", 0):.2f}</td>'
                     lowest_html = '<span class="lowest-tag">最低</span>' if quote.get('is_lowest') == 1 else ''
                     html += f'<td>{lowest_html}</td>'
@@ -1030,13 +1665,15 @@ def print_inquiry_approval(inquiry_id):
         html += """<table>
                 <thead>
                     <tr>
-                        <th>名称</th>
-                        <th>规格</th>
-                        <th>单位</th>
-                        <th>库内价</th>
-                        <th>供应商</th>
-                        <th>本次报价</th>
-                        <th>差额</th>
+                        <th class="col-seq">序号</th>
+                        <th class="col-name">名称</th>
+                        <th class="col-spec">规格</th>
+                        <th class="col-detail">详细规格</th>
+                        <th class="col-unit">单位</th>
+                        <th class="col-lib">库内价</th>
+                        <th class="col-supplier">供应商</th>
+                        <th class="col-price">本次报价</th>
+                        <th class="col-amount">差额</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -1044,16 +1681,18 @@ def print_inquiry_approval(inquiry_id):
         # 按材料名+规格分组
         from itertools import groupby
         def detail_group_key(d):
-            return (d.get('material_name', ''), d.get('specification', '-'))
+            return (d.get('material_name', ''), d.get('specification', '-'), d.get('detail_spec', ''))
         sorted_details = sorted(details, key=detail_group_key)
-        for key, group_iter in groupby(sorted_details, key=detail_group_key):
+        for gidx, (key, group_iter) in enumerate(groupby(sorted_details, key=detail_group_key)):
             group_rows = list(group_iter)
             rowspan = f' rowspan="{len(group_rows)}"' if len(group_rows) > 1 else ''
             for gi, d in enumerate(group_rows):
                 html += "<tr>"
                 if gi == 0:
+                    html += f'<td{rowspan} style="vertical-align:middle;">{gidx + 1}</td>'
                     html += f'<td{rowspan} style="font-weight:500;vertical-align:middle;">{escape(key[0])}</td>'
                     html += f'<td{rowspan} style="vertical-align:middle;">{escape(key[1])}</td>'
+                    html += f'<td{rowspan} style="vertical-align:middle;">{escape(key[2])}</td>'
                     html += f'<td{rowspan} style="vertical-align:middle;">{escape(d.get("unit_name", "-"))}</td>'
                     html += f'<td{rowspan} style="vertical-align:middle;">¥{d.get("library_price", 0):.2f}</td>'
                 html += f'<td>{escape(d.get("supplier_name", "-"))}</td>'
@@ -1065,9 +1704,31 @@ def print_inquiry_approval(inquiry_id):
             </table>
 """
 
-    html += f"""<div style="text-align: right; margin: 15px 0;">
-                <strong>总金额：¥{inquiry.get('total_amount', 0):.2f}</strong>
-                <div class="amount-chinese">大写：{amount_chinese}</div>
+    # 计算每家供应商的拟定总额
+    if items:
+        supplier_totals = {}
+        for item in items:
+            quantity = float(item.get('quantity', 1) or 1)
+            for quote in item.get('quotes', []):
+                if quote.get('is_selected') == 1:
+                    supplier_name = quote.get('supplier_name', '未知供应商')
+                    tax_price = float(quote.get('tax_price', 0) or 0)
+                    supplier_totals[supplier_name] = supplier_totals.get(supplier_name, 0) + tax_price * quantity
+    else:
+        supplier_totals = {}
+
+    supplier_totals_html = ''
+    if supplier_totals:
+        supplier_totals_html = '<div style="flex:1;text-align:left;">' + \
+            ' | '.join(f'{escape(name)}: <strong>¥{amt:,.2f}</strong>' for name, amt in supplier_totals.items()) + \
+            '</div>'
+
+    html += f"""<div class="total-section" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+                {supplier_totals_html}
+                <div style="text-align:right;">
+                    <strong style="font-size:14px;">总金额：¥{inquiry.get('total_amount', 0):.2f}</strong>
+                    <div class="amount-chinese">大写：{amount_chinese}</div>
+                </div>
             </div>
 
             <div class="approval-section">
@@ -1086,7 +1747,7 @@ def print_inquiry_approval(inquiry_id):
 """
 
     approval_levels = [
-        {'level': '部门主管', 'matches': ['主管同意', '主管已审']},
+        {'level': '项目管理处', 'matches': ['主管同意', '主管已审']},
     ]
 
     for level_info in approval_levels:
@@ -1113,26 +1774,26 @@ def print_inquiry_approval(inquiry_id):
                 </table>
             </div>
 
-            <div style="margin-top: 30px; font-size: 12px; color: #666;">
+            <div style="margin-top: 10px; font-size: 12px; color: #666;">
                 <strong>备注：</strong>""" + escape(inquiry.get('remark') or '无') + """
             </div>
 
-            <div class="signatures">
+            <div class="signatures" style="margin-top:20px;">
                 <div class="signature-item">
-                    <div class="signature-line">申请人</div>
+                    <div class="signature-line" style="margin-top:20px;">申请人</div>
                 </div>
                 <div class="signature-item">
-                    <div class="signature-line">材料员签字</div>
+                    <div class="signature-line" style="margin-top:20px;">材料员签字</div>
                 </div>
                 <div class="signature-item">
-                    <div class="signature-line">主管签字</div>
+                    <div class="signature-line" style="margin-top:20px;">项目经理（执行经理、生产经理）</div>
                 </div>
                 <div class="signature-item">
-                    <div class="signature-line">日期</div>
+                    <div class="signature-line" style="margin-top:20px;">日期</div>
                 </div>
             </div>
 
-            <div style="margin-top: 20px; font-size: 10px; color: #999; text-align: right;">
+            <div style="margin-top: 10px; font-size: 10px; color: #999; text-align: right;">
                 打印时间：""" + datetime.now().strftime('%Y-%m-%d %H:%M:%S') + """
             </div>
         </div>
@@ -1143,3 +1804,576 @@ def print_inquiry_approval(inquiry_id):
     response = make_response(html)
     response.headers['Content-Type'] = 'text/html; charset=utf-8'
     return response
+
+
+@inquiry_bp.route('/purchase-inquiries/<int:inquiry_id>/export-supplier-orders', methods=['GET'])
+def export_supplier_orders(inquiry_id):
+    """导出供应商供货单（按供应商分sheet的Excel）"""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+    from io import BytesIO
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # 获取询价单信息
+    cursor.execute("""
+        SELECT pi.*, u.real_name as applicant_name
+        FROM purchase_inquiries pi
+        LEFT JOIN users u ON pi.applicant_id = u.id
+        WHERE pi.id = ?
+    """, (inquiry_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({'success': False, 'message': '询价单不存在'})
+
+    inquiry = dict(row)
+
+    # 获取所有items
+    cursor.execute("""
+        SELECT i.id as item_id, i.quantity, i.material_id,
+               m.material_name, m.specification, m.material_code,
+               COALESCE(i.detail_spec, m.detail_spec, '') AS detail_spec,
+               u.unit_name
+        FROM purchase_inquiry_items i
+        LEFT JOIN materials m ON m.id = i.material_id
+        LEFT JOIN units u ON u.id = m.unit_id
+        WHERE i.inquiry_id = ?
+        ORDER BY i.id
+    """, (inquiry_id,))
+    all_items = [dict(row) for row in cursor.fetchall()]
+
+    if not all_items:
+        conn.close()
+        return jsonify({'success': False, 'message': '没有询价材料明细'})
+
+    # 为每个item查找报价：优先 is_selected=1，否则取 is_lowest=1，最后取任意有效报价
+    items_with_quotes = []
+    for item in all_items:
+        item_id = item['item_id']
+
+        # 优先查找 is_selected=1 的报价
+        cursor.execute("""
+            SELECT q.supplier_id, q.tax_price, q.tax_exempt_price, q.tax_rate,
+                   s.supplier_name
+            FROM purchase_inquiry_quotes q
+            LEFT JOIN suppliers s ON s.id = q.supplier_id
+            WHERE q.item_id = ? AND q.is_selected = 1
+            LIMIT 1
+        """, (item_id,))
+        quote = cursor.fetchone()
+
+        # 如果没有 is_selected，退而查找 is_lowest=1 的最低价报价
+        if not quote:
+            cursor.execute("""
+                SELECT q.supplier_id, q.tax_price, q.tax_exempt_price, q.tax_rate,
+                       s.supplier_name
+                FROM purchase_inquiry_quotes q
+                LEFT JOIN suppliers s ON s.id = q.supplier_id
+                WHERE q.item_id = ? AND q.is_lowest = 1
+                LIMIT 1
+            """, (item_id,))
+            quote = cursor.fetchone()
+
+        # 最后兜底：取任意一条有效报价
+        if not quote:
+            cursor.execute("""
+                SELECT q.supplier_id, q.tax_price, q.tax_exempt_price, q.tax_rate,
+                       s.supplier_name
+                FROM purchase_inquiry_quotes q
+                LEFT JOIN suppliers s ON s.id = q.supplier_id
+                WHERE q.item_id = ? AND q.tax_price > 0
+                LIMIT 1
+            """, (item_id,))
+            quote = cursor.fetchone()
+
+        if quote:
+            quote = dict(quote)
+            item['supplier_id'] = quote['supplier_id']
+            item['tax_price'] = quote['tax_price']
+            item['tax_exempt_price'] = quote.get('tax_exempt_price', 0)
+            item['tax_rate'] = quote.get('tax_rate', 0.13)
+            item['supplier_name'] = quote.get('supplier_name', '')
+            items_with_quotes.append(item)
+
+    conn.close()
+
+    if not items_with_quotes:
+        return jsonify({'success': False, 'message': '没有有效的供应商报价数据'})
+
+    # 按供应商分组
+    supplier_groups = {}
+    for r in items_with_quotes:
+        supplier_id = r.get('supplier_id')
+        if not supplier_id:
+            continue
+        supplier_name = r.get('supplier_name', '未知供应商')
+        if supplier_id not in supplier_groups:
+            supplier_groups[supplier_id] = {
+                'name': supplier_name,
+                'items': []
+            }
+        supplier_groups[supplier_id]['items'].append(r)
+
+    if not supplier_groups:
+        return jsonify({'success': False, 'message': '没有有效的供应商数据'})
+
+    # 创建Excel工作簿
+    wb = Workbook()
+    # 删除默认sheet
+    wb.remove(wb.active)
+
+    # 定义样式
+    header_font = Font(bold=True, size=11)
+    title_font = Font(bold=True, size=14)
+    header_fill = PatternFill(start_color='4472C4', end_color='4472C4', fill_type='solid')
+    header_font_white = Font(bold=True, size=11, color='FFFFFF')
+    thin_border = Border(
+        left=Side(style='thin'),
+        right=Side(style='thin'),
+        top=Side(style='thin'),
+        bottom=Side(style='thin')
+    )
+    center_align = Alignment(horizontal='center', vertical='center')
+    right_align = Alignment(horizontal='right', vertical='center')
+
+    for supplier_id, group in supplier_groups.items():
+        # Sheet名称（最长31字符，不能包含特殊字符）
+        sheet_name = group['name'][:31].replace('/', '-').replace('\\', '-').replace('*', '').replace('?', '').replace('[', '').replace(']', '')
+        ws = wb.create_sheet(title=sheet_name)
+
+        # 标题行
+        ws.merge_cells('A1:I1')
+        ws['A1'] = f'供货清单 - {group["name"]}'
+        ws['A1'].font = title_font
+        ws['A1'].alignment = center_align
+
+        # 询价单信息
+        ws['A2'] = f'询价单号：{inquiry["inquiry_no"]}'
+        ws['A3'] = f'日期：{inquiry.get("inquiry_date", "-")}'
+        ws['A4'] = f'项目：{inquiry.get("project_id", "-")}'
+
+        # 表头
+        headers = ['序号', '材料编码', '材料名称', '规格型号', '详细规格', '单位', '数量', '含税单价', '金额']
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=6, column=col, value=header)
+            cell.font = header_font_white
+            cell.fill = header_fill
+            cell.border = thin_border
+            cell.alignment = center_align
+
+        # 数据行
+        total_amount = 0
+        for idx, item in enumerate(group['items'], 1):
+            quantity = item.get('quantity', 0)
+            tax_price = item.get('tax_price', 0)
+            amount = quantity * tax_price
+            total_amount += amount
+
+            row_data = [
+                idx,
+                item.get('material_code', ''),
+                item.get('material_name', ''),
+                item.get('specification', ''),
+                item.get('detail_spec', ''),
+                item.get('unit_name', ''),
+                quantity,
+                tax_price,
+                amount
+            ]
+            for col, value in enumerate(row_data, 1):
+                cell = ws.cell(row=6 + idx, column=col, value=value)
+                cell.border = thin_border
+                if col in (7, 8, 9):
+                    cell.number_format = '#,##0.00'
+                    cell.alignment = right_align
+                elif col == 1:
+                    cell.alignment = center_align
+
+        # 汇总行
+        total_row = 6 + len(group['items']) + 1
+        ws.cell(row=total_row, column=1, value='合计').font = Font(bold=True)
+        ws.merge_cells(start_row=total_row, start_column=1, end_row=total_row, end_column=8)
+        total_cell = ws.cell(row=total_row, column=9, value=total_amount)
+        total_cell.font = Font(bold=True)
+        total_cell.number_format = '#,##0.00'
+        total_cell.border = thin_border
+
+        # 设置列宽
+        ws.column_dimensions['A'].width = 8
+        ws.column_dimensions['B'].width = 15
+        ws.column_dimensions['C'].width = 25
+        ws.column_dimensions['D'].width = 20
+        ws.column_dimensions['E'].width = 25
+        ws.column_dimensions['F'].width = 10
+        ws.column_dimensions['G'].width = 12
+        ws.column_dimensions['H'].width = 12
+        ws.column_dimensions['I'].width = 14
+
+    # 保存到内存
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    # 生成文件名
+    from urllib.parse import quote
+    filename = f'供货清单_{inquiry["inquiry_no"]}.xlsx'
+    encoded_filename = quote(filename)
+
+    response = make_response(output.getvalue())
+    response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    response.headers['Content-Disposition'] = f"attachment; filename*=UTF-8''{encoded_filename}"
+    return response
+
+
+# ==================== 草稿（暂存）功能 ====================
+
+@inquiry_bp.route('/purchase-inquiries/draft', methods=['POST'])
+def save_draft():
+    """保存询价单草稿（支持新建和覆盖已有草稿）"""
+    import json as json_module
+    import sqlite3
+
+    try:
+        data = json_module.loads(request.data)
+    except Exception as e:
+        return jsonify({'success': False, 'message': 'JSON解析失败: ' + str(e)})
+
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
+    # 使用独立连接，避免 Flask g.db 生命周期问题
+    conn = sqlite3.connect(config.DATABASE_PATH, timeout=10)
+    conn.row_factory = sqlite3.Row
+    conn.text_factory = str
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    cursor = conn.cursor()
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    draft_id = data.get('draft_id')  # 如果有 draft_id 则是覆盖已有草稿
+    items_data = data.get('items', [])
+    project_id = data.get('project_id')
+    inquiry_date = data.get('inquiry_date', now[:10])
+    remark = data.get('remark', '')
+
+    try:
+        if draft_id:
+            # 覆盖已有草稿：先删除旧 items/quotes
+            cursor.execute("SELECT * FROM purchase_inquiries WHERE id = ? AND applicant_id = ?",
+                           (draft_id, user['id']))
+            existing = cursor.fetchone()
+            if not existing:
+                conn.close()
+                return jsonify({'success': False, 'message': '草稿不存在或无权编辑'})
+            if dict(existing)['approval_status'] != '草稿':
+                conn.close()
+                return jsonify({'success': False, 'message': '该询价单不是草稿状态'})
+
+            cursor.execute("SELECT id FROM purchase_inquiry_items WHERE inquiry_id = ?", (draft_id,))
+            old_item_ids = [r[0] for r in cursor.fetchall()]
+            if old_item_ids:
+                placeholders = ','.join('?' * len(old_item_ids))
+                cursor.execute(f"DELETE FROM purchase_inquiry_quotes WHERE item_id IN ({placeholders})", old_item_ids)
+            cursor.execute("DELETE FROM purchase_inquiry_items WHERE inquiry_id = ?", (draft_id,))
+
+            # 更新主表
+            cursor.execute("""
+                UPDATE purchase_inquiries
+                SET inquiry_date = ?, project_id = ?, remark = ?, create_time = ?
+                WHERE id = ?
+            """, (inquiry_date, project_id, remark, now, draft_id))
+
+            inquiry_id = draft_id
+            inquiry_no = dict(existing)['inquiry_no']
+        else:
+            # 新建草稿
+            inquiry_no = None
+            inquiry_id = None
+
+            cursor.execute("PRAGMA table_info(purchase_inquiries)")
+            columns = [row[1] for row in cursor.fetchall()]
+            has_project_id = 'project_id' in columns
+
+            for attempt in range(5):
+                try:
+                    if project_id:
+                        inquiry_no = generate_inquiry_no_by_project(project_id, inquiry_date)
+                    else:
+                        inquiry_no = generate_inquiry_no()
+
+                    if has_project_id:
+                        cursor.execute("""
+                            INSERT INTO purchase_inquiries (
+                                inquiry_no, inquiry_date, applicant_id, project_id, total_amount,
+                                is_below_library_price, approval_status, create_time, remark
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (inquiry_no, inquiry_date, user['id'], project_id, 0, 0, '草稿', now, remark))
+                    else:
+                        cursor.execute("""
+                            INSERT INTO purchase_inquiries (
+                                inquiry_no, inquiry_date, applicant_id, total_amount,
+                                is_below_library_price, approval_status, create_time, remark
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (inquiry_no, inquiry_date, user['id'], 0, 0, '草稿', now, remark))
+                    inquiry_id = cursor.lastrowid
+                    break
+                except Exception as e:
+                    if 'UNIQUE constraint failed' in str(e) and attempt < 4:
+                        conn.rollback()
+                        continue
+                    raise
+
+        if inquiry_id is None:
+            conn.close()
+            return jsonify({'success': False, 'message': '无法生成唯一单号，请稍后重试'})
+
+        # 写入 items + quotes（草稿允许无材料）
+        for item in items_data:
+            material_id = item.get('material_id')
+            quantity = float(item.get('quantity', 1) or 1)
+            library_price = float(item.get('library_price', 0) or 0)
+            selected_quote_id = item.get('selected_quote_id')
+            tax_rate = float(item.get('tax_rate', 0.01) or 0.01)
+            is_national_standard = item.get('is_national_standard', 0)
+            is_cash_price = item.get('is_cash_price', 0)
+            detail_spec = item.get('detail_spec', '')
+            brand = item.get('brand', '')
+
+            if is_cash_price:
+                tax_rate = 0.01
+
+            cursor.execute("""
+                INSERT INTO purchase_inquiry_items (
+                    inquiry_id, material_id, quantity, library_price,
+                    selected_quote_id, tax_rate, is_national_standard, is_cash_price,
+                    detail_spec, brand, create_time
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                inquiry_id,
+                material_id if material_id else None,
+                quantity, library_price, selected_quote_id,
+                tax_rate, is_national_standard, is_cash_price,
+                detail_spec, brand, now
+            ))
+            item_id = cursor.lastrowid
+
+            quotes = item.get('quotes', [])
+            for quote in quotes:
+                supplier_id = quote.get('supplier_id')
+                if not supplier_id:
+                    continue
+                tax_price = float(quote.get('tax_price', 0) or 0)
+                tax_exempt_price = float(quote.get('tax_exempt_price', 0) or 0)
+                tax_rate_val = float(quote.get('tax_rate', 0.13) or 0.13)
+                total = tax_price * quantity
+
+                if tax_exempt_price == 0 and tax_price > 0:
+                    tax_exempt_price = round(tax_price / (1 + tax_rate_val), 2)
+
+                cursor.execute("""
+                    INSERT INTO purchase_inquiry_quotes (
+                        item_id, supplier_id, tax_price, tax_exempt_price,
+                        tax_rate, total_amount, is_lowest, is_selected, create_time
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    item_id, supplier_id, tax_price, tax_exempt_price,
+                    tax_rate_val, total, 0,
+                    1 if selected_quote_id and str(quote.get('supplier_id')) == str(selected_quote_id) else 0,
+                    now
+                ))
+
+        conn.commit()
+        return jsonify({
+            'success': True,
+            'message': '草稿已保存',
+            'draft_id': inquiry_id,
+            'inquiry_no': inquiry_no
+        })
+
+    except Exception as e:
+        logger.error("保存草稿失败: %s", e)
+        import traceback
+        traceback.print_exc()
+        conn.rollback()
+        return jsonify({'success': False, 'message': '保存草稿失败: ' + str(e)})
+
+
+@inquiry_bp.route('/purchase-inquiries/drafts', methods=['GET'])
+def get_drafts():
+    """获取当前用户的草稿列表"""
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT pi.*, u.real_name as applicant_name
+        FROM purchase_inquiries pi
+        LEFT JOIN users u ON pi.applicant_id = u.id
+        WHERE pi.applicant_id = ? AND pi.approval_status = '草稿'
+        ORDER BY pi.create_time DESC
+    """, (user['id'],))
+    drafts = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify({'success': True, 'data': drafts})
+
+
+@inquiry_bp.route('/purchase-inquiries/draft/<int:draft_id>/submit', methods=['POST'])
+def submit_draft(draft_id):
+    """提交草稿（转为待审批）"""
+    import json as json_module
+
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
+    try:
+        data = json_module.loads(request.data)
+    except Exception as e:
+        return jsonify({'success': False, 'message': 'JSON解析失败: ' + str(e)})
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # 校验草稿
+    cursor.execute("SELECT * FROM purchase_inquiries WHERE id = ?", (draft_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({'success': False, 'message': '草稿不存在'})
+
+    draft = dict(row)
+    if draft['approval_status'] != '草稿':
+        conn.close()
+        return jsonify({'success': False, 'message': '该询价单不是草稿状态'})
+    if draft['applicant_id'] != user['id']:
+        conn.close()
+        return jsonify({'success': False, 'message': '只有申请人可以提交此草稿'})
+
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    # 复用 create_inquiry 的校验逻辑
+    items_data = data.get('items', [])
+    if not items_data:
+        conn.close()
+        return jsonify({'success': False, 'message': '请添加询价材料'})
+
+    try:
+        # 删除旧 items 和 quotes
+        cursor.execute("SELECT id FROM purchase_inquiry_items WHERE inquiry_id = ?", (draft_id,))
+        old_item_ids = [r[0] for r in cursor.fetchall()]
+        if old_item_ids:
+            placeholders = ','.join('?' * len(old_item_ids))
+            cursor.execute(f"DELETE FROM purchase_inquiry_quotes WHERE item_id IN ({placeholders})", old_item_ids)
+        cursor.execute("DELETE FROM purchase_inquiry_items WHERE inquiry_id = ?", (draft_id,))
+
+        # 计算总金额和是否低于库内价
+        total_amount = 0
+        is_below = 0
+        for item in items_data:
+            selected_id = item.get('selected_quote_id')
+            quantity = float(item.get('quantity', 1) or 1)
+            for quote in item.get('quotes', []):
+                tax_price = float(quote.get('tax_price', 0) or 0)
+                if selected_id and str(quote.get('supplier_id')) == str(selected_id):
+                    total_amount += tax_price * quantity
+                elif not selected_id and quote.get('is_lowest'):
+                    total_amount += tax_price * quantity
+            library_price = float(item.get('library_price', 0) or 0)
+            for quote in item.get('quotes', []):
+                tp = float(quote.get('tax_price', 0) or 0)
+                if library_price > 0 and tp < library_price:
+                    is_below = 1
+                    break
+
+        # 更新主表
+        project_id = data.get('project_id', draft.get('project_id'))
+        inquiry_date = data.get('inquiry_date', draft.get('inquiry_date', now[:10]))
+        cursor.execute("""
+            UPDATE purchase_inquiries
+            SET inquiry_date = ?, project_id = ?, total_amount = ?,
+                is_below_library_price = ?, approval_status = '待审批',
+                remark = ?, create_time = ?
+            WHERE id = ?
+        """, (inquiry_date, project_id, total_amount, is_below,
+              data.get('remark', draft.get('remark', '')), now, draft_id))
+
+        # 写入新 items + quotes
+        for item in items_data:
+            material_id = item.get('material_id')
+            quantity = float(item.get('quantity', 1) or 1)
+            library_price = float(item.get('library_price', 0) or 0)
+            selected_quote_id = item.get('selected_quote_id')
+            tax_rate = float(item.get('tax_rate', 0.01) or 0.01)
+            is_national_standard = item.get('is_national_standard', 0)
+            is_cash_price = item.get('is_cash_price', 0)
+            detail_spec = item.get('detail_spec', '')
+            brand = item.get('brand', '')
+
+            if is_cash_price:
+                tax_rate = 0.01
+
+            cursor.execute("""
+                INSERT INTO purchase_inquiry_items (
+                    inquiry_id, material_id, quantity, library_price,
+                    selected_quote_id, tax_rate, is_national_standard, is_cash_price,
+                    detail_spec, brand, create_time
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                draft_id, material_id if material_id else None,
+                quantity, library_price, selected_quote_id,
+                tax_rate, is_national_standard, is_cash_price,
+                detail_spec, brand, now
+            ))
+            item_id = cursor.lastrowid
+
+            quotes = item.get('quotes', [])
+            valid_quotes = [q for q in quotes if q.get('supplier_id') and q.get('tax_price', 0) > 0]
+
+            if valid_quotes:
+                prices_with_idx = [(float(q.get('tax_exempt_price', 0) or float(q.get('tax_price', 0)) / (1 + float(q.get('tax_rate', 0.13) or 0.13))), i) for i, q in enumerate(valid_quotes)]
+                lowest_idx = min(prices_with_idx, key=lambda x: x[0])[1] if prices_with_idx else -1
+
+                for i, quote in enumerate(valid_quotes):
+                    tp = float(quote.get('tax_price', 0) or 0)
+                    tep = float(quote.get('tax_exempt_price', 0) or 0)
+                    tr = float(quote.get('tax_rate', 0.13) or 0.13)
+                    total = tp * quantity
+
+                    if tep == 0 and tp > 0:
+                        tep = round(tp / (1 + tr), 2)
+
+                    cursor.execute("""
+                        INSERT INTO purchase_inquiry_quotes (
+                            item_id, supplier_id, tax_price, tax_exempt_price,
+                            tax_rate, total_amount, is_lowest, is_selected, create_time
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        item_id, quote.get('supplier_id'),
+                        tp, tep, tr, total,
+                        1 if i == lowest_idx else 0,
+                        1 if selected_quote_id and str(quote.get('supplier_id')) == str(selected_quote_id) else 0,
+                        now
+                    ))
+
+        # 记录提交审批
+        cursor.execute("""
+            INSERT INTO approval_records (order_type, order_id, approver_id, approver_name, result, remark, approval_time)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, ('purchase_inquiry', draft_id, user['id'], user['real_name'], '提交审批', '', now))
+
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True, 'inquiry_no': draft['inquiry_no'], 'id': draft_id})
+
+    except Exception as e:
+        logger.error("提交草稿失败: %s", e)
+        import traceback
+        traceback.print_exc()
+        conn.rollback()
+        conn.close()
+        return jsonify({'success': False, 'message': '提交草稿失败: ' + str(e)})

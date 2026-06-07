@@ -9,6 +9,8 @@ from .sales import sales_bp
 from .reconciliation import reconciliation_bp
 from .system import system_bp
 from .dashboard import dashboard_bp
+from .owner_supplied import owner_supplied_bp
+from .transfers import transfer_bp
 
 __all__ = [
     'auth_bp',
@@ -19,4 +21,6 @@ __all__ = [
     'reconciliation_bp',
     'system_bp',
     'dashboard_bp',
+    'owner_supplied_bp',
+    'transfer_bp',
 ]

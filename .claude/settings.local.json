@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(curl -s http://localhost:5000/api/materials?page=1)",
-      "Bash(python -c \"import sys, json; d=json.load\\(sys.stdin\\); print\\(f'Total materials: {d[\\\\\"total\\\\\"]}'\\)\")",
-      "Bash(python -c ' *)"
-    ]
-  }
-}

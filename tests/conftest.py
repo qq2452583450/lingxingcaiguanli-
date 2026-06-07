@@ -14,11 +14,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 @pytest.fixture
 def test_db():
     """创建临时测试数据库"""
-    # 使用临时文件
     fd, path = tempfile.mkstemp(suffix='.db')
     os.close(fd)
 
-    # 连接并初始化
+    # 注入到 config 使 helpers.get_db() 使用测试库
+    import config
+    _orig_path = config.DATABASE_PATH
+    config.DATABASE_PATH = path
+
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
 
@@ -54,6 +57,7 @@ def test_db():
             material_code TEXT UNIQUE NOT NULL,
             material_name TEXT NOT NULL,
             specification TEXT,
+            detail_spec TEXT,
             unit_id INTEGER,
             tax_price REAL DEFAULT 0,
             tax_exempt_price REAL DEFAULT 0,
@@ -110,6 +114,43 @@ def test_db():
             unit_price REAL DEFAULT 0,
             update_time TEXT,
             UNIQUE(material_id, warehouse_id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE base_inventory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            material_id INTEGER UNIQUE,
+            material_name TEXT,
+            specification TEXT,
+            detail_spec TEXT,
+            unit_name TEXT,
+            quantity REAL DEFAULT 0,
+            unit_price REAL DEFAULT 0,
+            update_time TEXT,
+            remark TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE base_inventory_transfers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transfer_no TEXT UNIQUE NOT NULL,
+            base_inventory_id INTEGER NOT NULL,
+            project_id INTEGER NOT NULL,
+            material_name TEXT NOT NULL,
+            specification TEXT,
+            detail_spec TEXT,
+            unit_name TEXT,
+            quantity REAL DEFAULT 0,
+            original_unit_price REAL DEFAULT 0,
+            depreciated_unit_price REAL DEFAULT 0,
+            freight REAL DEFAULT 0,
+            total_amount REAL DEFAULT 0,
+            operator_id INTEGER,
+            transfer_time TEXT,
+            batch_no TEXT,
+            remark TEXT
         )
     """)
 
@@ -250,7 +291,10 @@ def test_db():
             operator_id INTEGER,
             out_time TEXT,
             create_time TEXT,
-            remark TEXT
+            remark TEXT,
+            team_name TEXT,
+            receiver_name TEXT,
+            project_id INTEGER
         )
     """)
 
@@ -260,6 +304,34 @@ def test_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             order_id INTEGER,
             material_id INTEGER,
+            quantity REAL DEFAULT 0,
+            unit_price REAL DEFAULT 0,
+            amount REAL DEFAULT 0,
+            team_name TEXT,
+            receiver_name TEXT
+        )
+    """)
+
+    # 调拨单表
+    cursor.execute("""
+        CREATE TABLE stock_transfer_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transfer_no TEXT UNIQUE NOT NULL,
+            from_warehouse_id INTEGER NOT NULL,
+            to_warehouse_id INTEGER NOT NULL,
+            operator_id INTEGER,
+            transfer_time TEXT,
+            create_time TEXT,
+            remark TEXT
+        )
+    """)
+
+    # 调拨明细表
+    cursor.execute("""
+        CREATE TABLE stock_transfer_details (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL,
+            material_id INTEGER NOT NULL,
             quantity REAL DEFAULT 0,
             unit_price REAL DEFAULT 0,
             amount REAL DEFAULT 0
@@ -357,77 +429,36 @@ def test_db():
 
     yield conn
 
-    # 清理
     conn.close()
     os.unlink(path)
+    config.DATABASE_PATH = _orig_path  # 恢复
 
 
 @pytest.fixture
 def app(test_db):
-    """创建测试用Flask应用"""
+    """创建测试用Flask应用，注册真实蓝图"""
     from flask import Flask
-    from flask_cors import CORS
+    from helpers.db_helper import close_db
 
     app = Flask(__name__)
     app.config['TESTING'] = True
     app.secret_key = 'test_secret_key'
-    CORS(app, supports_credentials=True)
+    app.teardown_appcontext(close_db)
 
-    # 注入测试数据库连接
-    def get_test_db():
-        test_db.row_factory = sqlite3.Row
-        return test_db
-
-    # 导入路由（这里需要重构后的结构）
-    # 暂时使用内联路由进行测试
-    @app.route('/api/login', methods=['POST'])
-    def login():
-        from flask import request, jsonify, session
-        from helpers import verify_password
-
-        data = request.json
-        username = data.get('username', '')
-        password = data.get('password', '')
-
-        if not username or not password:
-            return jsonify({'success': False, 'message': '请输入用户名和密码'})
-
-        cursor = test_db.cursor()
-        cursor.execute("""
-            SELECT u.id, u.username, u.real_name, u.role_id, u.is_active,
-                   r.role_name, r.permissions
-            FROM users u
-            LEFT JOIN roles r ON u.role_id = r.id
-            WHERE u.username = ?
-        """, (username,))
-        row = cursor.fetchone()
-
-        if not row:
-            return jsonify({'success': False, 'message': '用户名或密码错误'})
-
-        if not row['is_active']:
-            return jsonify({'success': False, 'message': '账号已被禁用'})
-
-        if not verify_password(password, row['password']):
-            return jsonify({'success': False, 'message': '用户名或密码错误'})
-
-        user = {
-            'id': row['id'],
-            'username': row['username'],
-            'real_name': row['real_name'],
-            'role_name': row['role_name'],
-            'permissions': row['permissions'] or ''
-        }
-        session['user'] = user
-        return jsonify({'success': True, 'user': user})
-
-    @app.route('/api/current_user', methods=['GET'])
-    def current_user():
-        from flask import session, jsonify
-        user = session.get('user')
-        if not user:
-            return jsonify({'success': False, 'message': '未登录'})
-        return jsonify({'success': True, 'user': user})
+    # 注册真实蓝图（config.DATABASE_PATH 已由 test_db fixture 设为临时文件路径）
+    from blueprints import (
+        auth_bp, material_bp, inquiry_bp, stock_bp,
+        sales_bp, reconciliation_bp, system_bp, dashboard_bp, transfer_bp
+    )
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(material_bp)
+    app.register_blueprint(inquiry_bp)
+    app.register_blueprint(stock_bp)
+    app.register_blueprint(sales_bp)
+    app.register_blueprint(reconciliation_bp)
+    app.register_blueprint(system_bp)
+    app.register_blueprint(dashboard_bp)
+    app.register_blueprint(transfer_bp)
 
     return app
 

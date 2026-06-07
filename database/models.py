@@ -65,6 +65,9 @@ class Material:
     unit_id: Optional[int] = None
     tax_price: float = 0.0  # 含税价
     tax_exempt_price: float = 0.0  # 不含税价
+    is_cash_price: int = 0  # 是否现金含税价 (0=否, 1=是)
+    cash_price: float = 0.0  # 现金含税价（不含税）
+    cash_tax_price: float = 0.0  # 现金不含税价
     freight: float = 0.0
     remark: str = ""
     default_supplier_id: Optional[int] = None
@@ -158,6 +161,8 @@ class PurchaseInquiryItem:
     quantity: float = 1.0  # 采购数量
     library_price: float = 0.0  # 库内价（快照）
     selected_quote_id: Optional[int] = None  # 选定的报价ID
+    is_national_standard: int = 0  # 是否国标
+    is_cash_price: int = 0  # 是否现金含税价
     create_time: Optional[str] = None
     # 关联数据（API返回用，不存库）
     material_name: str = ""
@@ -235,6 +240,7 @@ class StockInDetail:
     quantity: float = 0.0
     unit_price: float = 0.0
     amount: float = 0.0
+    supplier_id: Optional[int] = None
 
 
 @dataclass
@@ -252,6 +258,28 @@ class StockOutOrder:
 
 @dataclass
 class StockOutDetail:
+    id: Optional[int] = None
+    order_id: Optional[int] = None
+    material_id: Optional[int] = None
+    quantity: float = 0.0
+    unit_price: float = 0.0
+    amount: float = 0.0
+
+
+@dataclass
+class StockTransferOrder:
+    id: Optional[int] = None
+    transfer_no: str = ""  # DB-YYMMDD-XXX
+    from_warehouse_id: Optional[int] = None
+    to_warehouse_id: Optional[int] = None
+    operator_id: Optional[int] = None
+    transfer_time: Optional[str] = None
+    create_time: Optional[str] = None
+    remark: str = ""
+
+
+@dataclass
+class StockTransferDetail:
     id: Optional[int] = None
     order_id: Optional[int] = None
     material_id: Optional[int] = None

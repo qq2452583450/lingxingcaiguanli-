@@ -3,10 +3,16 @@
 """
 import os
 
-# 项目根目录
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 项目根目录（始终指向主仓库，避免 worktree 产生独立数据库副本）
+_this = os.path.abspath(__file__)
+if '.claude' in _this:
+    # worktree 环境：向上找到 .claude 所在的项目根目录
+    _parts = _this.replace(os.sep, '/').split('/')
+    BASE_DIR = '/'.join(_parts[:_parts.index('.claude')])
+else:
+    BASE_DIR = os.path.dirname(_this)
 
-# 数据库路径
+# 数据库路径（固定使用主仓库目录下的数据库）
 DATABASE_PATH = os.path.join(BASE_DIR, "零星材管理系统.db")
 
 # 系统名称
@@ -32,6 +38,8 @@ DEFAULT_UNITS = [
 DEFAULT_ROLES = [
     {"name": "系统管理员", "permissions": "*"},
     {"name": "材料员", "permissions": "material.view,material.add,material.edit,stock.in,stock.out,stock.view,inventory.view"},
+    {"name": "材料审批负责人", "permissions": "purchase_inquiry.approve,purchase_inquiry.view"},
+    {"name": "基地负责人", "permissions": "base_inventory.view,base_inventory.manage,base_transfer.manage"},
 ]
 
 # 预置账号（密码通过环境变量 ADMIN_PASSWORD 设置，默认为空，首次登录需修改）

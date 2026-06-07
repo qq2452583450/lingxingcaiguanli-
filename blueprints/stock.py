@@ -3,32 +3,10 @@
 """
 from flask import Blueprint, request, jsonify, session
 from datetime import datetime
-from html import escape
 from helpers import get_db
+from helpers.order_no_generator import generate_stock_in_no, generate_stock_out_no
 
 stock_bp = Blueprint('stock', __name__, url_prefix='/api')
-
-
-def generate_stock_in_no():
-    """生成入库单号"""
-    conn = get_db()
-    cursor = conn.cursor()
-    today = datetime.now().strftime('%Y%m%d')
-    cursor.execute("SELECT COUNT(*) FROM stock_in_orders WHERE order_no LIKE ?", (f'JH-{today}%',))
-    count = cursor.fetchone()[0] + 1
-    conn.close()
-    return f'JH-{today}-{str(count).zfill(3)}'
-
-
-def generate_stock_out_no():
-    """生成出库单号"""
-    conn = get_db()
-    cursor = conn.cursor()
-    today = datetime.now().strftime('%Y%m%d')
-    cursor.execute("SELECT COUNT(*) FROM stock_out_orders WHERE order_no LIKE ?", (f'CK-{today}%',))
-    count = cursor.fetchone()[0] + 1
-    conn.close()
-    return f'CK-{today}-{str(count).zfill(3)}'
 
 
 # ==================== 入库 ====================
@@ -36,34 +14,66 @@ def generate_stock_out_no():
 @stock_bp.route('/stock-in', methods=['GET'])
 def get_stock_in():
     """获取所有入库明细（每条材料单独一行，含当前库存和出库状态）"""
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT 
-            sid.id,
-            sid.order_id,
-            sid.material_id,
-            si.order_no,
-            si.in_time,
-            si.source_type,
-            m.material_name,
-            m.specification,
-            u.unit_name,
-            sid.quantity,
-            sid.unit_price,
-            sid.amount,
-            s.supplier_name,
-            p.project_name,
-            COALESCE(inv.quantity, 0) AS current_stock
-        FROM stock_in_details sid
-        JOIN stock_in_orders si ON sid.order_id = si.id
-        LEFT JOIN materials m ON sid.material_id = m.id
-        LEFT JOIN units u ON m.unit_id = u.id
-        LEFT JOIN suppliers s ON si.supplier_id = s.id
-        LEFT JOIN projects p ON si.project_id = p.id
-        LEFT JOIN inventory inv ON sid.material_id = inv.material_id AND inv.warehouse_id = 1
-        ORDER BY si.in_time DESC, sid.id ASC
-    """)
+
+    # 检查用户角色
+    cursor.execute("SELECT r.role_name FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.id = ?", (user['id'],))
+    role_row = cursor.fetchone()
+    role_name = dict(role_row)['role_name'] if role_row else None
+
+    if role_name == '系统管理员':
+        # 管理员可以看到所有
+        cursor.execute("""
+            SELECT
+                sid.id, sid.order_id, sid.material_id, si.order_no, si.in_time, si.source_type,
+                si.warehouse_id, w.warehouse_name,
+                si.status as stock_in_status, si.related_order_no,
+                m.material_name, m.specification, u.unit_name,
+                sid.quantity, sid.unit_price, sid.amount,
+                COALESCE(s2.supplier_name, s.supplier_name) as supplier_name,
+                p.project_name,
+                COALESCE(inv.quantity, 0) AS current_stock
+            FROM stock_in_details sid
+            JOIN stock_in_orders si ON sid.order_id = si.id
+            LEFT JOIN materials m ON sid.material_id = m.id
+            LEFT JOIN units u ON m.unit_id = u.id
+            LEFT JOIN suppliers s2 ON sid.supplier_id = s2.id
+            LEFT JOIN suppliers s ON si.supplier_id = s.id
+            LEFT JOIN projects p ON si.project_id = p.id
+            LEFT JOIN warehouses w ON si.warehouse_id = w.id
+            LEFT JOIN inventory inv ON sid.material_id = inv.material_id AND inv.warehouse_id = si.warehouse_id
+            ORDER BY si.in_time DESC, sid.id ASC
+        """)
+    else:
+        # 材料员只能看到自己绑定项目的入库记录
+        cursor.execute("""
+            SELECT
+                sid.id, sid.order_id, sid.material_id, si.order_no, si.in_time, si.source_type,
+                si.warehouse_id, w.warehouse_name,
+                si.status as stock_in_status, si.related_order_no,
+                m.material_name, m.specification, u.unit_name,
+                sid.quantity, sid.unit_price, sid.amount,
+                COALESCE(s2.supplier_name, s.supplier_name) as supplier_name,
+                p.project_name,
+                COALESCE(inv.quantity, 0) AS current_stock
+            FROM stock_in_details sid
+            JOIN stock_in_orders si ON sid.order_id = si.id
+            LEFT JOIN materials m ON sid.material_id = m.id
+            LEFT JOIN units u ON m.unit_id = u.id
+            LEFT JOIN suppliers s2 ON sid.supplier_id = s2.id
+            LEFT JOIN suppliers s ON si.supplier_id = s.id
+            LEFT JOIN projects p ON si.project_id = p.id
+            LEFT JOIN warehouses w ON si.warehouse_id = w.id
+            LEFT JOIN inventory inv ON sid.material_id = inv.material_id AND inv.warehouse_id = si.warehouse_id
+            WHERE si.project_id IN (SELECT project_id FROM user_projects WHERE user_id = ?)
+            ORDER BY si.in_time DESC, sid.id ASC
+        """, (user['id'],))
+
     details = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return jsonify({'success': True, 'data': details})
@@ -91,9 +101,9 @@ def create_stock_in():
                 warehouse_id, operator_id, in_time, status, create_time, remark
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            order_no, escape(data.get('source_type', '采购入库')), escape(data.get('related_order_no', '')),
+            order_no, data.get('source_type', '采购入库'), data.get('related_order_no', ''),
             data.get('supplier_id'), data.get('warehouse_id', 1),
-            user['id'], now, '已入库', now, escape(data.get('remark', ''))
+            user['id'], now, '已入库', now, data.get('remark', '')
         ))
         order_id = cursor.lastrowid
 
@@ -139,29 +149,54 @@ def create_stock_in():
 @stock_bp.route('/stock-out', methods=['GET'])
 def get_stock_out():
     """获取所有出库明细（每条材料单独一行）"""
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT 
-            sod.id,
-            sod.order_id,
-            so.order_no,
-            so.out_time,
-            m.material_name,
-            m.specification,
-            u2.unit_name,
-            sod.quantity,
-            sod.unit_price,
-            sod.team_name,
-            sod.receiver_name,
-            u.real_name as operator_name
-        FROM stock_out_details sod
-        JOIN stock_out_orders so ON sod.order_id = so.id
-        LEFT JOIN materials m ON sod.material_id = m.id
-        LEFT JOIN units u2 ON m.unit_id = u2.id
-        LEFT JOIN users u ON so.operator_id = u.id
-        ORDER BY so.out_time DESC, sod.id ASC
-    """)
+
+    # 检查用户角色
+    cursor.execute("SELECT r.role_name FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.id = ?", (user['id'],))
+    role_row = cursor.fetchone()
+    role_name = dict(role_row)['role_name'] if role_row else None
+
+    if role_name == '系统管理员':
+        # 管理员可以看到所有
+        cursor.execute("""
+            SELECT
+                sod.id, sod.order_id, so.order_no, so.out_time,
+                m.material_name, m.specification, u2.unit_name,
+                sod.quantity, sod.unit_price, sod.team_name, sod.receiver_name,
+                u.real_name as operator_name, p.project_name, w.warehouse_name
+            FROM stock_out_details sod
+            JOIN stock_out_orders so ON sod.order_id = so.id
+            LEFT JOIN materials m ON sod.material_id = m.id
+            LEFT JOIN units u2 ON m.unit_id = u2.id
+            LEFT JOIN users u ON so.operator_id = u.id
+            LEFT JOIN projects p ON so.project_id = p.id
+            LEFT JOIN warehouses w ON so.warehouse_id = w.id
+            ORDER BY so.out_time DESC, sod.id ASC
+        """)
+    else:
+        # 材料员只能看到自己绑定项目的出库记录
+        cursor.execute("""
+            SELECT
+                sod.id, sod.order_id, so.order_no, so.out_time,
+                m.material_name, m.specification, u2.unit_name,
+                sod.quantity, sod.unit_price, sod.team_name, sod.receiver_name,
+                u.real_name as operator_name, p.project_name, w.warehouse_name
+            FROM stock_out_details sod
+            JOIN stock_out_orders so ON sod.order_id = so.id
+            LEFT JOIN materials m ON sod.material_id = m.id
+            LEFT JOIN units u2 ON m.unit_id = u2.id
+            LEFT JOIN users u ON so.operator_id = u.id
+            LEFT JOIN projects p ON so.project_id = p.id
+            LEFT JOIN warehouses w ON so.warehouse_id = w.id
+            WHERE so.project_id IN (SELECT project_id FROM user_projects WHERE user_id = ?)
+            ORDER BY so.out_time DESC, sod.id ASC
+        """, (user['id'],))
+
     details = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return jsonify({'success': True, 'data': details})
@@ -185,6 +220,7 @@ def create_stock_out():
         team_name = data.get('team_name', '')
         receiver_name = data.get('receiver_name', '')
         project_id = data.get('project_id')
+        warehouse_id = data.get('warehouse_id', 1)
 
         if not details:
             conn.close()
@@ -200,8 +236,8 @@ def create_stock_out():
                 operator_id, out_time, create_time, remark, project_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            order_no, '领用', '', 1,
-            user['id'], now, now, escape(data.get('remark', '')), project_id
+            order_no, '领用', '', warehouse_id,
+            user['id'], now, now, data.get('remark', ''), project_id
         ))
         order_id = cursor.lastrowid
 
@@ -216,7 +252,7 @@ def create_stock_out():
             # 检查库存
             cursor.execute("""
                 SELECT quantity FROM inventory WHERE material_id = ? AND warehouse_id = ?
-            """, (material_id, 1))
+            """, (material_id, warehouse_id))
             inv = cursor.fetchone()
             current_stock = inv['quantity'] if inv else 0
 
@@ -239,13 +275,13 @@ def create_stock_out():
                 INSERT INTO stock_out_details (order_id, material_id, quantity, unit_price, amount, team_name, receiver_name)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (order_id, material_id, quantity, unit_price, amount,
-                  escape(team_name), escape(receiver_name)))
+                  team_name, receiver_name))
 
             # 扣减库存
             cursor.execute("""
                 UPDATE inventory SET quantity = quantity - ?, update_time = ?
                 WHERE material_id = ? AND warehouse_id = ?
-            """, (quantity, now, material_id, 1))
+            """, (quantity, now, material_id, warehouse_id))
 
         conn.commit()
         conn.close()
@@ -274,10 +310,12 @@ def get_stock_out_by_material(material_id):
             sod.amount,
             sod.team_name,
             sod.receiver_name,
-            u.real_name as operator_name
+            u.real_name as operator_name,
+            w.warehouse_name
         FROM stock_out_details sod
         JOIN stock_out_orders so ON sod.order_id = so.id
         LEFT JOIN users u ON so.operator_id = u.id
+        LEFT JOIN warehouses w ON so.warehouse_id = w.id
         WHERE sod.material_id = ?
         ORDER BY so.out_time DESC
     """, (material_id,))
@@ -291,17 +329,80 @@ def get_stock_out_by_material(material_id):
 @stock_bp.route('/inventory', methods=['GET'])
 def get_inventory():
     """获取库存"""
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT i.*, m.material_name, m.specification, m.material_code,
-               u.unit_name, w.warehouse_name
-        FROM inventory i
-        LEFT JOIN materials m ON i.material_id = m.id
-        LEFT JOIN units u ON m.unit_id = u.id
-        LEFT JOIN warehouses w ON i.warehouse_id = w.id
-        ORDER BY m.material_code
-    """)
+
+    # 检查用户角色
+    cursor.execute("SELECT r.role_name FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.id = ?", (user['id'],))
+    role_row = cursor.fetchone()
+    role_name = dict(role_row)['role_name'] if role_row else None
+
+    if role_name == '系统管理员':
+        # 管理员可以看到所有，项目取最近一次入库的项目
+        cursor.execute("""
+            SELECT i.*, m.material_name, m.specification, m.material_code,
+                   COALESCE(
+                       NULLIF(m.detail_spec, ''),
+                       (SELECT pii.detail_spec
+                        FROM purchase_inquiry_items pii
+                        WHERE pii.material_id = i.material_id
+                          AND pii.detail_spec IS NOT NULL AND pii.detail_spec != ''
+                        ORDER BY pii.id DESC LIMIT 1)
+                   ) AS detail_spec,
+                   u.unit_name, w.warehouse_name,
+                   (SELECT p.project_name
+                    FROM stock_in_details sid
+                    JOIN stock_in_orders sio ON sid.order_id = sio.id
+                    JOIN projects p ON sio.project_id = p.id
+                    WHERE sid.material_id = i.material_id
+                    ORDER BY sio.in_time DESC LIMIT 1) as project_name
+              FROM inventory i
+              LEFT JOIN materials m ON i.material_id = m.id
+              LEFT JOIN units u ON m.unit_id = u.id
+              LEFT JOIN warehouses w ON i.warehouse_id = w.id
+              WHERE i.quantity != 0
+              ORDER BY m.material_code
+        """)
+    else:
+        # 材料员只能看到自己绑定项目的库存
+        cursor.execute("""
+            SELECT i.*, m.material_name, m.specification, m.material_code,
+                   COALESCE(
+                       NULLIF(m.detail_spec, ''),
+                       (SELECT pii.detail_spec
+                        FROM purchase_inquiry_items pii
+                        WHERE pii.material_id = i.material_id
+                          AND pii.detail_spec IS NOT NULL AND pii.detail_spec != ''
+                        ORDER BY pii.id DESC LIMIT 1)
+                   ) AS detail_spec,
+                   u.unit_name, w.warehouse_name,
+                   (SELECT p.project_name
+                    FROM stock_in_details sid
+                    JOIN stock_in_orders sio ON sid.order_id = sio.id
+                    JOIN projects p ON sio.project_id = p.id
+                    WHERE sid.material_id = i.material_id
+                    ORDER BY sio.in_time DESC LIMIT 1) as project_name
+            FROM inventory i
+              LEFT JOIN materials m ON i.material_id = m.id
+              LEFT JOIN units u ON m.unit_id = u.id
+              LEFT JOIN warehouses w ON i.warehouse_id = w.id
+              WHERE i.quantity != 0
+                AND (
+                  m.project_id IN (SELECT project_id FROM user_projects WHERE user_id = ?)
+                  OR EXISTS (
+                     SELECT 1 FROM stock_in_details sid
+                     JOIN stock_in_orders sio ON sid.order_id = sio.id
+                     WHERE sid.material_id = i.material_id
+                       AND sio.project_id IN (SELECT project_id FROM user_projects WHERE user_id = ?)
+                  )
+                )
+              ORDER BY m.material_code
+        """, (user['id'], user['id']))
+
     inventory = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return jsonify({'success': True, 'data': inventory})
@@ -339,13 +440,16 @@ def delete_stock_out(stock_out_id):
 
 @stock_bp.route('/inventory/<int:material_id>', methods=['DELETE'])
 def delete_inventory(material_id):
-    """删除库存记录"""
+    """删除库存记录（需指定仓库）"""
     user = session.get('user')
     if not user or user.get('role_name') != '系统管理员':
         return jsonify({'success': False, 'message': '仅管理员可删除'})
+    warehouse_id = request.args.get('warehouse_id', type=int)
+    if not warehouse_id:
+        return jsonify({'success': False, 'message': '缺少仓库ID'})
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('DELETE FROM inventory WHERE material_id = ?', (material_id,))
+    cursor.execute('DELETE FROM inventory WHERE material_id = ? AND warehouse_id = ?', (material_id, warehouse_id))
     conn.commit()
     rows = cursor.rowcount
     conn.close()

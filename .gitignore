@@ -9,9 +9,14 @@ venv/
 
 # Flask
 *.db
+*.db.bak*
+backups/
 instance/
 .env
+.env.*
+!.env.example
 *.log
+.server-*.log
 
 # IDE
 .vscode/
@@ -34,3 +39,13 @@ Thumbs.db
 
 # Database files
 *.db
+*.sqlite
+*.sqlite3
+.gstack/
+
+# Local deployment/runtime artifacts
+deploy/local.env
+deploy/*.local
+deploy/server.env.ps1
+tools/
+*.bak-*
