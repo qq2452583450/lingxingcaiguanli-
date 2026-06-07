@@ -349,6 +349,13 @@ function safeNum(val, decimals = 2, prefix = '') {
     return prefix + num.toFixed(decimals);
 }
 
+function roundMoney(val, decimals = 2) {
+    const num = parseFloat(val);
+    if (!Number.isFinite(num)) return 0;
+    const factor = Math.pow(10, decimals);
+    return Math.round((num + Number.EPSILON) * factor) / factor;
+}
+
 // 辅助函数：安全格式化税率
 function safeRate(val) {
     const num = parseFloat(val);
@@ -3389,9 +3396,9 @@ function updateQuoteFieldLive(itemIndex, quoteIndex, value) {
     if (!item || !item.quotes[quoteIndex]) return;
     const quote = item.quotes[quoteIndex];
     const numValue = parseFloat(value) || 0;
-    quote.tax_price = numValue;
-    quote.tax_exempt_price = numValue > 0 ? (numValue / (1 + quote.tax_rate)) : 0;
-    quote.total_amount = numValue * item.quantity;
+    quote.tax_price = roundMoney(numValue);
+    quote.tax_exempt_price = numValue > 0 ? roundMoney(numValue / (1 + quote.tax_rate)) : 0;
+    quote.total_amount = roundMoney(numValue * item.quantity);
     // 局部更新 DOM，不重建
     const row = document.querySelector(`.quote-row[data-item="${itemIndex}"][data-quote="${quoteIndex}"]`);
     if (row) {
@@ -3458,14 +3465,14 @@ function updateQuoteField(itemIndex, quoteIndex, field, value) {
 
     // 自动计算不含税单价和总金额
     if (field === 'tax_price') {
-        quote.tax_exempt_price = numValue > 0 ? (numValue / (1 + quote.tax_rate)) : 0;
-        quote.total_amount = numValue * item.quantity;
+        quote.tax_price = roundMoney(numValue);
+        quote.tax_exempt_price = numValue > 0 ? roundMoney(numValue / (1 + quote.tax_rate)) : 0;
+        quote.total_amount = roundMoney(numValue * item.quantity);
     } else if (field === 'tax_rate') {
-        quote.tax_exempt_price = quote.tax_price > 0 ? (quote.tax_price / (1 + numValue)) : 0;
-        quote.total_amount = quote.tax_price * item.quantity;
+        quote.tax_exempt_price = quote.tax_price > 0 ? roundMoney(quote.tax_price / (1 + numValue)) : 0;
+        quote.total_amount = roundMoney(quote.tax_price * item.quantity);
     } else if (field === 'tax_exempt_price') {
-        quote.tax_price = numValue > 0 ? (numValue * (1 + quote.tax_rate)) : 0;
-        quote.total_amount = quote.tax_price * item.quantity;
+        quote.tax_exempt_price = roundMoney(numValue);
     }
 
     // 局部更新当前报价行 DOM（税率/不含税价变更时需要同步显示）
@@ -3477,8 +3484,6 @@ function updateQuoteField(itemIndex, quoteIndex, field, value) {
             const totalInput = row.querySelector('.quote-total-amount');
             if (totalInput) totalInput.value = '¥' + (quote.total_amount || 0).toFixed(2);
             // 同步含税单价输入框
-            const taxPriceInput = row.querySelector('input[type="number"][step="0.01"]:not(.quote-tax-exempt)');
-            if (taxPriceInput && field === 'tax_exempt_price') taxPriceInput.value = quote.tax_price || '';
         }
     }
 
@@ -4084,10 +4089,9 @@ function renderInquiryItems() {
                             </div>
                             <div class="input-group">
                                 <label>不含税单价</label>
-                                <input type="number" step="0.01" value="${quote.tax_exempt_price ? quote.tax_exempt_price.toFixed(2) : ''}"
-                                       class="quote-tax-exempt"
-                                       onchange="updateQuoteField(${itemIndex}, ${quoteIndex}, 'tax_exempt_price', this.value)"
-                                       placeholder="0.00" readonly>
+                                 <input type="number" step="0.01" value="${quote.tax_exempt_price ? quote.tax_exempt_price.toFixed(2) : ''}"
+                                        class="quote-tax-exempt"
+                                        placeholder="0.00" readonly>
                             </div>
                             <div class="input-group">
                                 <label>报价金额</label>
