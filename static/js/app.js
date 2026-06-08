@@ -2218,6 +2218,7 @@ function renderBaseInventoryTable(records) {
         <tr>
             <td style="text-align:center;"><input type="checkbox" ${selectedBaseInventoryIds.has(item.id) ? 'checked' : ''} onchange="toggleBaseInventorySelect(${item.id})"></td>
             <td>${escapeHtml(item.material_code || '-')}</td>
+            <td>${escapeHtml(item.region || '成都')}</td>
             <td>${escapeHtml(item.material_name || '-')}</td>
             <td>${escapeHtml(item.specification || '-')}</td>
             <td>${escapeHtml(item.detail_spec || '-')}</td>
@@ -2229,7 +2230,7 @@ function renderBaseInventoryTable(records) {
             <td>${escapeHtml(item.remark || '-')}</td>
             <td><button class="btn btn-primary" style="padding:4px 10px;font-size:12px;" onclick="openBaseTransferModal(${item.id})">调拨到项目</button> <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="editBaseInventory(${item.id})">编辑</button> <button class="btn btn-danger" style="padding:4px 10px;font-size:12px;" onclick="deleteBaseInventory(${item.id})">删除</button></td>
         </tr>
-    `).join('') || '<tr><td colspan="12" class="loading">暂无基地库存，请点击"基地材料新增"补录历史材料</td></tr>';
+    `).join('') || '<tr><td colspan="13" class="loading">暂无基地库存，请点击"基地材料新增"补录历史材料</td></tr>';
 }
 
 function renderBaseTransferRecords(records) {
@@ -2504,6 +2505,7 @@ function editBaseInventory(inventoryId) {
     document.getElementById('baseStockInSpecification').value = item.specification || '';
     document.getElementById('baseStockInDetailSpec').value = item.detail_spec || '';
     document.getElementById('baseStockInUnitName').value = item.unit_name || '';
+    document.getElementById('baseStockInRegion').value = item.region || '成都';
     document.getElementById('baseStockInQuantity').value = item.quantity || 0;
     document.getElementById('baseStockInPrice').value = Number(item.unit_price || 0);
     document.getElementById('baseStockInRemark').value = item.remark || '';
@@ -2554,6 +2556,7 @@ async function openBatchTransferModal() {
     document.getElementById('batchTransferItemsBody').innerHTML = selectedItems.map((item, idx) => `
         <tr data-batch-item-id="${item.id}">
             <td style="padding:6px;">${escapeHtml(item.material_name || '-')}</td>
+            <td style="padding:6px;">${escapeHtml(item.region || '成都')}</td>
             <td style="padding:6px;">${escapeHtml(item.specification || '-')}</td>
             <td style="padding:6px;text-align:right;">${item.quantity || 0}</td>
             <td style="padding:6px;text-align:right;"><input type="number" class="batch-item-qty" min="0.01" step="0.01" max="${item.quantity || 0}" value="${item.quantity || 0}" style="width:80px;text-align:right;"></td>
@@ -2649,6 +2652,7 @@ async function openBaseStockInModal(materialId = null, quantity = 1, unitPrice =
     Object.values(fields).forEach(field => { field.readOnly = Boolean(materialId); });
     document.getElementById('baseStockInQuantity').value = Number(quantity) > 0 ? Number(quantity) : 1;
     document.getElementById('baseStockInPrice').value = Number(unitPrice || 0);
+    document.getElementById('baseStockInRegion').value = '成都';
     document.getElementById('baseStockInRemark').value = '';
     openModal('modal-base-stock-in');
 }
@@ -2670,6 +2674,7 @@ async function submitBaseStockIn(event) {
             specification: document.getElementById('baseStockInSpecification').value.trim(),
             detail_spec: document.getElementById('baseStockInDetailSpec').value.trim(),
             unit_name: document.getElementById('baseStockInUnitName').value.trim(),
+            region: document.getElementById('baseStockInRegion').value,
             quantity,
             unit_price: unitPrice,
             remark: document.getElementById('baseStockInRemark').value.trim(),
