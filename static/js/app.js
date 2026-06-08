@@ -1226,10 +1226,14 @@ async function loadInquiries(refreshDrafts = true) {
 function renderInquiryTable(inquiries) {
     const tbody = document.getElementById('inquiryTable');
     if (!inquiries || inquiries.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" style="color:var(--txt3);padding:24px;">没有找到匹配的询价单</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" style="color:var(--txt3);padding:24px;">没有找到匹配的询价单</td></tr>';
         return;
     }
-    tbody.innerHTML = inquiries.map(i => `
+    tbody.innerHTML = inquiries.map(i => {
+        const qs = i.quote_status || 'draft';
+        const qsText = { draft: '未发布', collecting: '报价中', locked: '已锁定' }[qs] || qs;
+        const qsClass = { draft: 'status-draft', collecting: 'status-pending', locked: 'status-agreed' }[qs] || '';
+        return `
         <tr>
             <td>${i.inquiry_no}</td>
             <td>${i.inquiry_date || '-'}</td>
@@ -1237,6 +1241,7 @@ function renderInquiryTable(inquiries) {
             <td>¥${(i.total_amount || 0).toFixed(2)}</td>
             <td>${i.is_below_library_price == 1 ? '是' : '否'}</td>
             <td><span class="status ${getStatusClass(i.approval_status)}">${i.approval_status}</span></td>
+            <td><span class="status ${qsClass}">${qsText}</span></td>
             <td style="white-space:nowrap;">
                 <button class="btn btn-secondary" style="padding:4px 8px;font-size:12px;" onclick="viewInquiry(${i.id})">查看</button>
                 ${i.approval_status === '已同意' ? `<button class="btn btn-primary" style="padding:4px 8px;font-size:12px;" onclick="printInquiryApproval(${i.id})">打印签字单</button>` : ''}
@@ -1251,7 +1256,8 @@ function renderInquiryTable(inquiries) {
                     `<button class="btn btn-danger" style="padding:4px 8px;font-size:12px;" onclick="deleteInquiry(${i.id})">删除</button>` : ''}
             </td>
         </tr>
-    `).join('');
+    `;
+    }).join('');
 }
 
 function exportSupplierOrders(id) {
@@ -1423,6 +1429,9 @@ async function viewInquiry(id) {
                 });
             }
             const displayTotal = calcTotal > 0 ? calcTotal : (i.total_amount || 0);
+            const qs = i.quote_status || 'draft';
+            const qsText = { draft: '未发布', collecting: '报价中', locked: '已锁定' }[qs] || qs;
+            const qsClass = { draft: 'status-draft', collecting: 'status-pending', locked: 'status-agreed' }[qs] || '';
             document.getElementById('detailContent').innerHTML = `
                 <div class="card">
                     <p><strong>单号:</strong> ${i.inquiry_no}</p>
@@ -1430,8 +1439,15 @@ async function viewInquiry(id) {
                     <p><strong>申请人:</strong> ${i.applicant_name || '-'}</p>
                     <p><strong>总金额:</strong> ¥${displayTotal.toFixed(2)}</p>
                     <p><strong>状态:</strong> <span class="status ${getStatusClass(i.approval_status)}">${i.approval_status}</span></p>
+                    <p><strong>报价状态:</strong> <span class="status ${qsClass}">${qsText}</span>${i.quote_deadline ? ` (截止: ${i.quote_deadline})` : ''}</p>
                     <p><strong>低于库内价:</strong> ${i.is_below_library_price == 1 ? '是' : '否'}</p>
                     <p><strong>备注:</strong> ${i.remark || '-'}</p>
+                </div>
+                <div style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap;">
+                    ${qs === 'draft' ? `<button class="btn btn-primary" onclick="publishQuotes(${i.id})">发布给供应商报价</button>` : ''}
+                    ${qs === 'collecting' ? `<button class="btn btn-warning" onclick="lockQuotes(${i.id})">锁定报价</button>` : ''}
+                    ${qs === 'locked' ? '<span style="color:var(--scs);font-size:13px;">报价已锁定，供应商无法修改</span>' : ''}
+                    <a href="/supplier-portal" target="_blank" class="btn btn-secondary" style="text-decoration:none;">供应商报价入口</a>
                 </div>
                 <h4 style="margin:15px 0;">询价明细</h4>
                 <div class="table-container">
@@ -2699,31 +2715,59 @@ function renderSupplierTable() {
     const rateMap = {0.01:'1%', 0.03:'3%', 0.06:'6%', 0.09:'9%', 0.13:'13%'};
     tbody.innerHTML = suppliers.map(s => {
         const rate = s.tax_rate !== undefined && s.tax_rate !== null ? (rateMap[s.tax_rate] || (s.tax_rate * 100).toFixed(0) + '%') : '-';
+        const acc = (s.accounts && s.accounts[0]) || null;
+        let accStatus = '无账号';
+        let accClass = '';
+        if (acc) {
+            const isActive = acc.is_active && acc.status === 'active';
+            accStatus = isActive ? '已启用' : (acc.status === 'pending' ? '待审核' : '已禁用');
+            accClass = isActive ? 'status-agreed' : (acc.status === 'pending' ? 'status-pending' : 'status-rejected');
+        }
         return `
         <tr>
             <td>${escapeHtml(s.supplier_name)}</td>
+            <td>${escapeHtml(s.business_scope || '-')}</td>
             <td>${escapeHtml(s.contact || '-')}</td>
             <td>${escapeHtml(s.phone || '-')}</td>
             <td>${rate}</td>
-            <td>
-                <button class="btn btn-warning" style="padding:4px 12px;font-size:12px;" onclick="openEditSupplier(${s.id})">编辑</button>
-            </td>
-            <td class="admin-only">
-                <button class="btn btn-danger" style="padding:4px 12px;font-size:12px;" onclick="deleteSupplier(${s.id})">删除</button>
-            </td>
+            <td><span class="status ${accClass}">${accStatus}</span></td>
+            <td><button class="btn btn-sm btn-warning" onclick="openEditSupplier(${s.id})">编辑</button></td>
+            <td class="admin-only"><button class="btn btn-sm btn-danger" onclick="deleteSupplier(${s.id})">删除</button></td>
         </tr>
     `}).join('');
 }
 
 function openEditSupplier(id) {
-    const s = suppliers.find(x => x.id === id);
+    const s = (typeof suppliers !== 'undefined' ? suppliers : []).find(x => x.id === id);
     if (!s) return;
     document.getElementById('supplierId').value = s.id;
     document.getElementById('supplierName').value = s.supplier_name || '';
+    document.getElementById('supplierBusinessScope').value = s.business_scope || '';
     document.getElementById('supplierContact').value = s.contact || '';
     document.getElementById('supplierPhone').value = s.phone || '';
     document.getElementById('supplierTaxRate').value = s.tax_rate !== null && s.tax_rate !== undefined ? String(s.tax_rate) : '';
     document.getElementById('supplierRemark').value = s.remark || '';
+    document.getElementById('supplierAccountUsername').value = '';
+    document.getElementById('supplierAccountPassword').value = '';
+
+    const accountRow = document.getElementById('supplierAccountStatusRow');
+    const accounts = s.accounts || [];
+    if (accounts.length > 0) {
+        accountRow.classList.remove('hidden');
+        const acc = accounts[0];
+        const statusText = document.getElementById('supplierAccountStatusText');
+        const toggleBtn = document.getElementById('supplierAccountToggle');
+        const isActive = acc.is_active && acc.status === 'active';
+        statusText.textContent = isActive ? '已启用' : (acc.status === 'pending' ? '待审核' : '已禁用');
+        statusText.className = 'status-badge ' + (isActive ? 'status-agreed' : (acc.status === 'pending' ? 'status-pending' : 'status-rejected'));
+        toggleBtn.textContent = isActive ? '禁用' : '启用';
+        document.getElementById('supplierAccountUsername').placeholder = acc.username || '供应商登录用';
+        document.getElementById('supplierAccountUsername').disabled = true;
+    } else {
+        accountRow.classList.add('hidden');
+        document.getElementById('supplierAccountUsername').disabled = false;
+    }
+
     document.getElementById('supplierModalTitle').textContent = '编辑供应商';
     openModal('modal-supplier');
 }
@@ -2731,10 +2775,15 @@ function openEditSupplier(id) {
 function resetSupplierModal() {
     document.getElementById('supplierId').value = '';
     document.getElementById('supplierName').value = '';
+    document.getElementById('supplierBusinessScope').value = '';
     document.getElementById('supplierContact').value = '';
     document.getElementById('supplierPhone').value = '';
     document.getElementById('supplierTaxRate').value = '';
     document.getElementById('supplierRemark').value = '';
+    document.getElementById('supplierAccountUsername').value = '';
+    document.getElementById('supplierAccountPassword').value = '';
+    document.getElementById('supplierAccountUsername').disabled = false;
+    document.getElementById('supplierAccountStatusRow').classList.add('hidden');
     document.getElementById('supplierModalTitle').textContent = '新建供应商';
 }
 
@@ -2760,11 +2809,17 @@ document.getElementById('supplierForm').addEventListener('submit', async (e) => 
     const id = document.getElementById('supplierId').value;
     const body = {
         supplier_name: document.getElementById('supplierName').value,
+        business_scope: document.getElementById('supplierBusinessScope').value,
         contact: document.getElementById('supplierContact').value,
         phone: document.getElementById('supplierPhone').value,
         remark: document.getElementById('supplierRemark').value,
         tax_rate: document.getElementById('supplierTaxRate').value ? parseFloat(document.getElementById('supplierTaxRate').value) : null
     };
+    // 新建或编辑时都可填写账号密码
+    const accUsername = document.getElementById('supplierAccountUsername').value.trim();
+    const accPassword = document.getElementById('supplierAccountPassword').value.trim();
+    if (accUsername) body.account_username = accUsername;
+    if (accPassword) body.account_password = accPassword;
 
     try {
         const url = id ? `/api/suppliers/${id}` : '/api/suppliers';
@@ -4366,7 +4421,7 @@ async function submitInquiryForm() {
     // 构建请求数据，确保类型正确
     const items = rawItems.map(item => {
         const quotes = (item.quotes || [])
-            .filter(q => q.supplier_id && parseFloat(q.tax_price) > 0)
+            .filter(q => q.supplier_id)  // 只要有供应商即可，价格可以为0（留给供应商填）
             .map(q => ({
                 supplier_id: parseInt(q.supplier_id, 10),
                 tax_price: parseFloat(q.tax_price) || 0,
@@ -4392,10 +4447,10 @@ async function submitInquiryForm() {
         return;
     }
 
-    // 检查是否有至少一条有效报价
-    const hasAnyQuote = items.some(item => item.quotes.length > 0);
-    if (!hasAnyQuote) {
-        showToast('请至少为一种材料填写供应商报价', 'warning');
+    // 检查是否有至少一个供应商选择
+    const hasAnySupplier = items.some(item => item.quotes.length > 0);
+    if (!hasAnySupplier) {
+        showToast('请至少为一种材料选择供应商', 'warning');
         return;
     }
 
@@ -5309,5 +5364,127 @@ async function deleteOwnerSupplied(type, id) {
         await loadOwnerSupplied();
     } catch (e) {
         showToast('删除失败', 'error');
+    }
+}
+
+// ==================== 供应商报价邀请 ====================
+
+async function publishQuotes(inquiryId) {
+    if (!confirm('确认发布报价邀请？供应商将可以登录并提交报价。')) return;
+    try {
+        const res = await api(`/api/purchase-inquiries/${inquiryId}/publish-quotes`, { method: 'POST' });
+        const data = await res.json();
+        if (!data.success) {
+            showToast(data.message || '发布失败', 'error');
+            return;
+        }
+        showToast(data.message || '发布成功', 'success');
+        viewInquiry(inquiryId);
+        loadInquiries(false);
+    } catch (e) {
+        showToast('发布失败', 'error');
+    }
+}
+
+async function lockQuotes(inquiryId) {
+    if (!confirm('确认锁定报价？锁定后供应商将无法修改报价。')) return;
+    try {
+        const res = await api(`/api/purchase-inquiries/${inquiryId}/lock-quotes`, { method: 'POST' });
+        const data = await res.json();
+        if (!data.success) {
+            showToast(data.message || '锁定失败', 'error');
+            return;
+        }
+        showToast(data.message || '报价已锁定', 'success');
+        viewInquiry(inquiryId);
+        loadInquiries(false);
+    } catch (e) {
+        showToast('锁定失败', 'error');
+    }
+}
+
+// ==================== 供应商账号管理 ====================
+
+function openEditSupplier(id) {
+    const s = (suppliers || []).find(x => x.id === id);
+    if (!s) return;
+    document.getElementById('supplierId').value = s.id;
+    document.getElementById('supplierName').value = s.supplier_name || '';
+    document.getElementById('supplierContact').value = s.contact || '';
+    document.getElementById('supplierPhone').value = s.phone || '';
+    document.getElementById('supplierTaxRate').value = s.tax_rate || '';
+    document.getElementById('supplierRemark').value = s.remark || '';
+    document.getElementById('supplierAccountUsername').value = '';
+    document.getElementById('supplierAccountPassword').value = '';
+
+    const accountRow = document.getElementById('supplierAccountStatusRow');
+    const accounts = s.accounts || [];
+    if (accounts.length > 0) {
+        accountRow.classList.remove('hidden');
+        const acc = accounts[0];
+        const statusText = document.getElementById('supplierAccountStatusText');
+        const toggleBtn = document.getElementById('supplierAccountToggle');
+        const isActive = acc.is_active && acc.status === 'active';
+        statusText.textContent = isActive ? '已启用' : (acc.status === 'pending' ? '待审核' : '已禁用');
+        statusText.className = 'status-badge ' + (isActive ? 'status-agreed' : (acc.status === 'pending' ? 'status-pending' : 'status-rejected'));
+        toggleBtn.textContent = isActive ? '禁用' : '启用';
+        document.getElementById('supplierAccountUsername').placeholder = acc.username || '供应商登录用';
+        document.getElementById('supplierAccountUsername').disabled = true;
+    } else {
+        accountRow.classList.add('hidden');
+        document.getElementById('supplierAccountUsername').disabled = false;
+    }
+
+    document.getElementById('supplierModalTitle').textContent = '编辑供应商';
+    openModal('modal-supplier');
+}
+
+async function toggleSupplierAccount() {
+    const supplierId = document.getElementById('supplierId').value;
+    if (!supplierId) return;
+    const s = (suppliers || []).find(x => x.id == supplierId);
+    const acc = (s && s.accounts && s.accounts[0]) || {};
+    const isActive = acc.is_active && acc.status === 'active';
+    const newStatus = isActive ? 'disabled' : 'active';
+    const newActive = isActive ? 0 : 1;
+    try {
+        const res = await api(`/api/suppliers/${supplierId}/account`, {
+            method: 'PUT',
+            body: JSON.stringify({ status: newStatus, is_active: newActive })
+        });
+        const data = await res.json();
+        if (!data.success) {
+            showToast(data.message || '操作失败', 'error');
+            return;
+        }
+        showToast('账号状态已更新', 'success');
+        await loadSuppliers();
+        openEditSupplier(parseInt(supplierId));
+    } catch (e) {
+        showToast('操作失败', 'error');
+    }
+}
+
+async function resetSupplierPassword() {
+    const supplierId = document.getElementById('supplierId').value;
+    if (!supplierId) return;
+    const newPwd = prompt('请输入新密码（至少6位）:');
+    if (!newPwd || newPwd.length < 6) {
+        if (newPwd !== null) showToast('密码至少6位', 'error');
+        return;
+    }
+    try {
+        const res = await api(`/api/suppliers/${supplierId}/account/reset-password`, {
+            method: 'POST',
+            body: JSON.stringify({ password: newPwd })
+        });
+        const data = await res.json();
+        if (!data.success) {
+            showToast(data.message || '重置失败', 'error');
+            return;
+        }
+        showToast('密码已重置', 'success');
+    } catch (e) {
+        showToast('重置失败', 'error');
     }
 }

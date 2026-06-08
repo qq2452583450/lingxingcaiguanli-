@@ -47,6 +47,18 @@ class Supplier:
 
 
 @dataclass
+class SupplierAccount:
+    id: Optional[int] = None
+    supplier_id: Optional[int] = None
+    username: str = ""
+    password: str = ""
+    status: str = "pending"  # pending / active / disabled
+    is_active: int = 0
+    create_time: Optional[str] = None
+    last_login_time: Optional[str] = None
+
+
+@dataclass
 class Unit:
     id: Optional[int] = None
     unit_name: str = ""
@@ -136,6 +148,8 @@ class PurchaseInquiry:
     approver_id: Optional[int] = None
     approve_time: Optional[str] = None
     library_price_updated: int = 0  # 库内价是否已更新
+    quote_status: str = "draft"  # draft / collecting / locked
+    quote_deadline: Optional[str] = None
     create_time: Optional[str] = None
     remark: str = ""
 
@@ -183,6 +197,10 @@ class PurchaseInquiryQuote:
     total_amount: float = 0.0  # 报价总金额 = tax_price * quantity
     is_lowest: int = 0  # 是否为最低价（1=是，0=否）
     is_selected: int = 0  # 是否被选定为推荐供应商
+    quote_status: str = "pending"  # pending / saved / submitted / locked
+    submitted_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    supplier_remark: str = ""
     create_time: Optional[str] = None
     # 关联数据
     supplier_name: str = ""

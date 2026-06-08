@@ -326,7 +326,8 @@
                             <col style="width:100px">
                             <col style="width:80px">
                             <col style="width:100px">
-                            <col style="width:250px">
+                            <col style="width:90px">
+                            <col style="width:280px">
                         </colgroup>
                         <thead>
                             <tr>
@@ -336,6 +337,7 @@
                                 <th>总金额</th>
                                 <th>低于库内价</th>
                                 <th>审批状态</th>
+                                <th>报价状态</th>
                                 <th>操作</th>
                             </tr>
                         </thead>
@@ -522,7 +524,7 @@
                 <div class="page-header">
                     <h1>供应商管理</h1>
                     <div>
-                        <button class="btn btn-primary" onclick="resetSupplierModal();openModal('modal-supplier')">新建供应商</button>
+                        <!-- 新供应商请通过供应商门户注册，管理员审核后启用 -->
                     </div>
                 </div>
                 <div class="toolbar">
@@ -530,22 +532,16 @@
                 </div>
                 <div class="table-container">
                     <table>
-                        <colgroup>
-                            <col style="width:200px">
-                            <col style="width:100px">
-                            <col style="width:120px">
-                            <col style="width:200px">
-                            <col style="width:80px">
-                            <col style="width:80px">
-                        </colgroup>
                         <thead>
                             <tr>
                                 <th>名称</th>
+                                <th>经营范围</th>
                                 <th>联系人</th>
                                 <th>电话</th>
                                 <th>专票税率</th>
+                                <th>账号状态</th>
                                 <th>操作</th>
-                                <th class="admin-only">操作</th>
+                                <th class="admin-only">删除</th>
                             </tr>
                         </thead>
                         <tbody id="supplierTable"></tbody>
@@ -1111,6 +1107,10 @@
                     <label>供应商名称 *</label>
                     <input type="text" id="supplierName" required>
                 </div>
+                <div class="form-group">
+                    <label>经营范围</label>
+                    <input type="text" id="supplierBusinessScope" placeholder="如：建材、五金、水电材料等">
+                </div>
                 <div class="form-row">
                     <div class="form-group">
                         <label>联系人</label>
@@ -1135,6 +1135,27 @@
                 <div class="form-group">
                     <label>备注</label>
                     <input type="text" id="supplierRemark">
+                </div>
+                <div class="admin-only">
+                    <hr style="margin:16px 0;border:none;border-top:1px solid #e2e8f0;">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>登录账号</label>
+                            <input type="text" id="supplierAccountUsername" placeholder="供应商登录用">
+                        </div>
+                        <div class="form-group">
+                            <label>初始密码</label>
+                            <input type="password" id="supplierAccountPassword" placeholder="至少6位">
+                        </div>
+                    </div>
+                    <div id="supplierAccountStatusRow" class="form-group hidden">
+                        <label>账号状态</label>
+                        <div style="display:flex;gap:12px;align-items:center;">
+                            <span id="supplierAccountStatusText" class="status-badge">-</span>
+                            <button type="button" class="btn btn-sm" id="supplierAccountToggle" onclick="toggleSupplierAccount()">启用</button>
+                            <button type="button" class="btn btn-sm btn-secondary" id="supplierAccountResetPwd" onclick="resetSupplierPassword()">重置密码</button>
+                        </div>
+                    </div>
                 </div>
                 <div style="text-align:right;margin-top:20px;">
                     <button type="button" class="btn btn-secondary" onclick="closeModal('modal-supplier')">取消</button>

@@ -26,7 +26,7 @@ def csrf_protect():
     if request.method in ('GET', 'HEAD', 'OPTIONS'):
         return
     # 跳过登录（登录时还没有 session token）
-    if request.path == '/api/login':
+    if request.path in ('/api/login', '/api/supplier/login', '/api/supplier/register'):
         return
     token = request.headers.get('X-CSRF-Token', '')
     if not token or token != session.get('csrf_token', ''):
@@ -83,7 +83,8 @@ from blueprints import (
     system_bp,
     dashboard_bp,
     owner_supplied_bp,
-    transfer_bp
+    transfer_bp,
+    supplier_bp
 )
 
 app.register_blueprint(auth_bp)
@@ -96,6 +97,7 @@ app.register_blueprint(system_bp)
 app.register_blueprint(dashboard_bp)
 app.register_blueprint(owner_supplied_bp)
 app.register_blueprint(transfer_bp)
+app.register_blueprint(supplier_bp)
 
 # ==================== 静态文件 ====================
 
@@ -103,6 +105,11 @@ app.register_blueprint(transfer_bp)
 def index():
     """主页"""
     return send_from_directory('.', 'index.html')
+
+@app.route('/supplier-portal')
+def supplier_portal():
+    """供应商报价门户"""
+    return send_from_directory('.', 'supplier-portal.html')
 
 @app.route('/<path:path>')
 def static_files(path):

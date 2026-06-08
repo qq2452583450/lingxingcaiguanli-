@@ -225,7 +225,10 @@ def test_material_clerk_cannot_delete_non_draft_inquiry(client, test_db):
 def test_approval_print_uses_project_management_and_project_manager_labels(client, test_db):
     cursor = test_db.cursor()
     create_inquiry_delete_tables(cursor)
-    cursor.execute("ALTER TABLE purchase_inquiries ADD COLUMN project_id INTEGER")
+    try:
+        cursor.execute("ALTER TABLE purchase_inquiries ADD COLUMN project_id INTEGER")
+    except Exception:
+        pass  # 列已存在
     cursor.execute(
         """
         INSERT INTO users (username, password, real_name, role_id, is_active, create_time)

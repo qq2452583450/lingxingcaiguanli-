@@ -371,14 +371,14 @@ def create_inquiry():
                 ))
                 item_id = cursor.lastrowid
 
-                # 写入该item的所有报价
+                # 写入该item的所有报价（允许价格为0，留给供应商填写）
                 quotes = item.get('quotes', [])
-                valid_quotes = [q for q in quotes if q.get('supplier_id') and q.get('tax_price', 0) > 0]
+                valid_quotes = [q for q in quotes if q.get('supplier_id')]
 
                 if valid_quotes:
-                    # 计算最低价（基于不含税单价）
-                    prices_with_idx = [(float(q.get('tax_exempt_price', 0) or float(q.get('tax_price', 0)) / (1 + float(q.get('tax_rate', 0.13) or 0.13))), i) for i, q in enumerate(valid_quotes)]
-                    lowest_idx = min(prices_with_idx, key=lambda x: x[0])[1] if prices_with_idx else -1
+                    # 计算最低价（基于不含税单价，仅考虑有价格的报价）
+                    priced_quotes = [(float(q.get('tax_exempt_price', 0) or float(q.get('tax_price', 0)) / (1 + float(q.get('tax_rate', 0.13) or 0.13))), i) for i, q in enumerate(valid_quotes) if float(q.get('tax_price', 0) or 0) > 0]
+                    lowest_idx = min(priced_quotes, key=lambda x: x[0])[1] if priced_quotes else -1
 
                     for i, quote in enumerate(valid_quotes):
                         tax_price = float(quote.get('tax_price', 0) or 0)
@@ -390,11 +390,14 @@ def create_inquiry():
                         if tax_exempt_price == 0 and tax_price > 0:
                             tax_exempt_price = round(tax_price / (1 + tax_rate), 2)
 
+                        # 有价格的报价为已提交，无价格的为待报价
+                        q_status = 'submitted' if tax_price > 0 else 'pending'
+
                         cursor.execute("""
                             INSERT INTO purchase_inquiry_quotes (
                                 item_id, supplier_id, tax_price, tax_exempt_price,
-                                tax_rate, total_amount, is_lowest, is_selected, create_time
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                tax_rate, total_amount, is_lowest, is_selected, quote_status, create_time
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
                             item_id,
                             quote.get('supplier_id'),
@@ -402,7 +405,7 @@ def create_inquiry():
                             tax_rate, total,
                             1 if i == lowest_idx else 0,
                             1 if selected_quote_id and quote.get('supplier_id') == selected_quote_id else 0,
-                            now
+                            q_status, now
                         ))
 
             # 记录提交审批操作
@@ -746,12 +749,12 @@ def update_inquiry(inquiry_id):
             item_id = cursor.lastrowid
 
             quotes = item.get('quotes', [])
-            valid_quotes = [q for q in quotes if q.get('supplier_id') and q.get('tax_price', 0) > 0]
+            valid_quotes = [q for q in quotes if q.get('supplier_id')]
 
             if valid_quotes:
-                # 计算最低价（基于不含税单价）
-                prices_with_idx = [(float(q.get('tax_exempt_price', 0) or float(q.get('tax_price', 0)) / (1 + float(q.get('tax_rate', 0.13) or 0.13))), i) for i, q in enumerate(valid_quotes)]
-                lowest_idx = min(prices_with_idx, key=lambda x: x[0])[1] if prices_with_idx else -1
+                # 计算最低价（仅考虑有价格的报价）
+                priced_quotes = [(float(q.get('tax_exempt_price', 0) or float(q.get('tax_price', 0)) / (1 + float(q.get('tax_rate', 0.13) or 0.13))), i) for i, q in enumerate(valid_quotes) if float(q.get('tax_price', 0) or 0) > 0]
+                lowest_idx = min(priced_quotes, key=lambda x: x[0])[1] if priced_quotes else -1
 
                 for i, quote in enumerate(valid_quotes):
                     tp = float(quote.get('tax_price', 0) or 0)
@@ -762,17 +765,19 @@ def update_inquiry(inquiry_id):
                     if tep == 0 and tp > 0:
                         tep = round(tp / (1 + tr), 2)
 
+                    q_status = 'submitted' if tp > 0 else 'pending'
+
                     cursor.execute("""
                         INSERT INTO purchase_inquiry_quotes (
                             item_id, supplier_id, tax_price, tax_exempt_price,
-                            tax_rate, total_amount, is_lowest, is_selected, create_time
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            tax_rate, total_amount, is_lowest, is_selected, quote_status, create_time
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         item_id, quote.get('supplier_id'),
                         tp, tep, tr, total,
                         1 if i == lowest_idx else 0,
                         1 if selected_quote_id and quote.get('supplier_id') == selected_quote_id else 0,
-                        now
+                        q_status, now
                     ))
 
         # 更新主表并改为待审批
@@ -834,6 +839,13 @@ def _approve_inquiry_impl(inquiry_id):
     role_name = dict(role_row)['role_name'] if role_row else None
     if role_name not in ('系统管理员', '材料员', '材料审批负责人'):
         return jsonify({'success': False, 'message': '您没有审批权限，仅系统管理员、材料员或材料审批负责人可审批'})
+
+    # 报价收集中时禁止审批，需先锁定报价
+    cursor_check2 = get_db().cursor()
+    cursor_check2.execute("SELECT quote_status FROM purchase_inquiries WHERE id = ?", (inquiry_id,))
+    _qs = cursor_check2.fetchone()
+    if _qs and dict(_qs).get('quote_status') == 'collecting':
+        return jsonify({'success': False, 'message': '报价收集中，请先锁定报价后再审批'})
 
     action = data.get('action')
     remark = data.get('remark', '')
@@ -2332,11 +2344,11 @@ def submit_draft(draft_id):
             item_id = cursor.lastrowid
 
             quotes = item.get('quotes', [])
-            valid_quotes = [q for q in quotes if q.get('supplier_id') and q.get('tax_price', 0) > 0]
+            valid_quotes = [q for q in quotes if q.get('supplier_id')]
 
             if valid_quotes:
-                prices_with_idx = [(float(q.get('tax_exempt_price', 0) or float(q.get('tax_price', 0)) / (1 + float(q.get('tax_rate', 0.13) or 0.13))), i) for i, q in enumerate(valid_quotes)]
-                lowest_idx = min(prices_with_idx, key=lambda x: x[0])[1] if prices_with_idx else -1
+                priced_quotes = [(float(q.get('tax_exempt_price', 0) or float(q.get('tax_price', 0)) / (1 + float(q.get('tax_rate', 0.13) or 0.13))), i) for i, q in enumerate(valid_quotes) if float(q.get('tax_price', 0) or 0) > 0]
+                lowest_idx = min(priced_quotes, key=lambda x: x[0])[1] if priced_quotes else -1
 
                 for i, quote in enumerate(valid_quotes):
                     tp = float(quote.get('tax_price', 0) or 0)
@@ -2347,17 +2359,19 @@ def submit_draft(draft_id):
                     if tep == 0 and tp > 0:
                         tep = round(tp / (1 + tr), 2)
 
+                    q_status = 'submitted' if tp > 0 else 'pending'
+
                     cursor.execute("""
                         INSERT INTO purchase_inquiry_quotes (
                             item_id, supplier_id, tax_price, tax_exempt_price,
-                            tax_rate, total_amount, is_lowest, is_selected, create_time
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            tax_rate, total_amount, is_lowest, is_selected, quote_status, create_time
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         item_id, quote.get('supplier_id'),
                         tp, tep, tr, total,
                         1 if i == lowest_idx else 0,
                         1 if selected_quote_id and str(quote.get('supplier_id')) == str(selected_quote_id) else 0,
-                        now
+                        q_status, now
                     ))
 
         # 记录提交审批
@@ -2377,3 +2391,189 @@ def submit_draft(draft_id):
         conn.rollback()
         conn.close()
         return jsonify({'success': False, 'message': '提交草稿失败: ' + str(e)})
+
+
+# ==================== 供应商报价邀请 ====================
+
+@inquiry_bp.route('/purchase-inquiries/<int:inquiry_id>/publish-quotes', methods=['POST'])
+def publish_quotes(inquiry_id):
+    """发布报价邀请：为询比价单的材料+供应商组合创建待报价记录"""
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    # 检查询价单存在
+    cursor.execute("SELECT id, quote_status FROM purchase_inquiries WHERE id = ?", (inquiry_id,))
+    inquiry = cursor.fetchone()
+    if not inquiry:
+        conn.close()
+        return jsonify({'success': False, 'message': '询价单不存在'})
+
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    # 获取该询价单的所有材料项
+    cursor.execute("SELECT id FROM purchase_inquiry_items WHERE inquiry_id = ?", (inquiry_id,))
+    items = cursor.fetchall()
+    if not items:
+        conn.close()
+        return jsonify({'success': False, 'message': '该询价单没有材料项'})
+
+    created = 0
+    for item_row in items:
+        item_id = item_row['id']
+
+        # 获取该材料项已有的供应商报价行
+        cursor.execute("""
+            SELECT supplier_id FROM purchase_inquiry_quotes WHERE item_id = ?
+        """, (item_id,))
+        existing_suppliers = {row['supplier_id'] for row in cursor.fetchall()}
+
+        # 如果没有供应商信息，跳过（需要前端传入供应商列表）
+        # 这里从已有报价行获取供应商，或从请求数据获取
+        if not existing_suppliers:
+            continue
+
+        # 为已有供应商创建/更新待报价记录
+        for supplier_id in existing_suppliers:
+            cursor.execute("""
+                SELECT id FROM purchase_inquiry_quotes
+                WHERE item_id = ? AND supplier_id = ?
+            """, (item_id, supplier_id))
+            existing = cursor.fetchone()
+            if existing:
+                # 已存在，更新状态为 pending（如果还是初始状态）
+                cursor.execute("""
+                    UPDATE purchase_inquiry_quotes
+                    SET quote_status = CASE WHEN quote_status IN ('locked') THEN quote_status ELSE 'pending' END,
+                        updated_at = ?
+                    WHERE id = ?
+                """, (now, existing['id']))
+            else:
+                # 创建新的待报价记录
+                cursor.execute("""
+                    INSERT INTO purchase_inquiry_quotes (
+                        item_id, supplier_id, tax_price, tax_exempt_price,
+                        tax_rate, total_amount, is_lowest, is_selected,
+                        quote_status, create_time
+                    ) VALUES (?, ?, 0, 0, 0.13, 0, 0, 0, 'pending', ?)
+                """, (item_id, supplier_id, now))
+                created += 1
+
+    # 更新询价单报价状态
+    data = request.get_json(silent=True) or {}
+    deadline = data.get('quote_deadline')
+    cursor.execute("""
+        UPDATE purchase_inquiries
+        SET quote_status = 'collecting', quote_deadline = ?
+        WHERE id = ?
+    """, (deadline, inquiry_id))
+
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'message': f'报价邀请已发布，新增 {created} 条待报价记录'})
+
+
+@inquiry_bp.route('/purchase-inquiries/<int:inquiry_id>/publish-quotes-to', methods=['POST'])
+def publish_quotes_to_suppliers(inquiry_id):
+    """发布报价邀请给指定供应商列表"""
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
+    data = request.get_json(silent=True) or {}
+    supplier_ids = data.get('supplier_ids', [])
+    if not supplier_ids:
+        return jsonify({'success': False, 'message': '请选择至少一个供应商'})
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, quote_status FROM purchase_inquiries WHERE id = ?", (inquiry_id,))
+    inquiry = cursor.fetchone()
+    if not inquiry:
+        conn.close()
+        return jsonify({'success': False, 'message': '询价单不存在'})
+
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    cursor.execute("SELECT id FROM purchase_inquiry_items WHERE inquiry_id = ?", (inquiry_id,))
+    items = cursor.fetchall()
+    if not items:
+        conn.close()
+        return jsonify({'success': False, 'message': '该询价单没有材料项'})
+
+    created = 0
+    for item_row in items:
+        item_id = item_row['id']
+        for supplier_id in supplier_ids:
+            cursor.execute("""
+                SELECT id, quote_status FROM purchase_inquiry_quotes
+                WHERE item_id = ? AND supplier_id = ?
+            """, (item_id, supplier_id))
+            existing = cursor.fetchone()
+            if existing:
+                if existing['quote_status'] == 'locked':
+                    continue
+                cursor.execute("""
+                    UPDATE purchase_inquiry_quotes SET quote_status = 'pending', updated_at = ?
+                    WHERE id = ?
+                """, (now, existing['id']))
+            else:
+                cursor.execute("""
+                    INSERT INTO purchase_inquiry_quotes (
+                        item_id, supplier_id, tax_price, tax_exempt_price,
+                        tax_rate, total_amount, is_lowest, is_selected,
+                        quote_status, create_time
+                    ) VALUES (?, ?, 0, 0, 0.13, 0, 0, 0, 'pending', ?)
+                """, (item_id, supplier_id, now))
+                created += 1
+
+    deadline = data.get('quote_deadline')
+    cursor.execute("""
+        UPDATE purchase_inquiries
+        SET quote_status = 'collecting', quote_deadline = ?
+        WHERE id = ?
+    """, (deadline, inquiry_id))
+
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'message': f'已发布给 {len(supplier_ids)} 个供应商，新增 {created} 条报价记录'})
+
+
+@inquiry_bp.route('/purchase-inquiries/<int:inquiry_id>/lock-quotes', methods=['POST'])
+def lock_quotes(inquiry_id):
+    """锁定报价：供应商不可再修改"""
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, quote_status FROM purchase_inquiries WHERE id = ?", (inquiry_id,))
+    inquiry = cursor.fetchone()
+    if not inquiry:
+        conn.close()
+        return jsonify({'success': False, 'message': '询价单不存在'})
+
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    # 锁定所有报价行
+    cursor.execute("""
+        UPDATE purchase_inquiry_quotes
+        SET quote_status = 'locked', updated_at = ?
+        WHERE item_id IN (SELECT id FROM purchase_inquiry_items WHERE inquiry_id = ?)
+          AND quote_status != 'locked'
+    """, (now, inquiry_id))
+
+    # 更新询价单报价状态
+    cursor.execute("""
+        UPDATE purchase_inquiries SET quote_status = 'locked' WHERE id = ?
+    """, (inquiry_id,))
+
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'message': '报价已锁定'})

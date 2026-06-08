@@ -72,6 +72,33 @@ def init_database():
         )
     """)
 
+    # 供应商经营范围字段
+    try:
+        cursor.execute("ALTER TABLE suppliers ADD COLUMN business_scope TEXT")
+    except Exception:
+        pass
+
+    # 供应商资料是否完善的标记
+    try:
+        cursor.execute("ALTER TABLE supplier_accounts ADD COLUMN profile_completed INTEGER DEFAULT 0")
+    except Exception:
+        pass
+
+    # 供应商账号表（供应商独立登录，不与内部 users 混用）
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS supplier_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            supplier_id INTEGER NOT NULL,
+            username TEXT NOT NULL UNIQUE,
+            password TEXT NOT NULL,
+            status TEXT DEFAULT 'pending',
+            is_active INTEGER DEFAULT 0,
+            create_time TEXT,
+            last_login_time TEXT,
+            FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
+        )
+    """)
+
     # 计量单位表
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS units (
@@ -759,6 +786,31 @@ def init_database():
             FOREIGN KEY (project_id) REFERENCES projects(id)
         )
     """)
+
+    # 供应商报价相关扩展字段
+    for col, ddl in [
+        ('quote_status', "ALTER TABLE purchase_inquiries ADD COLUMN quote_status TEXT DEFAULT 'draft'"),
+        ('quote_deadline', "ALTER TABLE purchase_inquiries ADD COLUMN quote_deadline TEXT"),
+    ]:
+        try:
+            cursor.execute(ddl)
+        except Exception:
+            pass
+
+    for col, ddl in [
+        ('quote_status', "ALTER TABLE purchase_inquiry_quotes ADD COLUMN quote_status TEXT DEFAULT 'pending'"),
+        ('submitted_at', "ALTER TABLE purchase_inquiry_quotes ADD COLUMN submitted_at TEXT"),
+        ('updated_at', "ALTER TABLE purchase_inquiry_quotes ADD COLUMN updated_at TEXT"),
+        ('supplier_remark', "ALTER TABLE purchase_inquiry_quotes ADD COLUMN supplier_remark TEXT"),
+    ]:
+        try:
+            cursor.execute(ddl)
+        except Exception:
+            pass
+
+    # supplier_accounts 索引
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_supplier_accounts_supplier ON supplier_accounts(supplier_id)")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_supplier_accounts_username ON supplier_accounts(username)")
 
     conn.commit()
     return conn

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>供应商报价平台</title>
+    <link rel="stylesheet" href="/static/css/supplier-portal.css?v=20260608">
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+</head>
+<body>
+    <!-- 登录/注册页面 -->
+    <div id="authPage" class="auth-container">
+        <div class="auth-box">
+            <h1>供应商报价平台</h1>
+            <p class="auth-subtitle">零星材管理系统 — 供应商入口</p>
+
+            <!-- 登录表单 -->
+            <div id="loginForm">
+                <input type="text" id="loginUsername" placeholder="登录账号" autocomplete="username" />
+                <input type="password" id="loginPassword" placeholder="密码" autocomplete="current-password" />
+                <button onclick="doLogin()">登 录</button>
+                <div class="auth-links">
+                    <a href="#" onclick="showRegister()">注册新供应商账号</a>
+                </div>
+            </div>
+
+            <!-- 注册表单 -->
+            <div id="registerForm" class="hidden">
+                <input type="text" id="regSupplierName" placeholder="供应商名称 *" />
+                <input type="text" id="regContact" placeholder="联系人" />
+                <input type="text" id="regPhone" placeholder="手机号" />
+                <input type="text" id="regAddress" placeholder="地址" />
+                <hr style="margin:12px 0;border:none;border-top:1px solid #e2e8f0;">
+                <input type="text" id="regUsername" placeholder="登录账号 *" />
+                <input type="password" id="regPassword" placeholder="登录密码（至少6位）*" />
+                <input type="password" id="regPassword2" placeholder="确认密码 *" />
+                <button onclick="doRegister()">注 册</button>
+                <div class="auth-links">
+                    <a href="#" onclick="showLogin()">已有账号？去登录</a>
+                </div>
+            </div>
+
+            <div id="authMessage" class="auth-message hidden"></div>
+        </div>
+    </div>
+
+    <!-- 主页面 -->
+    <div id="mainPage" class="main-container hidden">
+        <!-- 顶部栏 -->
+        <div class="topbar">
+            <div class="topbar-left">
+                <h1>供应商报价平台</h1>
+            </div>
+            <div class="topbar-right">
+                <span id="supplierNameDisplay" class="supplier-name"></span>
+                <button onclick="doLogout()" class="btn-logout">退出</button>
+            </div>
+        </div>
+
+        <!-- 内容区 -->
+        <div class="content">
+            <!-- 资料完善 -->
+            <div id="profileView" class="hidden">
+                <div class="page-header">
+                    <h2>完善供应商资料</h2>
+                </div>
+                <div class="profile-form">
+                    <p class="profile-hint">首次登录请先完善以下信息，完成后即可进入报价系统。</p>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>供应商名称 <span class="required">*</span></label>
+                            <input type="text" id="profileSupplierName" />
+                        </div>
+                        <div class="form-group">
+                            <label>联系人 <span class="required">*</span></label>
+                            <input type="text" id="profileContact" />
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>手机号 <span class="required">*</span></label>
+                            <input type="text" id="profilePhone" />
+                        </div>
+                        <div class="form-group">
+                            <label>地址</label>
+                            <input type="text" id="profileAddress" />
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>经营范围 <span class="required">*</span></label>
+                        <input type="text" id="profileBusinessScope" placeholder="如：建材、五金、水电材料等" />
+                    </div>
+                    <hr style="margin:16px 0;border:none;border-top:1px solid #e2e8f0;">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>登录账号</label>
+                            <input type="text" id="profileUsername" disabled />
+                        </div>
+                        <div class="form-group">
+                            <label>新密码（留空则不修改）</label>
+                            <input type="password" id="profilePassword" placeholder="至少6位" />
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>确认密码</label>
+                        <input type="password" id="profilePassword2" placeholder="再次输入新密码" />
+                    </div>
+                    <div id="profileMessage" class="auth-message hidden"></div>
+                    <div style="margin-top:20px;">
+                        <button onclick="submitProfile()" class="btn-submit" style="width:100%;padding:12px;">保存并进入报价系统</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 报价任务列表 -->
+            <div id="quoteListView">
+                <div class="page-header">
+                    <h2>我的报价任务</h2>
+                </div>
+                <div id="quoteListEmpty" class="empty-state hidden">
+                    <i data-lucide="inbox"></i>
+                    <p>暂无报价任务</p>
+                </div>
+                <div id="quoteList" class="quote-list"></div>
+            </div>
+
+            <!-- 报价详情 -->
+            <div id="quoteDetailView" class="hidden">
+                <div class="page-header">
+                    <button onclick="backToList()" class="btn-back">
+                        <i data-lucide="arrow-left"></i> 返回列表
+                    </button>
+                    <h2 id="detailInquiryNo">报价详情</h2>
+                    <span id="detailQuoteStatus" class="status-badge"></span>
+                </div>
+                <div class="inquiry-info" id="inquiryInfo"></div>
+                <div class="quote-table-wrapper">
+                    <table class="quote-table">
+                        <thead>
+                            <tr>
+                                <th style="width:4%;">序号</th>
+                                <th style="width:10%;">材料名称</th>
+                                <th style="width:8%;">规格型号</th>
+                                <th style="width:8%;">详细规格</th>
+                                <th style="width:5%;">品牌</th>
+                                <th style="width:5%;">国标</th>
+                                <th style="width:5%;">单位</th>
+                                <th style="width:5%;">数量</th>
+                                <th style="width:9%;">含税单价</th>
+                                <th style="width:6%;">税率</th>
+                                <th style="width:8%;">金额</th>
+                                <th style="width:12%;">备注</th>
+                                <th style="width:7%;">状态</th>
+                                <th style="width:8%;">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="quoteTableBody"></tbody>
+                    </table>
+                </div>
+                <div class="quote-actions" id="quoteActions"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toastContainer" class="toast-container"></div>
+
+    <script src="/static/js/supplier-portal.js?v=20260608"></script>
+</body>
+</html>

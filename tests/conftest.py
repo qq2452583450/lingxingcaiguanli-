@@ -58,14 +58,22 @@ def test_db():
             material_name TEXT NOT NULL,
             specification TEXT,
             detail_spec TEXT,
+            is_national_standard INTEGER DEFAULT 0,
+            brand TEXT,
             unit_id INTEGER,
             tax_price REAL DEFAULT 0,
             tax_exempt_price REAL DEFAULT 0,
+            is_cash_price INTEGER DEFAULT 0,
+            cash_price REAL DEFAULT 0,
+            cash_tax_price REAL DEFAULT 0,
             freight REAL DEFAULT 0,
             remark TEXT,
             default_supplier_id INTEGER,
             inventory_min REAL DEFAULT 0,
             inventory_max REAL DEFAULT 0,
+            tax_rate REAL DEFAULT 0.01,
+            project_id INTEGER,
+            weight REAL DEFAULT 0,
             create_time TEXT
         )
     """)
@@ -78,6 +86,7 @@ def test_db():
             contact TEXT,
             phone TEXT,
             address TEXT,
+            business_scope TEXT,
             remark TEXT,
             create_time TEXT
         )
@@ -191,6 +200,7 @@ def test_db():
             inquiry_no TEXT UNIQUE NOT NULL,
             inquiry_date TEXT,
             applicant_id INTEGER,
+            project_id INTEGER,
             total_amount REAL DEFAULT 0,
             is_below_library_price INTEGER DEFAULT 0,
             approval_status TEXT DEFAULT '待审批',
@@ -198,6 +208,8 @@ def test_db():
             approver_id INTEGER,
             approve_time TEXT,
             library_price_updated INTEGER DEFAULT 0,
+            quote_status TEXT DEFAULT 'draft',
+            quote_deadline TEXT,
             create_time TEXT,
             remark TEXT
         )
@@ -425,11 +437,108 @@ def test_db():
         )
     """)
 
+    # 供应商账号表
+    cursor.execute("""
+        CREATE TABLE supplier_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            supplier_id INTEGER NOT NULL,
+            username TEXT NOT NULL UNIQUE,
+            password TEXT NOT NULL,
+            status TEXT DEFAULT 'pending',
+            is_active INTEGER DEFAULT 0,
+            profile_completed INTEGER DEFAULT 0,
+            create_time TEXT,
+            last_login_time TEXT,
+            FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
+        )
+    """)
+
+    # 采购询价材料项表
+    cursor.execute("""
+        CREATE TABLE purchase_inquiry_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inquiry_id INTEGER NOT NULL,
+            material_id INTEGER NOT NULL,
+            quantity REAL DEFAULT 1,
+            library_price REAL DEFAULT 0,
+            selected_quote_id INTEGER,
+            tax_rate REAL DEFAULT 0.01,
+            create_time TEXT,
+            FOREIGN KEY (inquiry_id) REFERENCES purchase_inquiries(id) ON DELETE CASCADE,
+            FOREIGN KEY (material_id) REFERENCES materials(id)
+        )
+    """)
+
+    # 采购询价报价表
+    cursor.execute("""
+        CREATE TABLE purchase_inquiry_quotes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id INTEGER NOT NULL,
+            supplier_id INTEGER NOT NULL,
+            tax_price REAL DEFAULT 0,
+            tax_exempt_price REAL DEFAULT 0,
+            tax_rate REAL DEFAULT 0.13,
+            total_amount REAL DEFAULT 0,
+            is_lowest INTEGER DEFAULT 0,
+            is_selected INTEGER DEFAULT 0,
+            quote_status TEXT DEFAULT 'pending',
+            submitted_at TEXT,
+            updated_at TEXT,
+            supplier_remark TEXT,
+            create_time TEXT,
+            FOREIGN KEY (item_id) REFERENCES purchase_inquiry_items(id) ON DELETE CASCADE,
+            FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
+        )
+    """)
+
+    # 用户项目关联表
+    cursor.execute("""
+        CREATE TABLE user_projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            project_id INTEGER NOT NULL,
+            UNIQUE(user_id, project_id)
+        )
+    """)
+
     conn.commit()
-
-    yield conn
-
     conn.close()
+
+    # 返回一个可当作连接使用的辅助对象
+    # 每次 cursor() 开新连接，close() 后下次 cursor() 自动重开
+    class _TestDB:
+        def __init__(self, db_path):
+            self._path = db_path
+            self._conn = None
+
+        def _ensure_conn(self):
+            if self._conn is None:
+                self._conn = sqlite3.connect(self._path, timeout=10)
+                self._conn.row_factory = sqlite3.Row
+            return self._conn
+
+        def cursor(self):
+            return self._ensure_conn().cursor()
+
+        def execute(self, sql, params=()):
+            cur = self._ensure_conn().cursor()
+            cur.execute(sql, params)
+            self._conn.commit()
+            return cur
+
+        def commit(self):
+            if self._conn:
+                self._conn.commit()
+
+        def close(self):
+            if self._conn:
+                self._conn.close()
+                self._conn = None
+
+    db = _TestDB(path)
+    yield db
+
+    db.close()
     os.unlink(path)
     config.DATABASE_PATH = _orig_path  # 恢复
 
@@ -448,7 +557,8 @@ def app(test_db):
     # 注册真实蓝图（config.DATABASE_PATH 已由 test_db fixture 设为临时文件路径）
     from blueprints import (
         auth_bp, material_bp, inquiry_bp, stock_bp,
-        sales_bp, reconciliation_bp, system_bp, dashboard_bp, transfer_bp
+        sales_bp, reconciliation_bp, system_bp, dashboard_bp, transfer_bp,
+        supplier_bp
     )
     app.register_blueprint(auth_bp)
     app.register_blueprint(material_bp)
@@ -459,6 +569,7 @@ def app(test_db):
     app.register_blueprint(system_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(transfer_bp)
+    app.register_blueprint(supplier_bp)
 
     return app
 

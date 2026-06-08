@@ -119,6 +119,7 @@ body {
 .btn-secondary:hover { background: var(--bdr); }
 .btn-outline { background: transparent; border: 1px solid var(--pri); color: var(--pri); }
 .btn-outline:hover { background: var(--pri); color: #fff; }
+.btn-sm { padding: 4px 12px; font-size: 12px; }
 .btn:focus-visible, .nav-item:focus-visible, input:focus-visible {
     outline: 2px solid var(--pri); outline-offset: 2px;
 }

@@ -46,6 +46,7 @@ def auto_fix_database():
             'contact': 'TEXT',
             'phone': 'TEXT',
             'address': 'TEXT',
+            'business_scope': 'TEXT',
             'remark': 'TEXT',
             'tax_rate': 'REAL',
             'create_time': 'TEXT',
@@ -353,6 +354,31 @@ def auto_fix_database():
             'detail': 'TEXT',
             'create_time': 'TEXT',
         },
+        'supplier_accounts': {
+            'id': 'INTEGER PRIMARY KEY AUTOINCREMENT',
+            'supplier_id': 'INTEGER NOT NULL',
+            'username': 'TEXT NOT NULL UNIQUE',
+            'password': 'TEXT NOT NULL',
+            'status': "TEXT DEFAULT 'pending'",
+            'is_active': 'INTEGER DEFAULT 0',
+            'profile_completed': 'INTEGER DEFAULT 0',
+            'create_time': 'TEXT',
+            'last_login_time': 'TEXT',
+        },
+    }
+
+    # 补充已有表的新列
+    extra_columns = {
+        'purchase_inquiries': {
+            'quote_status': "TEXT DEFAULT 'draft'",
+            'quote_deadline': 'TEXT',
+        },
+        'purchase_inquiry_quotes': {
+            'quote_status': "TEXT DEFAULT 'pending'",
+            'submitted_at': 'TEXT',
+            'updated_at': 'TEXT',
+            'supplier_remark': 'TEXT',
+        },
     }
 
     fixed_count = 0
@@ -372,6 +398,23 @@ def auto_fix_database():
                     except Exception as e:
                         print(f"    ✗ 添加失败: {e}")
 
+        except Exception as e:
+            print(f"检查表 {table_name} 失败: {e}")
+
+    # 补充已有表的新列
+    for table_name, expected_columns in extra_columns.items():
+        try:
+            cursor.execute(f"PRAGMA table_info({table_name})")
+            existing_columns = {row[1] for row in cursor.fetchall()}
+            for col_name, col_def in expected_columns.items():
+                if col_name not in existing_columns:
+                    print(f"  发现缺失列: {table_name}.{col_name}")
+                    try:
+                        cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_def}")
+                        print(f"    ✓ 已添加 {col_name}")
+                        fixed_count += 1
+                    except Exception as e:
+                        print(f"    ✗ 添加失败: {e}")
         except Exception as e:
             print(f"检查表 {table_name} 失败: {e}")
 
