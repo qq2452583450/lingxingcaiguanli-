@@ -203,48 +203,79 @@ def init_database():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS base_inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            material_id INTEGER UNIQUE,
+            material_id INTEGER,
             material_name TEXT,
             specification TEXT,
             detail_spec TEXT,
             unit_name TEXT,
+            region TEXT DEFAULT '成都',
             quantity REAL DEFAULT 0,
             unit_price REAL DEFAULT 0,
             update_time TEXT,
             remark TEXT,
+            UNIQUE(material_id, region),
             FOREIGN KEY (material_id) REFERENCES materials(id)
         )
     """)
     # 兼容已创建的旧版基地库存表：允许基地自有材料不依赖项目材料库。
     cursor.execute("PRAGMA table_info(base_inventory)")
     base_inventory_columns = {row['name']: row for row in cursor.fetchall()}
-    if base_inventory_columns.get('material_id') and base_inventory_columns['material_id']['notnull']:
+    text_columns = {
+        'material_name': 'TEXT',
+        'specification': 'TEXT',
+        'detail_spec': 'TEXT',
+        'unit_name': 'TEXT',
+        'region': "TEXT DEFAULT '成都'",
+        'remark': 'TEXT',
+    }
+    for column_name, column_type in text_columns.items():
+        if column_name not in base_inventory_columns:
+            cursor.execute(f"ALTER TABLE base_inventory ADD COLUMN {column_name} {column_type}")
+    cursor.execute("UPDATE base_inventory SET region = '成都' WHERE region IS NULL OR region = ''")
+
+    cursor.execute("PRAGMA table_info(base_inventory)")
+    base_inventory_columns = {row['name']: row for row in cursor.fetchall()}
+    cursor.execute("PRAGMA index_list(base_inventory)")
+    unique_material_only_index = False
+    for index_row in cursor.fetchall():
+        if not index_row['unique']:
+            continue
+        cursor.execute(f"PRAGMA index_info({index_row['name']})")
+        index_columns = [info['name'] for info in cursor.fetchall()]
+        if index_columns == ['material_id']:
+            unique_material_only_index = True
+            break
+    if base_inventory_columns.get('material_id') and (
+        base_inventory_columns['material_id']['notnull'] or unique_material_only_index
+    ):
         cursor.execute("""
             CREATE TABLE base_inventory_new (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                material_id INTEGER UNIQUE,
+                material_id INTEGER,
                 material_name TEXT,
                 specification TEXT,
                 detail_spec TEXT,
                 unit_name TEXT,
+                region TEXT DEFAULT '成都',
                 quantity REAL DEFAULT 0,
                 unit_price REAL DEFAULT 0,
                 update_time TEXT,
                 remark TEXT,
+                UNIQUE(material_id, region),
                 FOREIGN KEY (material_id) REFERENCES materials(id)
             )
         """)
         cursor.execute("""
-            INSERT INTO base_inventory_new (id, material_id, quantity, unit_price, update_time, remark)
-            SELECT id, material_id, quantity, unit_price, update_time, NULL
+            INSERT INTO base_inventory_new (
+                id, material_id, material_name, specification, detail_spec, unit_name,
+                region, quantity, unit_price, update_time, remark
+            )
+            SELECT id, material_id, material_name, specification, detail_spec, unit_name,
+                   COALESCE(NULLIF(region, ''), '成都'), quantity, unit_price, update_time, remark
             FROM base_inventory
         """)
         cursor.execute("DROP TABLE base_inventory")
         cursor.execute("ALTER TABLE base_inventory_new RENAME TO base_inventory")
-    else:
-        for column_name in ('material_name', 'specification', 'detail_spec', 'unit_name', 'remark'):
-            if column_name not in base_inventory_columns:
-                cursor.execute(f"ALTER TABLE base_inventory ADD COLUMN {column_name} TEXT")
 
     # 基地到项目调拨台账，保留材料快照、折旧价格和运费。
     cursor.execute("""
@@ -780,7 +811,8 @@ def create_indexes(conn=None):
 
     # 库存表复合索引
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_material_warehouse ON inventory(material_id, warehouse_id)")
-    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_base_inventory_material ON base_inventory(material_id)")
+    cursor.execute("DROP INDEX IF EXISTS idx_base_inventory_material")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_base_inventory_material_region ON base_inventory(material_id, region)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_base_inventory_transfers_project ON base_inventory_transfers(project_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_base_inventory_transfers_time ON base_inventory_transfers(transfer_time)")
 

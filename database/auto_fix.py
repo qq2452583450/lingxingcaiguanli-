@@ -116,6 +116,7 @@ def auto_fix_database():
             'specification': 'TEXT',
             'detail_spec': 'TEXT',
             'unit_name': 'TEXT',
+            'region': "TEXT DEFAULT '成都'",
             'quantity': 'REAL DEFAULT 0',
             'unit_price': 'REAL DEFAULT 0',
             'update_time': 'TEXT',

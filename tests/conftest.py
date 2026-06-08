@@ -120,15 +120,17 @@ def test_db():
     cursor.execute("""
         CREATE TABLE base_inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            material_id INTEGER UNIQUE,
+            material_id INTEGER,
             material_name TEXT,
             specification TEXT,
             detail_spec TEXT,
             unit_name TEXT,
+            region TEXT DEFAULT '成都',
             quantity REAL DEFAULT 0,
             unit_price REAL DEFAULT 0,
             update_time TEXT,
-            remark TEXT
+            remark TEXT,
+            UNIQUE(material_id, region)
         )
     """)
 
