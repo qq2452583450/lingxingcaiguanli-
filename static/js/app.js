@@ -2788,22 +2788,14 @@ function renderSupplierTable() {
     const rateMap = {0.01:'1%', 0.03:'3%', 0.06:'6%', 0.09:'9%', 0.13:'13%'};
     tbody.innerHTML = suppliers.map(s => {
         const rate = s.tax_rate !== undefined && s.tax_rate !== null ? (rateMap[s.tax_rate] || (s.tax_rate * 100).toFixed(0) + '%') : '-';
-        const acc = (s.accounts && s.accounts[0]) || null;
-        let accStatus = '无账号';
-        let accClass = '';
-        if (acc) {
-            const isActive = acc.is_active && acc.status === 'active';
-            accStatus = isActive ? '已启用' : (acc.status === 'pending' ? '待审核' : '已禁用');
-            accClass = isActive ? 'status-agreed' : (acc.status === 'pending' ? 'status-pending' : 'status-rejected');
-        }
         return `
         <tr>
             <td>${escapeHtml(s.supplier_name)}</td>
             <td>${escapeHtml(s.business_scope || '-')}</td>
             <td>${escapeHtml(s.contact || '-')}</td>
             <td>${escapeHtml(s.phone || '-')}</td>
+            <td>${escapeHtml(s.account_username || '-')}</td>
             <td>${rate}</td>
-            <td><span class="status ${accClass}">${accStatus}</span></td>
             <td><button class="btn btn-sm btn-warning" onclick="openEditSupplier(${s.id})">编辑</button></td>
             <td class="admin-only"><button class="btn btn-sm btn-danger" onclick="deleteSupplier(${s.id})">删除</button></td>
         </tr>
@@ -2820,26 +2812,6 @@ function openEditSupplier(id) {
     document.getElementById('supplierPhone').value = s.phone || '';
     document.getElementById('supplierTaxRate').value = s.tax_rate !== null && s.tax_rate !== undefined ? String(s.tax_rate) : '';
     document.getElementById('supplierRemark').value = s.remark || '';
-    document.getElementById('supplierAccountUsername').value = '';
-    document.getElementById('supplierAccountPassword').value = '';
-
-    const accountRow = document.getElementById('supplierAccountStatusRow');
-    const accounts = s.accounts || [];
-    if (accounts.length > 0) {
-        accountRow.classList.remove('hidden');
-        const acc = accounts[0];
-        const statusText = document.getElementById('supplierAccountStatusText');
-        const toggleBtn = document.getElementById('supplierAccountToggle');
-        const isActive = acc.is_active && acc.status === 'active';
-        statusText.textContent = isActive ? '已启用' : (acc.status === 'pending' ? '待审核' : '已禁用');
-        statusText.className = 'status-badge ' + (isActive ? 'status-agreed' : (acc.status === 'pending' ? 'status-pending' : 'status-rejected'));
-        toggleBtn.textContent = isActive ? '禁用' : '启用';
-        document.getElementById('supplierAccountUsername').placeholder = acc.username || '供应商登录用';
-        document.getElementById('supplierAccountUsername').disabled = true;
-    } else {
-        accountRow.classList.add('hidden');
-        document.getElementById('supplierAccountUsername').disabled = false;
-    }
 
     document.getElementById('supplierModalTitle').textContent = '编辑供应商';
     openModal('modal-supplier');
@@ -2853,10 +2825,6 @@ function resetSupplierModal() {
     document.getElementById('supplierPhone').value = '';
     document.getElementById('supplierTaxRate').value = '';
     document.getElementById('supplierRemark').value = '';
-    document.getElementById('supplierAccountUsername').value = '';
-    document.getElementById('supplierAccountPassword').value = '';
-    document.getElementById('supplierAccountUsername').disabled = false;
-    document.getElementById('supplierAccountStatusRow').classList.add('hidden');
     document.getElementById('supplierModalTitle').textContent = '新建供应商';
 }
 
@@ -2888,12 +2856,6 @@ document.getElementById('supplierForm').addEventListener('submit', async (e) => 
         remark: document.getElementById('supplierRemark').value,
         tax_rate: document.getElementById('supplierTaxRate').value ? parseFloat(document.getElementById('supplierTaxRate').value) : null
     };
-    // 新建或编辑时都可填写账号密码
-    const accUsername = document.getElementById('supplierAccountUsername').value.trim();
-    const accPassword = document.getElementById('supplierAccountPassword').value.trim();
-    if (accUsername) body.account_username = accUsername;
-    if (accPassword) body.account_password = accPassword;
-
     try {
         const url = id ? `/api/suppliers/${id}` : '/api/suppliers';
         const method = id ? 'PUT' : 'POST';
@@ -2904,7 +2866,13 @@ document.getElementById('supplierForm').addEventListener('submit', async (e) => 
         });
         const data = await res.json();
         if (data.success) {
-            showToast(id ? '更新成功' : '创建成功', { credentials: 'same-origin' });
+            if (id) {
+                showToast('更新成功', { credentials: 'same-origin' });
+            } else if (data.username) {
+                showToast(`创建成功，账号：${data.username}，初始密码：888888`, { credentials: 'same-origin' });
+            } else {
+                showToast('创建成功', { credentials: 'same-origin' });
+            }
             closeModal('modal-supplier');
             resetSupplierModal();
             loadSuppliers();
@@ -5477,88 +5445,3 @@ async function lockQuotes(inquiryId) {
     }
 }
 
-// ==================== 供应商账号管理 ====================
-
-function openEditSupplier(id) {
-    const s = (suppliers || []).find(x => x.id === id);
-    if (!s) return;
-    document.getElementById('supplierId').value = s.id;
-    document.getElementById('supplierName').value = s.supplier_name || '';
-    document.getElementById('supplierContact').value = s.contact || '';
-    document.getElementById('supplierPhone').value = s.phone || '';
-    document.getElementById('supplierTaxRate').value = s.tax_rate || '';
-    document.getElementById('supplierRemark').value = s.remark || '';
-    document.getElementById('supplierAccountUsername').value = '';
-    document.getElementById('supplierAccountPassword').value = '';
-
-    const accountRow = document.getElementById('supplierAccountStatusRow');
-    const accounts = s.accounts || [];
-    if (accounts.length > 0) {
-        accountRow.classList.remove('hidden');
-        const acc = accounts[0];
-        const statusText = document.getElementById('supplierAccountStatusText');
-        const toggleBtn = document.getElementById('supplierAccountToggle');
-        const isActive = acc.is_active && acc.status === 'active';
-        statusText.textContent = isActive ? '已启用' : (acc.status === 'pending' ? '待审核' : '已禁用');
-        statusText.className = 'status-badge ' + (isActive ? 'status-agreed' : (acc.status === 'pending' ? 'status-pending' : 'status-rejected'));
-        toggleBtn.textContent = isActive ? '禁用' : '启用';
-        document.getElementById('supplierAccountUsername').placeholder = acc.username || '供应商登录用';
-        document.getElementById('supplierAccountUsername').disabled = true;
-    } else {
-        accountRow.classList.add('hidden');
-        document.getElementById('supplierAccountUsername').disabled = false;
-    }
-
-    document.getElementById('supplierModalTitle').textContent = '编辑供应商';
-    openModal('modal-supplier');
-}
-
-async function toggleSupplierAccount() {
-    const supplierId = document.getElementById('supplierId').value;
-    if (!supplierId) return;
-    const s = (suppliers || []).find(x => x.id == supplierId);
-    const acc = (s && s.accounts && s.accounts[0]) || {};
-    const isActive = acc.is_active && acc.status === 'active';
-    const newStatus = isActive ? 'disabled' : 'active';
-    const newActive = isActive ? 0 : 1;
-    try {
-        const res = await api(`/api/suppliers/${supplierId}/account`, {
-            method: 'PUT',
-            body: JSON.stringify({ status: newStatus, is_active: newActive })
-        });
-        const data = await res.json();
-        if (!data.success) {
-            showToast(data.message || '操作失败', 'error');
-            return;
-        }
-        showToast('账号状态已更新', 'success');
-        await loadSuppliers();
-        openEditSupplier(parseInt(supplierId));
-    } catch (e) {
-        showToast('操作失败', 'error');
-    }
-}
-
-async function resetSupplierPassword() {
-    const supplierId = document.getElementById('supplierId').value;
-    if (!supplierId) return;
-    const newPwd = prompt('请输入新密码（至少6位）:');
-    if (!newPwd || newPwd.length < 6) {
-        if (newPwd !== null) showToast('密码至少6位', 'error');
-        return;
-    }
-    try {
-        const res = await api(`/api/suppliers/${supplierId}/account/reset-password`, {
-            method: 'POST',
-            body: JSON.stringify({ password: newPwd })
-        });
-        const data = await res.json();
-        if (!data.success) {
-            showToast(data.message || '重置失败', 'error');
-            return;
-        }
-        showToast('密码已重置', 'success');
-    } catch (e) {
-        showToast('重置失败', 'error');
-    }
-}
