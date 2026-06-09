@@ -2777,6 +2777,7 @@ function renderSupplierTable() {
             <td>${escapeHtml(s.supplier_name)}</td>
             <td>${escapeHtml(s.contact || '-')}</td>
             <td>${escapeHtml(s.phone || '-')}</td>
+            <td>${escapeHtml(s.account_username || '-')}</td>
             <td>${rate}</td>
             <td>
                 <button class="btn btn-warning" style="padding:4px 12px;font-size:12px;" onclick="openEditSupplier(${s.id})">编辑</button>
@@ -2849,7 +2850,13 @@ document.getElementById('supplierForm').addEventListener('submit', async (e) => 
         });
         const data = await res.json();
         if (data.success) {
-            showToast(id ? '更新成功' : '创建成功', { credentials: 'same-origin' });
+            if (id) {
+                showToast('更新成功', { credentials: 'same-origin' });
+            } else if (data.username) {
+                showToast(`创建成功，账号：${data.username}，初始密码：888888`, { credentials: 'same-origin' });
+            } else {
+                showToast('创建成功', { credentials: 'same-origin' });
+            }
             closeModal('modal-supplier');
             resetSupplierModal();
             loadSuppliers();
