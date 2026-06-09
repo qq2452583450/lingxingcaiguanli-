@@ -126,23 +126,11 @@ async function login() {
             currentUser = data.user;
             sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
 
-            // 获取用户绑定的项目
-            const projRes = await api('/api/projects?mine=1');
-            const projData = await projRes.json();
-            userProjects = projData.success ? projData.data : [];
-
-            // 判断是否需要选择项目
-            if (currentUser.role_name === '系统管理员' || userProjects.length <= 1) {
-                // admin 或只有一个项目，直接进入
-                if (userProjects.length === 1) {
-                    currentProjectId = userProjects[0].id;
-                    sessionStorage.setItem('currentProjectId', currentProjectId);
-                }
-                enterMainSystem();
-            } else {
-                // 多于一个项目，显示项目选择页面
-                showProjectSelect();
+            if (data.must_change_password || currentUser.must_change_password) {
+                showForcePasswordChange();
+                return;
             }
+            await continueAfterLogin();
         } else {
             document.getElementById('loginPage').classList.remove('hidden');
             showToast(data.message, 'error');
@@ -151,6 +139,71 @@ async function login() {
         document.getElementById('loginPage').classList.remove('hidden');
         showToast('登录失败: ' + e.message, 'error');
     }
+}
+
+function isAllBoundProjectsUser(user = currentUser) {
+    const username = String(user?.username || '').toLowerCase();
+    const realName = String(user?.real_name || '');
+    return username === 'leikefeng' || username === 'tanxiang' || realName === '雷克峰' || realName === '谭香';
+}
+
+async function continueAfterLogin() {
+    const projRes = await api('/api/projects?mine=1');
+    const projData = await projRes.json();
+    userProjects = projData.success ? projData.data : [];
+
+    if (isAllBoundProjectsUser()) {
+        currentProjectId = null;
+        sessionStorage.removeItem('currentProjectId');
+        enterMainSystem();
+    } else if (currentUser.role_name === '系统管理员' || userProjects.length <= 1) {
+        if (userProjects.length === 1) {
+            currentProjectId = userProjects[0].id;
+            sessionStorage.setItem('currentProjectId', currentProjectId);
+        }
+        enterMainSystem();
+    } else {
+        showProjectSelect();
+    }
+}
+
+function showForcePasswordChange() {
+    document.getElementById('loginPage').classList.add('hidden');
+    document.getElementById('projectSelectPage').classList.add('hidden');
+    document.getElementById('mainPage').classList.add('hidden');
+    document.getElementById('forceNewPassword').value = '';
+    document.getElementById('forceConfirmPassword').value = '';
+    openModal('modal-force-password-change');
+}
+
+async function submitForcePasswordChange(event) {
+    event.preventDefault();
+    const newPassword = document.getElementById('forceNewPassword').value.trim();
+    const confirmPassword = document.getElementById('forceConfirmPassword').value.trim();
+    if (newPassword.length < 6) {
+        showToast('新密码至少6位', 'warning');
+        return;
+    }
+    if (newPassword !== confirmPassword) {
+        showToast('两次输入的密码不一致', 'warning');
+        return;
+    }
+
+    const res = await api('/api/change-password', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ new_password: newPassword })
+    });
+    const data = await res.json();
+    if (!data.success) {
+        showToast(data.message || '修改密码失败', 'error');
+        return;
+    }
+    currentUser.must_change_password = false;
+    sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
+    closeModal('modal-force-password-change');
+    showToast('密码已修改', 'success');
+    await continueAfterLogin();
 }
 
 function showProjectSelect() {
@@ -223,7 +276,14 @@ function enterMainSystem() {
     document.getElementById('userInfo').textContent = `用户: ${currentUser.real_name}`;
     document.getElementById('userRoleDisplay').textContent = currentUser.role_name;
 
+    document.getElementById('currentProjectDisplay').style.display = 'none';
+    document.getElementById('switchProjectBtn').style.display = 'none';
+
     // 显示项目信息和切换按钮
+    if (isAllBoundProjectsUser() && !currentProjectId) {
+        document.getElementById('selectedProjectName').textContent = `全部绑定项目(${userProjects.length})`;
+        document.getElementById('currentProjectDisplay').style.display = 'block';
+    }
     if (currentProjectId) {
         const proj = userProjects.find(p => p.id === currentProjectId);
         if (proj) {
@@ -272,7 +332,13 @@ async function checkLogin() {
                 currentProjectId = userProjects.length === 1 ? userProjects[0].id : null;
             }
 
-            if (currentUser.role_name === '系统管理员' || userProjects.length <= 1) {
+            if (currentUser.must_change_password) {
+                showForcePasswordChange();
+            } else if (isAllBoundProjectsUser()) {
+                currentProjectId = null;
+                sessionStorage.removeItem('currentProjectId');
+                enterMainSystem();
+            } else if (currentUser.role_name === '系统管理员' || userProjects.length <= 1) {
                 if (userProjects.length === 1) {
                     currentProjectId = userProjects[0].id;
                 }
@@ -372,7 +438,7 @@ function formatNationalStandard(val) {
 function codeToRegion(code) {
     if (!code) return '-';
     const prefix = (code.substring(0, 2) || '').toUpperCase();
-    const map = { 'AN': '安宁', 'KM': '昆明', 'BN': '版纳', 'DL': '大理', 'YX': '玉溪', 'CD': '成都' };
+    const map = { 'AN': '安宁', 'KM': '昆明', 'BN': '版纳', 'DL': '大理', 'YX': '玉溪', 'CD': '成都', 'GX': '广西' };
     return map[prefix] || '-';
 }
 
@@ -1236,6 +1302,7 @@ function renderInquiryTable(inquiries) {
         return `
         <tr>
             <td>${i.inquiry_no}</td>
+            <td>${escapeHtml(i.project_display_name || [i.project_city, i.project_code, i.project_name].filter(Boolean).join(' / ') || '-')}</td>
             <td>${i.inquiry_date || '-'}</td>
             <td>${i.applicant_name || '-'}</td>
             <td>¥${(i.total_amount || 0).toFixed(2)}</td>
@@ -1436,6 +1503,7 @@ async function viewInquiry(id) {
                 <div class="card">
                     <p><strong>单号:</strong> ${i.inquiry_no}</p>
                     <p><strong>日期:</strong> ${i.inquiry_date || '-'}</p>
+                    <p><strong>项目:</strong> ${escapeHtml(i.project_display_name || [i.project_city, i.project_code, i.project_name].filter(Boolean).join(' / ') || '-')}</p>
                     <p><strong>申请人:</strong> ${i.applicant_name || '-'}</p>
                     <p><strong>总金额:</strong> ¥${displayTotal.toFixed(2)}</p>
                     <p><strong>状态:</strong> <span class="status ${getStatusClass(i.approval_status)}">${i.approval_status}</span></p>
@@ -3759,6 +3827,7 @@ function renderMaterialPickerList() {
 
     list.innerHTML = display.map(m => {
         const code = m.material_code || '';
+        const regionCode = (code.substring(0, 2) || '').toUpperCase();
         const region = codeToRegion(code);
         const name = escapeHtml(m.material_name || '');
         const spec = escapeHtml(m.specification || '');
@@ -3775,7 +3844,7 @@ function renderMaterialPickerList() {
                      style="display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer;border-bottom:1px solid #f0f0f0;transition:background 0.15s;">
             <div style="flex:1;min-width:0;">
                 <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
-                    <span style="font-size:11px;color:#fff;background:${region === 'AN' ? '#1976d2' : region === 'KM' ? '#e65100' : region === 'BN' ? '#2e7d32' : region === 'DL' ? '#6a1b9a' : region === 'YX' ? '#c62828' : region === 'CD' ? '#00838f' : '#999'};padding:1px 6px;border-radius:3px;flex-shrink:0;">${region || '??'}</span>
+                    <span style="font-size:11px;color:#fff;background:${regionCode === 'AN' ? '#1976d2' : regionCode === 'KM' ? '#e65100' : regionCode === 'BN' ? '#2e7d32' : regionCode === 'DL' ? '#6a1b9a' : regionCode === 'YX' ? '#c62828' : regionCode === 'CD' ? '#00838f' : regionCode === 'GX' ? '#16a34a' : '#999'};padding:1px 6px;border-radius:3px;flex-shrink:0;">${region || '??'}</span>
                     <strong style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${name}</strong>
                     ${spec ? `<span style="color:#666;font-size:12px;flex-shrink:0;">${spec}</span>` : ''}
                 </div>

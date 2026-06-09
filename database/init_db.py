@@ -29,9 +29,14 @@ def init_database():
             role_id INTEGER,
             is_active INTEGER DEFAULT 1,
             create_time TEXT,
+            must_change_password INTEGER DEFAULT 0,
             FOREIGN KEY (role_id) REFERENCES roles(id)
         )
     """)
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0")
+    except Exception:
+        pass
 
     # 角色表
     cursor.execute("""
@@ -67,10 +72,20 @@ def init_database():
             contact TEXT,
             phone TEXT,
             address TEXT,
+            user_id INTEGER,
+            tax_rate REAL,
             remark TEXT,
             create_time TEXT
         )
     """)
+    try:
+        cursor.execute("ALTER TABLE suppliers ADD COLUMN user_id INTEGER")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE suppliers ADD COLUMN tax_rate REAL")
+    except Exception:
+        pass
 
     # 供应商经营范围字段
     try:

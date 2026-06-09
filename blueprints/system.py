@@ -168,30 +168,34 @@ def get_roles():
 
 # ==================== 供应商管理 ====================
 
+def _get_or_create_role(cursor, role_name):
+    cursor.execute("SELECT id FROM roles WHERE role_name = ?", (role_name,))
+    row = cursor.fetchone()
+    if row:
+        return row['id'] if hasattr(row, 'keys') else row[0]
+    cursor.execute("INSERT INTO roles (role_name, permissions) VALUES (?, ?)", (role_name, ''))
+    return cursor.lastrowid
+
+
 @system_bp.route('/suppliers', methods=['GET'])
 def get_suppliers():
-    """获取所有供应商（含账号状态，不含密码）"""
+    """获取所有供应商"""
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM suppliers ORDER BY supplier_name")
+    cursor.execute("""
+        SELECT s.*, u.username AS account_username
+        FROM suppliers s
+        LEFT JOIN users u ON s.user_id = u.id
+        ORDER BY s.supplier_name
+    """)
     suppliers = [dict(row) for row in cursor.fetchall()]
-
-    # 附加账号信息
-    for s in suppliers:
-        cursor.execute("""
-            SELECT id, username, status, is_active, create_time, last_login_time
-            FROM supplier_accounts WHERE supplier_id = ?
-        """, (s['id'],))
-        accounts = [dict(row) for row in cursor.fetchall()]
-        s['accounts'] = accounts
-
     conn.close()
     return jsonify({'success': True, 'data': suppliers})
 
 
 @system_bp.route('/suppliers', methods=['POST'])
 def create_supplier():
-    """创建供应商（可选同时创建账号）"""
+    """创建供应商"""
     user = session.get('user')
     if not user:
         return jsonify({'success': False, 'message': '未登录'})
@@ -201,31 +205,38 @@ def create_supplier():
     cursor = conn.cursor()
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-    cursor.execute("""
-        INSERT INTO suppliers (supplier_name, business_scope, contact, phone, address, remark, create_time)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (escape(data.get('supplier_name', '')), escape(data.get('business_scope', '')),
-          escape(data.get('contact', '')), escape(data.get('phone', '')),
-          escape(data.get('address', '')), escape(data.get('remark', '')), now))
-    supplier_id = cursor.lastrowid
+    supplier_name = escape(data.get('supplier_name', '').strip())
+    if not supplier_name:
+        conn.close()
+        return jsonify({'success': False, 'message': '供应商名称不能为空'})
 
-    # 可选：创建供应商账号
-    account_username = (data.get('account_username') or '').strip()
-    account_password = (data.get('account_password') or '').strip()
-    if account_username and account_password:
-        cursor.execute("SELECT id FROM supplier_accounts WHERE username = ?", (account_username,))
-        if cursor.fetchone():
-            conn.rollback()
-            conn.close()
-            return jsonify({'success': False, 'message': '该登录账号已被使用'})
+    try:
         cursor.execute("""
-            INSERT INTO supplier_accounts (supplier_id, username, password, status, is_active, create_time)
-            VALUES (?, ?, ?, 'active', 1, ?)
-        """, (supplier_id, account_username, hash_password(account_password), now))
+            INSERT INTO suppliers (supplier_name, business_scope, contact, phone, address, remark, tax_rate, create_time)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (supplier_name, escape(data.get('business_scope', '')),
+              escape(data.get('contact', '')), escape(data.get('phone', '')),
+              escape(data.get('address', '')), escape(data.get('remark', '')),
+              data.get('tax_rate'), now))
+        supplier_id = cursor.lastrowid
 
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True, 'id': supplier_id})
+        role_id = _get_or_create_role(cursor, '供应商')
+        username = f'supplier_{supplier_id:05d}'
+        cursor.execute("""
+            INSERT INTO users (
+                username, password, real_name, role_id, is_active, create_time, must_change_password
+            ) VALUES (?, ?, ?, ?, 1, ?, 1)
+        """, (username, hash_password('888888'), supplier_name, role_id, now))
+        supplier_user_id = cursor.lastrowid
+        cursor.execute("UPDATE suppliers SET user_id = ? WHERE id = ?", (supplier_user_id, supplier_id))
+
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True, 'id': supplier_id, 'username': username})
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return jsonify({'success': False, 'message': str(e)})
 
 
 @system_bp.route('/suppliers/<int:supplier_id>', methods=['PUT'])
@@ -240,42 +251,18 @@ def update_supplier(supplier_id):
     data = request.json
     conn = get_db()
     cursor = conn.cursor()
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
+    supplier_name = escape(data.get('supplier_name', ''))
     cursor.execute("""
         UPDATE suppliers SET supplier_name = ?, business_scope = ?, contact = ?, phone = ?, address = ?, remark = ?, tax_rate = ?
         WHERE id = ?
-    """, (escape(data.get('supplier_name', '')), escape(data.get('business_scope', '')),
+    """, (supplier_name, escape(data.get('business_scope', '')),
           escape(data.get('contact', '')), escape(data.get('phone', '')),
           escape(data.get('address', '')), escape(data.get('remark', '')),
           data.get('tax_rate'), supplier_id))
-
-    # 管理员可为供应商创建或更新账号
-    account_username = (data.get('account_username') or '').strip()
-    account_password = (data.get('account_password') or '').strip()
-    if account_username and account_password and user.get('role_name') == '系统管理员':
-        # 检查是否已有账号
-        cursor.execute("SELECT id FROM supplier_accounts WHERE supplier_id = ?", (supplier_id,))
-        existing = cursor.fetchone()
-        if existing:
-            # 更新已有账号的用户名和密码
-            cursor.execute("""
-                UPDATE supplier_accounts SET username = ?, password = ?, status = 'active', is_active = 1
-                WHERE supplier_id = ?
-            """, (account_username, hash_password(account_password), supplier_id))
-        else:
-            # 检查用户名是否已被其他供应商使用
-            cursor.execute("SELECT id FROM supplier_accounts WHERE username = ?", (account_username,))
-            if cursor.fetchone():
-                conn.rollback()
-                conn.close()
-                return jsonify({'success': False, 'message': '该登录账号已被其他供应商使用'})
-            # 创建新账号
-            cursor.execute("""
-                INSERT INTO supplier_accounts (supplier_id, username, password, status, is_active, create_time)
-                VALUES (?, ?, ?, 'active', 1, ?)
-            """, (supplier_id, account_username, hash_password(account_password), now))
-
+    cursor.execute("SELECT user_id FROM suppliers WHERE id = ?", (supplier_id,))
+    supplier = cursor.fetchone()
+    if supplier and supplier['user_id']:
+        cursor.execute("UPDATE users SET real_name = ? WHERE id = ?", (supplier_name, supplier['user_id']))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -291,80 +278,24 @@ def delete_supplier(supplier_id):
     conn = get_db()
     cursor = conn.cursor()
 
-    # 检查是否有材料引用该供应商
     cursor.execute("SELECT COUNT(*) FROM materials WHERE default_supplier_id = ?", (supplier_id,))
     if cursor.fetchone()[0] > 0:
         conn.close()
         return jsonify({'success': False, 'message': '该供应商已被材料引用，无法删除'})
 
-    # 检查是否有报价记录
     cursor.execute("SELECT COUNT(*) FROM purchase_inquiry_quotes WHERE supplier_id = ?", (supplier_id,))
     if cursor.fetchone()[0] > 0:
         conn.close()
         return jsonify({'success': False, 'message': '该供应商已有报价记录，无法删除'})
 
-    cursor.execute("DELETE FROM supplier_accounts WHERE supplier_id = ?", (supplier_id,))
+    cursor.execute("SELECT user_id FROM suppliers WHERE id = ?", (supplier_id,))
+    supplier = cursor.fetchone()
     cursor.execute("DELETE FROM suppliers WHERE id = ?", (supplier_id,))
+    if supplier and supplier['user_id']:
+        cursor.execute("DELETE FROM users WHERE id = ?", (supplier['user_id'],))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
-
-
-@system_bp.route('/suppliers/<int:supplier_id>/account', methods=['PUT'])
-def update_supplier_account(supplier_id):
-    """更新供应商账号状态（启用/禁用）"""
-    user = session.get('user')
-    if not user or user.get('role_name') != '系统管理员':
-        return jsonify({'success': False, 'message': '仅管理员可操作'})
-
-    data = request.json or {}
-    conn = get_db()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT id FROM supplier_accounts WHERE supplier_id = ?", (supplier_id,))
-    account = cursor.fetchone()
-    if not account:
-        conn.close()
-        return jsonify({'success': False, 'message': '该供应商尚未创建账号'})
-
-    status = data.get('status')
-    is_active = data.get('is_active')
-
-    if status is not None:
-        cursor.execute("UPDATE supplier_accounts SET status = ? WHERE supplier_id = ?", (status, supplier_id))
-    if is_active is not None:
-        cursor.execute("UPDATE supplier_accounts SET is_active = ? WHERE supplier_id = ?", (int(is_active), supplier_id))
-
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True, 'message': '账号状态已更新'})
-
-
-@system_bp.route('/suppliers/<int:supplier_id>/account/reset-password', methods=['POST'])
-def reset_supplier_password(supplier_id):
-    """重置供应商账号密码"""
-    user = session.get('user')
-    if not user or user.get('role_name') != '系统管理员':
-        return jsonify({'success': False, 'message': '仅管理员可操作'})
-
-    data = request.json or {}
-    new_password = (data.get('password') or '').strip()
-    if not new_password or len(new_password) < 6:
-        return jsonify({'success': False, 'message': '密码至少6位'})
-
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM supplier_accounts WHERE supplier_id = ?", (supplier_id,))
-    account = cursor.fetchone()
-    if not account:
-        conn.close()
-        return jsonify({'success': False, 'message': '该供应商尚未创建账号'})
-
-    cursor.execute("UPDATE supplier_accounts SET password = ? WHERE supplier_id = ?",
-                   (hash_password(new_password), supplier_id))
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True, 'message': '密码已重置'})
 
 
 # ==================== 客户管理 ====================
