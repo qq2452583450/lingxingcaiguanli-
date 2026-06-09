@@ -37,7 +37,8 @@ def test_db():
             real_name TEXT,
             role_id INTEGER,
             is_active INTEGER DEFAULT 1,
-            create_time TEXT
+            create_time TEXT,
+            must_change_password INTEGER DEFAULT 0
         )
     """)
 
@@ -66,7 +67,15 @@ def test_db():
             default_supplier_id INTEGER,
             inventory_min REAL DEFAULT 0,
             inventory_max REAL DEFAULT 0,
-            create_time TEXT
+            create_time TEXT,
+            tax_rate REAL DEFAULT 0.01,
+            project_id INTEGER,
+            weight REAL DEFAULT 0,
+            brand TEXT,
+            is_national_standard INTEGER DEFAULT 0,
+            is_cash_price INTEGER DEFAULT 0,
+            cash_price REAL DEFAULT 0,
+            cash_tax_price REAL DEFAULT 0
         )
     """)
 
@@ -78,6 +87,8 @@ def test_db():
             contact TEXT,
             phone TEXT,
             address TEXT,
+            user_id INTEGER,
+            tax_rate REAL,
             remark TEXT,
             create_time TEXT
         )
@@ -278,7 +289,9 @@ def test_db():
             material_id INTEGER,
             quantity REAL DEFAULT 0,
             unit_price REAL DEFAULT 0,
-            amount REAL DEFAULT 0
+            amount REAL DEFAULT 0,
+            supplier_id INTEGER,
+            warehouse_id INTEGER DEFAULT 1
         )
     """)
 

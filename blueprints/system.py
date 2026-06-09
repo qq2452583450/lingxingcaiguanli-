@@ -168,12 +168,26 @@ def get_roles():
 
 # ==================== 供应商管理 ====================
 
+def _get_or_create_role(cursor, role_name):
+    cursor.execute("SELECT id FROM roles WHERE role_name = ?", (role_name,))
+    row = cursor.fetchone()
+    if row:
+        return row['id'] if hasattr(row, 'keys') else row[0]
+    cursor.execute("INSERT INTO roles (role_name, permissions) VALUES (?, ?)", (role_name, ''))
+    return cursor.lastrowid
+
+
 @system_bp.route('/suppliers', methods=['GET'])
 def get_suppliers():
     """获取所有供应商"""
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM suppliers ORDER BY supplier_name")
+    cursor.execute("""
+        SELECT s.*, u.username AS account_username
+        FROM suppliers s
+        LEFT JOIN users u ON s.user_id = u.id
+        ORDER BY s.supplier_name
+    """)
     suppliers = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return jsonify({'success': True, 'data': suppliers})
@@ -191,16 +205,37 @@ def create_supplier():
     cursor = conn.cursor()
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-    cursor.execute("""
-        INSERT INTO suppliers (supplier_name, contact, phone, address, remark, create_time)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (escape(data.get('supplier_name', '')), escape(data.get('contact', '')),
-          escape(data.get('phone', '')), escape(data.get('address', '')),
-          escape(data.get('remark', '')), now))
-    supplier_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True, 'id': supplier_id})
+    supplier_name = escape(data.get('supplier_name', '').strip())
+    if not supplier_name:
+        conn.close()
+        return jsonify({'success': False, 'message': '供应商名称不能为空'})
+
+    try:
+        cursor.execute("""
+            INSERT INTO suppliers (supplier_name, contact, phone, address, remark, tax_rate, create_time)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (supplier_name, escape(data.get('contact', '')),
+              escape(data.get('phone', '')), escape(data.get('address', '')),
+              escape(data.get('remark', '')), data.get('tax_rate'), now))
+        supplier_id = cursor.lastrowid
+
+        role_id = _get_or_create_role(cursor, '供应商')
+        username = f'supplier_{supplier_id:05d}'
+        cursor.execute("""
+            INSERT INTO users (
+                username, password, real_name, role_id, is_active, create_time, must_change_password
+            ) VALUES (?, ?, ?, ?, 1, ?, 1)
+        """, (username, hash_password('888888'), supplier_name, role_id, now))
+        supplier_user_id = cursor.lastrowid
+        cursor.execute("UPDATE suppliers SET user_id = ? WHERE id = ?", (supplier_user_id, supplier_id))
+
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True, 'id': supplier_id, 'username': username})
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return jsonify({'success': False, 'message': str(e)})
 
 
 @system_bp.route('/suppliers/<int:supplier_id>', methods=['PUT'])
@@ -215,12 +250,17 @@ def update_supplier(supplier_id):
     data = request.json
     conn = get_db()
     cursor = conn.cursor()
+    supplier_name = escape(data.get('supplier_name', ''))
     cursor.execute("""
         UPDATE suppliers SET supplier_name = ?, contact = ?, phone = ?, address = ?, remark = ?, tax_rate = ?
         WHERE id = ?
-    """, (escape(data.get('supplier_name', '')), escape(data.get('contact', '')),
+    """, (supplier_name, escape(data.get('contact', '')),
           escape(data.get('phone', '')), escape(data.get('address', '')),
           escape(data.get('remark', '')), data.get('tax_rate'), supplier_id))
+    cursor.execute("SELECT user_id FROM suppliers WHERE id = ?", (supplier_id,))
+    supplier = cursor.fetchone()
+    if supplier and supplier['user_id']:
+        cursor.execute("UPDATE users SET real_name = ? WHERE id = ?", (supplier_name, supplier['user_id']))
     conn.commit()
     conn.close()
     return jsonify({'success': True})
@@ -242,7 +282,11 @@ def delete_supplier(supplier_id):
         conn.close()
         return jsonify({'success': False, 'message': '该供应商已被材料引用，无法删除'})
 
+    cursor.execute("SELECT user_id FROM suppliers WHERE id = ?", (supplier_id,))
+    supplier = cursor.fetchone()
     cursor.execute("DELETE FROM suppliers WHERE id = ?", (supplier_id,))
+    if supplier and supplier['user_id']:
+        cursor.execute("DELETE FROM users WHERE id = ?", (supplier['user_id'],))
     conn.commit()
     conn.close()
     return jsonify({'success': True})

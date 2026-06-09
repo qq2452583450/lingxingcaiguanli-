@@ -21,6 +21,7 @@ def auto_fix_database():
             'role_id': 'INTEGER',
             'is_active': 'INTEGER DEFAULT 1',
             'create_time': 'TEXT',
+            'must_change_password': 'INTEGER DEFAULT 0',
         },
         'roles': {
             'id': 'INTEGER PRIMARY KEY AUTOINCREMENT',
@@ -46,6 +47,7 @@ def auto_fix_database():
             'contact': 'TEXT',
             'phone': 'TEXT',
             'address': 'TEXT',
+            'user_id': 'INTEGER',
             'remark': 'TEXT',
             'tax_rate': 'REAL',
             'create_time': 'TEXT',
