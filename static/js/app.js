@@ -710,6 +710,10 @@ function canApproveInquiry(inquiry) {
     return isSpecialRequiredApprover();
 }
 
+function isInquiryApprovalOpen(status) {
+    return status === '待审批' || status === '退回修改' || status === '报价未发布';
+}
+
 function canDeleteInquiry(inquiry) {
     return isAdmin() || (isMaterialClerk() && inquiry.approval_status === '草稿');
 }
@@ -1554,7 +1558,7 @@ function renderInquiryTable(inquiries) {
                 <button class="btn btn-secondary" style="padding:4px 8px;font-size:12px;" onclick="viewInquiry(${i.id})">查看</button>
                 ${i.approval_status === '已同意' ? `<button class="btn btn-primary" style="padding:4px 8px;font-size:12px;" onclick="printInquiryApproval(${i.id})">打印签字单</button>` : ''}
                 ${i.approval_status === '已同意' ? `<button class="btn btn-success" style="padding:4px 8px;font-size:12px;" onclick="exportSupplierOrders(${i.id})">导出供货单</button>` : ''}
-                ${(i.approval_status === '待审批' && canApproveInquiry(i)) || (i.approval_status === '已同意' && isAdmin() && !isSpecialApprovalInquiry(i)) ?
+                ${(isInquiryApprovalOpen(i.approval_status) && canApproveInquiry(i)) || (i.approval_status === '已同意' && isAdmin() && !isSpecialApprovalInquiry(i)) ?
                     `<button class="btn btn-warning" style="padding:4px 8px;font-size:12px;" onclick="approveInquiry(${i.id})">${i.approval_status === '已同意' ? '退回' : '审批'}</button>` : ''}
                 ${i.approval_status === '待审批' && currentUser && i.applicant_id === currentUser.id ?
                     `<button class="btn btn-info" style="padding:4px 8px;font-size:12px;" onclick="recallInquiry(${i.id})">撤回</button>` : ''}
@@ -1663,7 +1667,8 @@ function getStatusClass(status) {
         '已同意': 'approved',
         '已驳回': 'rejected',
         '退回修改': 'return',
-        '草稿': 'draft'
+        '草稿': 'draft',
+        '报价未发布': 'draft'
     };
     return map[status] || '';
 }
@@ -1955,7 +1960,7 @@ async function approveInquiry(id) {
         document.getElementById('approvalRemark').value = '';
         document.getElementById('approvalRemark').classList.remove('reject-required');
 
-        if (inquiry.approval_status === '待审批' || inquiry.approval_status === '退回修改' || inquiry.approval_status === '已同意') {
+        if (isInquiryApprovalOpen(inquiry.approval_status) || inquiry.approval_status === '已同意') {
             actionSection.style.display = '';
             const isAdmin = currentUser && currentUser.role_name === '系统管理员';
             const isSpecialApproval = isSpecialApprovalInquiry(inquiry);
