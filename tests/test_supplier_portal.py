@@ -171,6 +171,36 @@ class TestSupplierAuth:
         data = json.loads(resp.data)
         assert data['success'] is False
 
+    def test_missing_default_supplier_account_is_created_on_first_login(self, client, test_db):
+        """supplier_数字默认账号缺失时，可按供应商ID自动创建并登录"""
+        cursor = test_db.cursor()
+        cursor.execute("INSERT INTO suppliers (id, supplier_name, create_time) VALUES (?, ?, ?)",
+                       (156, '云南蓉心胜商贸有限公司', '2026-01-01 00:00:00'))
+        test_db.commit()
+
+        resp = client.post('/api/supplier/login',
+                           data=json.dumps({'username': 'supplier_00156', 'password': '888888'}),
+                           content_type='application/json')
+        data = json.loads(resp.data)
+        assert data['success'] is True
+        assert data['user']['supplier_id'] == 156
+
+        cursor = test_db.cursor()
+        cursor.execute("SELECT * FROM supplier_accounts WHERE username = 'supplier_00156'")
+        account = dict(cursor.fetchone())
+        assert account['supplier_id'] == 156
+        assert account['status'] == 'active'
+        assert account['is_active'] == 1
+        assert verify_password('888888', account['password']) is True
+
+    def test_missing_default_supplier_account_requires_existing_supplier(self, client, test_db):
+        """没有对应供应商ID时，不自动创建默认账号"""
+        resp = client.post('/api/supplier/login',
+                           data=json.dumps({'username': 'supplier_00999', 'password': '888888'}),
+                           content_type='application/json')
+        data = json.loads(resp.data)
+        assert data['success'] is False
+
     def test_default_supplier_account_with_wrong_bcrypt_can_first_login(self, client, test_db):
         """supplier_数字默认账号即使旧哈希错误，也可用888888首次登录"""
         cursor = test_db.cursor()

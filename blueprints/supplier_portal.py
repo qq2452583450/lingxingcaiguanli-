@@ -64,6 +64,15 @@ def _can_upgrade_default_supplier_password(username, password, stored_password, 
     )
 
 
+def _default_supplier_id_from_username(username, password):
+    if password != '888888' or not username.startswith('supplier_'):
+        return None
+    suffix = username.removeprefix('supplier_')
+    if not suffix.isdigit():
+        return None
+    return int(suffix)
+
+
 # ==================== 注册 ====================
 
 @supplier_bp.route('/register', methods=['POST'])
@@ -139,6 +148,27 @@ def login():
         WHERE sa.username = ?
     """, (username,))
     row = cursor.fetchone()
+
+    if not row:
+        supplier_id = _default_supplier_id_from_username(username, password)
+        if supplier_id:
+            cursor.execute("SELECT supplier_name FROM suppliers WHERE id = ?", (supplier_id,))
+            supplier = cursor.fetchone()
+            if supplier:
+                now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                cursor.execute("""
+                    INSERT INTO supplier_accounts
+                        (supplier_id, username, password, status, is_active, profile_completed, create_time)
+                    VALUES (?, ?, ?, 'active', 1, 0, ?)
+                """, (supplier_id, username, hash_password(password), now))
+                conn.commit()
+                cursor.execute("""
+                    SELECT sa.*, s.supplier_name
+                    FROM supplier_accounts sa
+                    JOIN suppliers s ON sa.supplier_id = s.id
+                    WHERE sa.username = ?
+                """, (username,))
+                row = cursor.fetchone()
 
     if not row:
         _record_failed_attempt(rate_key)
