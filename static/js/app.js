@@ -4883,10 +4883,15 @@ function renderDraftsTable(drafts) {
             <td>${d.remark || '-'}</td>
             <td style="white-space:nowrap;">
                 <button class="btn btn-success" style="padding:4px 8px;font-size:12px;" onclick="editInquiry(${d.id})">继续编辑</button>
+                <button class="btn btn-secondary" style="padding:4px 8px;font-size:12px;" onclick="exportDraftQuoteSheet(${d.id})">导出询价表</button>
                 <button class="btn btn-danger" style="padding:4px 8px;font-size:12px;" onclick="deleteInquiryDraft(${d.id})">删除</button>
             </td>
         </tr>
     `).join('');
+}
+
+function exportDraftQuoteSheet(id) {
+    window.location.href = `/api/purchase-inquiries/draft/${id}/export-quote-sheet`;
 }
 
 async function deleteInquiryDraft(id) {
