@@ -3,7 +3,7 @@
 """
 import pytest
 import json
-from helpers import hash_password
+from helpers import hash_password, verify_password
 
 
 class TestSupplierAuth:
@@ -103,6 +103,30 @@ class TestSupplierAuth:
         data = json.loads(resp.data)
         assert data['success'] is True
         assert data['user']['supplier_name'] == '活跃供应商'
+
+    def test_login_legacy_plain_default_password_upgrades_hash(self, client, test_db):
+        """旧版明文默认密码888888可登录，并自动升级为哈希"""
+        cursor = test_db.cursor()
+        cursor.execute("INSERT INTO suppliers (supplier_name, create_time) VALUES (?, ?)",
+                       ('云南蓉心胜商贸有限公司', '2026-01-01 00:00:00'))
+        supplier_id = cursor.lastrowid
+        cursor.execute("""
+            INSERT INTO supplier_accounts (supplier_id, username, password, status, is_active, create_time)
+            VALUES (?, ?, ?, 'active', 1, ?)
+        """, (supplier_id, 'supplier_00156', '888888', '2026-01-01 00:00:00'))
+        test_db.commit()
+
+        resp = client.post('/api/supplier/login',
+                           data=json.dumps({'username': 'supplier_00156', 'password': '888888'}),
+                           content_type='application/json')
+        data = json.loads(resp.data)
+        assert data['success'] is True
+
+        cursor = test_db.cursor()
+        cursor.execute("SELECT password FROM supplier_accounts WHERE username = 'supplier_00156'")
+        stored_password = dict(cursor.fetchone())['password']
+        assert stored_password != '888888'
+        assert verify_password('888888', stored_password) is True
 
     def test_login_wrong_password(self, client, test_db):
         """密码错误应失败"""

@@ -139,7 +139,16 @@ def login():
         conn.close()
         return jsonify({'success': False, 'message': '账号未启用，请联系管理员'})
 
-    if not verify_password(password, account['password']):
+    password_needs_upgrade = False
+    if verify_password(password, account['password']):
+        password_ok = True
+    elif account['password'] == password:
+        password_ok = True
+        password_needs_upgrade = True
+    else:
+        password_ok = False
+
+    if not password_ok:
         _record_failed_attempt(rate_key)
         allowed, remaining = _check_rate_limit(rate_key)
         conn.close()
@@ -151,6 +160,9 @@ def login():
 
     # 更新最后登录时间
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    if password_needs_upgrade:
+        cursor.execute("UPDATE supplier_accounts SET password = ? WHERE id = ?",
+                       (hash_password(password), account['id']))
     cursor.execute("UPDATE supplier_accounts SET last_login_time = ? WHERE id = ?", (now, account['id']))
     conn.commit()
     conn.close()
