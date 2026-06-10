@@ -2385,10 +2385,27 @@ def export_draft_quote_sheet(draft_id):
         conn.close()
         return jsonify({'success': False, 'message': '只有申请人可以导出此草稿'}), 403
 
-    cursor.execute("""
-        SELECT i.id AS item_id, i.quantity, i.tax_rate, i.is_national_standard,
-               COALESCE(i.detail_spec, m.detail_spec, m.specification, '') AS export_spec,
-               COALESCE(i.brand, m.brand, '') AS export_brand,
+    def table_columns(table_name):
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        return {col[1] for col in cursor.fetchall()}
+
+    item_columns = table_columns('purchase_inquiry_items')
+    material_columns = table_columns('materials')
+    item_detail_expr = 'i.detail_spec' if 'detail_spec' in item_columns else 'NULL'
+    material_detail_expr = 'm.detail_spec' if 'detail_spec' in material_columns else 'NULL'
+    item_brand_expr = 'i.brand' if 'brand' in item_columns else 'NULL'
+    material_brand_expr = 'm.brand' if 'brand' in material_columns else 'NULL'
+    if 'is_national_standard' in item_columns:
+        national_standard_expr = 'i.is_national_standard'
+    elif 'is_national_standard' in material_columns:
+        national_standard_expr = 'm.is_national_standard'
+    else:
+        national_standard_expr = '0'
+
+    cursor.execute(f"""
+        SELECT i.id AS item_id, i.quantity, {national_standard_expr} AS is_national_standard,
+               COALESCE({item_detail_expr}, {material_detail_expr}, m.specification, '') AS export_spec,
+               COALESCE({item_brand_expr}, {material_brand_expr}, '') AS export_brand,
                m.material_name, m.specification, u.unit_name
         FROM purchase_inquiry_items i
         LEFT JOIN materials m ON m.id = i.material_id

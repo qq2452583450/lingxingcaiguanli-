@@ -793,3 +793,64 @@ def test_export_draft_inquiry_xlsx_matches_quote_template(client, test_db):
         1, "测试材料", "加厚", "测试品牌", "是", "个", 5
     ]
     assert sheet["I4"].value == '=IF(H4="","",H4*$G4)'
+
+
+def test_export_draft_inquiry_xlsx_tolerates_legacy_optional_columns(client, test_db):
+    cursor = test_db.cursor()
+    create_inquiry_delete_tables(cursor)
+    ensure_project_id_column(cursor)
+    for table, column in [
+        ("purchase_inquiry_items", "brand"),
+        ("purchase_inquiry_items", "detail_spec"),
+        ("purchase_inquiry_items", "is_national_standard"),
+        ("materials", "brand"),
+        ("materials", "detail_spec"),
+        ("materials", "is_national_standard"),
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+        except Exception:
+            pass
+
+    clerk_id = seed_role_user(cursor, "材料员", "legacy_clerk", "材料员")
+    cursor.execute(
+        "INSERT INTO projects (project_code, project_name, create_time) VALUES (?, ?, ?)",
+        ("CD-LEGACY", "成都旧库项目", "2026-01-01 09:00:00"),
+    )
+    project_id = cursor.lastrowid
+    cursor.execute("INSERT INTO suppliers (supplier_name) VALUES (?)", ("旧库供应商",))
+    supplier_id = cursor.lastrowid
+    cursor.execute("INSERT INTO units (unit_name) VALUES (?)", ("米",))
+    unit_id = cursor.lastrowid
+    cursor.execute(
+        "INSERT INTO materials (material_code, material_name, specification, unit_id) VALUES (?, ?, ?, ?)",
+        ("CDLX00003", "旧库材料", "DN32", unit_id),
+    )
+    material_id = cursor.lastrowid
+    inquiry_id = seed_inquiry(cursor, "XJ-DRAFT-LEGACY", clerk_id, status="草稿", project_id=project_id)
+    cursor.execute(
+        "INSERT INTO purchase_inquiry_items (inquiry_id, material_id, quantity, create_time) VALUES (?, ?, ?, ?)",
+        (inquiry_id, material_id, 8, "2026-06-06 10:00:00"),
+    )
+    item_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiry_quotes (
+            item_id, supplier_id, tax_price, tax_exempt_price, tax_rate,
+            total_amount, is_lowest, is_selected, create_time
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (item_id, supplier_id, 0, 0, 0.01, 0, 0, 0, "2026-06-06 10:00:00"),
+    )
+    test_db.commit()
+    set_session_user(client, clerk_id, "legacy_clerk", "材料员", "材料员")
+
+    response = client.get(f"/api/purchase-inquiries/draft/{inquiry_id}/export-quote-sheet")
+
+    assert response.status_code == 200
+    workbook = load_workbook(BytesIO(response.data), data_only=False)
+    sheet = workbook.active
+    assert sheet["B4"].value == "旧库材料"
+    assert sheet["C4"].value == "DN32"
+    assert sheet["E4"].value == "否"
