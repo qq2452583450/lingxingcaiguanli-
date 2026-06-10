@@ -35,8 +35,11 @@ if ($DbFiles) {
 
 Write-Host "Pulling latest code from origin/$Branch"
 git fetch origin $Branch
+if ($LASTEXITCODE -ne 0) { throw "git fetch origin $Branch failed" }
 git checkout $Branch
+if ($LASTEXITCODE -ne 0) { throw "git checkout $Branch failed" }
 git pull --ff-only origin $Branch
+if ($LASTEXITCODE -ne 0) { throw "git pull origin $Branch failed" }
 
 $VenvPython = Join-Path $AppDir ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $VenvPython)) {
@@ -46,6 +49,7 @@ if (-not (Test-Path -LiteralPath $VenvPython)) {
 
 Write-Host "Installing Python dependencies"
 & $VenvPython -m pip install -r requirements.txt
+if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 
 $Service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($Service) {
