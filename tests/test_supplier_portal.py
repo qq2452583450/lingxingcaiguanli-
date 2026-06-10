@@ -128,6 +128,91 @@ class TestSupplierAuth:
         assert stored_password != '888888'
         assert verify_password('888888', stored_password) is True
 
+    def test_login_default_supplier_account_with_bad_legacy_hash_upgrades_hash(self, client, test_db):
+        """supplier_数字默认账号的旧无效密码值可用888888首次登录"""
+        cursor = test_db.cursor()
+        cursor.execute("INSERT INTO suppliers (supplier_name, create_time) VALUES (?, ?)",
+                       ('云南蓉心胜商贸有限公司', '2026-01-01 00:00:00'))
+        supplier_id = cursor.lastrowid
+        cursor.execute("""
+            INSERT INTO supplier_accounts (supplier_id, username, password, status, is_active, create_time)
+            VALUES (?, ?, ?, 'active', 1, ?)
+        """, (supplier_id, 'supplier_00156', 'legacy-bad-password-value', '2026-01-01 00:00:00'))
+        test_db.commit()
+
+        resp = client.post('/api/supplier/login',
+                           data=json.dumps({'username': 'supplier_00156', 'password': '888888'}),
+                           content_type='application/json')
+        data = json.loads(resp.data)
+        assert data['success'] is True
+
+        cursor = test_db.cursor()
+        cursor.execute("SELECT password, last_login_time FROM supplier_accounts WHERE username = 'supplier_00156'")
+        account = dict(cursor.fetchone())
+        assert account['password'] != 'legacy-bad-password-value'
+        assert verify_password('888888', account['password']) is True
+        assert account['last_login_time'] is not None
+
+    def test_bad_legacy_hash_default_password_does_not_unlock_regular_account(self, client, test_db):
+        """非supplier_数字账号不能用默认密码兼容规则登录"""
+        cursor = test_db.cursor()
+        cursor.execute("INSERT INTO suppliers (supplier_name, create_time) VALUES (?, ?)",
+                       ('普通供应商', '2026-01-01 00:00:00'))
+        supplier_id = cursor.lastrowid
+        cursor.execute("""
+            INSERT INTO supplier_accounts (supplier_id, username, password, status, is_active, create_time)
+            VALUES (?, ?, ?, 'active', 1, ?)
+        """, (supplier_id, 'normal_supplier', 'legacy-bad-password-value', '2026-01-01 00:00:00'))
+        test_db.commit()
+
+        resp = client.post('/api/supplier/login',
+                           data=json.dumps({'username': 'normal_supplier', 'password': '888888'}),
+                           content_type='application/json')
+        data = json.loads(resp.data)
+        assert data['success'] is False
+
+    def test_default_supplier_account_with_wrong_bcrypt_can_first_login(self, client, test_db):
+        """supplier_数字默认账号即使旧哈希错误，也可用888888首次登录"""
+        cursor = test_db.cursor()
+        cursor.execute("INSERT INTO suppliers (supplier_name, create_time) VALUES (?, ?)",
+                       ('云南蓉心胜商贸有限公司', '2026-01-01 00:00:00'))
+        supplier_id = cursor.lastrowid
+        cursor.execute("""
+            INSERT INTO supplier_accounts (supplier_id, username, password, status, is_active, create_time)
+            VALUES (?, ?, ?, 'active', 1, ?)
+        """, (supplier_id, 'supplier_00156', hash_password('wrong-default'), '2026-01-01 00:00:00'))
+        test_db.commit()
+
+        resp = client.post('/api/supplier/login',
+                           data=json.dumps({'username': 'supplier_00156', 'password': '888888'}),
+                           content_type='application/json')
+        data = json.loads(resp.data)
+        assert data['success'] is True
+
+        cursor = test_db.cursor()
+        cursor.execute("SELECT password FROM supplier_accounts WHERE username = 'supplier_00156'")
+        stored_password = dict(cursor.fetchone())['password']
+        assert verify_password('888888', stored_password) is True
+
+    def test_default_supplier_password_does_not_override_after_login(self, client, test_db):
+        """已有登录记录的supplier_数字账号不能再被默认密码覆盖"""
+        cursor = test_db.cursor()
+        cursor.execute("INSERT INTO suppliers (supplier_name, create_time) VALUES (?, ?)",
+                       ('已登录供应商', '2026-01-01 00:00:00'))
+        supplier_id = cursor.lastrowid
+        cursor.execute("""
+            INSERT INTO supplier_accounts (supplier_id, username, password, status, is_active, create_time, last_login_time)
+            VALUES (?, ?, ?, 'active', 1, ?, ?)
+        """, (supplier_id, 'supplier_00157', hash_password('changed-password'),
+              '2026-01-01 00:00:00', '2026-01-02 00:00:00'))
+        test_db.commit()
+
+        resp = client.post('/api/supplier/login',
+                           data=json.dumps({'username': 'supplier_00157', 'password': '888888'}),
+                           content_type='application/json')
+        data = json.loads(resp.data)
+        assert data['success'] is False
+
     def test_login_wrong_password(self, client, test_db):
         """密码错误应失败"""
         cursor = test_db.cursor()
