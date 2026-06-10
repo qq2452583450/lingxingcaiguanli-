@@ -194,21 +194,41 @@ class TestSupplierAuth:
         stored_password = dict(cursor.fetchone())['password']
         assert verify_password('888888', stored_password) is True
 
-    def test_default_supplier_password_does_not_override_after_login(self, client, test_db):
-        """已有登录记录的supplier_数字账号不能再被默认密码覆盖"""
+    def test_default_supplier_account_with_login_time_can_login_if_profile_incomplete(self, client, test_db):
+        """资料未完善的supplier_数字账号即使有登录时间，也可用默认密码修复"""
         cursor = test_db.cursor()
         cursor.execute("INSERT INTO suppliers (supplier_name, create_time) VALUES (?, ?)",
-                       ('已登录供应商', '2026-01-01 00:00:00'))
+                       ('未完善供应商', '2026-01-01 00:00:00'))
         supplier_id = cursor.lastrowid
         cursor.execute("""
             INSERT INTO supplier_accounts (supplier_id, username, password, status, is_active, create_time, last_login_time)
             VALUES (?, ?, ?, 'active', 1, ?, ?)
-        """, (supplier_id, 'supplier_00157', hash_password('changed-password'),
+        """, (supplier_id, 'supplier_00157', hash_password('wrong-default'),
               '2026-01-01 00:00:00', '2026-01-02 00:00:00'))
         test_db.commit()
 
         resp = client.post('/api/supplier/login',
                            data=json.dumps({'username': 'supplier_00157', 'password': '888888'}),
+                           content_type='application/json')
+        data = json.loads(resp.data)
+        assert data['success'] is True
+
+    def test_default_supplier_password_does_not_override_completed_profile(self, client, test_db):
+        """资料已完善的supplier_数字账号不能再被默认密码覆盖"""
+        cursor = test_db.cursor()
+        cursor.execute("INSERT INTO suppliers (supplier_name, create_time) VALUES (?, ?)",
+                       ('已完善供应商', '2026-01-01 00:00:00'))
+        supplier_id = cursor.lastrowid
+        cursor.execute("""
+            INSERT INTO supplier_accounts (supplier_id, username, password, status, is_active,
+                profile_completed, create_time, last_login_time)
+            VALUES (?, ?, ?, 'active', 1, 1, ?, ?)
+        """, (supplier_id, 'supplier_00158', hash_password('changed-password'),
+              '2026-01-01 00:00:00', '2026-01-02 00:00:00'))
+        test_db.commit()
+
+        resp = client.post('/api/supplier/login',
+                           data=json.dumps({'username': 'supplier_00158', 'password': '888888'}),
                            content_type='application/json')
         data = json.loads(resp.data)
         assert data['success'] is False
