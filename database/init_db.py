@@ -858,6 +858,42 @@ def init_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_supplier_accounts_supplier ON supplier_accounts(supplier_id)")
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_supplier_accounts_username ON supplier_accounts(username)")
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS petty_cash_loans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            loan_no TEXT UNIQUE NOT NULL,
+            project_id INTEGER NOT NULL,
+            loan_date TEXT NOT NULL,
+            total_amount REAL DEFAULT 0,
+            payment_file_path TEXT,
+            payment_file_name TEXT,
+            creator_id INTEGER,
+            remark TEXT,
+            create_time TEXT,
+            FOREIGN KEY (project_id) REFERENCES projects(id),
+            FOREIGN KEY (creator_id) REFERENCES users(id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS petty_cash_usages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usage_no TEXT UNIQUE NOT NULL,
+            loan_id INTEGER NOT NULL,
+            use_date TEXT NOT NULL,
+            expense_type TEXT NOT NULL,
+            amount REAL DEFAULT 0,
+            handler TEXT,
+            description TEXT,
+            proof_file_path TEXT,
+            proof_file_name TEXT,
+            creator_id INTEGER,
+            create_time TEXT,
+            FOREIGN KEY (loan_id) REFERENCES petty_cash_loans(id),
+            FOREIGN KEY (creator_id) REFERENCES users(id)
+        )
+    """)
+
     conn.commit()
     return conn
 
@@ -926,6 +962,8 @@ def create_indexes(conn=None):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_owner_demands_project_month ON owner_monthly_demands(project_id, plan_month)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_owner_transactions_project_date ON owner_material_transactions(project_id, business_date)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_owner_issues_project_status ON owner_warning_issues(project_id, closure_status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_petty_cash_loans_project ON petty_cash_loans(project_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_petty_cash_usages_loan ON petty_cash_usages(loan_id)")
 
     conn.commit()
 

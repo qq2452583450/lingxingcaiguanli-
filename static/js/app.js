@@ -18,6 +18,9 @@ let baseTransferRecordsCache = [];
 let cartItems = [];
 let selectedMaterialIds = new Set();
 let csrfToken = '';
+let pettyCashLoans = [];
+let pettyCashUsages = [];
+let pettyCashProjects = [];
 
 // ==================== CSRF Token 管理 ====================
 async function fetchCsrfToken() {
@@ -384,6 +387,7 @@ function showModule(module) {
         case 'project': loadProjects(); break;
         case 'reconciliation': loadReconciliation(); break;
         case 'owner_supplied': loadOwnerSupplied(); break;
+        case 'petty_cash': loadPettyCash(); break;
         case 'system': loadUsers(); break;
     }
 }
@@ -405,6 +409,233 @@ async function loadHome() {
         console.error('加载首页数据失败', e);
     }
 }
+
+// ==================== 备用金管理 ====================
+
+function pettyCashMoney(value) {
+    const num = Number(value || 0);
+    return Number.isFinite(num) ? num.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00';
+}
+
+function pettyCashDate(value) {
+    return value ? String(value).slice(0, 10) : '-';
+}
+
+function pettyCashFileLink(filename) {
+    if (!filename) return '-';
+    const url = `/api/petty-cash/files/${encodeURIComponent(filename)}`;
+    return `<a href="${url}" target="_blank" rel="noopener">查看</a>`;
+}
+
+function pettyCashSelectedProjectId() {
+    const el = document.getElementById('pettyCashProjectFilter');
+    return el?.value || '';
+}
+
+function pettyCashQuery(extra = {}) {
+    const params = new URLSearchParams();
+    const projectId = pettyCashSelectedProjectId();
+    if (projectId) params.set('project_id', projectId);
+    Object.entries(extra).forEach(([key, value]) => {
+        if (value) params.set(key, value);
+    });
+    const query = params.toString();
+    return query ? `?${query}` : '';
+}
+
+async function loadPettyCashProjects() {
+    if (pettyCashProjects.length) return;
+    const res = await api('/api/projects?mine=1');
+    const data = await res.json();
+    pettyCashProjects = data.success ? (data.data || []) : [];
+    renderPettyCashProjectOptions();
+}
+
+function renderPettyCashProjectOptions() {
+    const filter = document.getElementById('pettyCashProjectFilter');
+    const loanProject = document.getElementById('pettyCashLoanProject');
+    if (!filter || !loanProject) return;
+
+    const selected = filter.value || (currentProjectId ? String(currentProjectId) : '');
+    const options = pettyCashProjects.map(project => {
+        const id = String(project.id);
+        const name = escapeHtml(project.project_name || project.name || '');
+        return `<option value="${id}" ${id === selected ? 'selected' : ''}>${name}</option>`;
+    }).join('');
+    filter.innerHTML = `<option value="">全部项目</option>${options}`;
+    if (selected) filter.value = selected;
+    loanProject.innerHTML = `<option value="">-- 选择项目 --</option>${options}`;
+}
+
+async function loadPettyCash() {
+    await loadPettyCashProjects();
+    await Promise.all([loadPettyCashSummary(), loadPettyCashLoans(), loadPettyCashUsages()]);
+}
+
+async function loadPettyCashSummary() {
+    try {
+        const res = await api(`/api/petty-cash/summary${pettyCashQuery()}`);
+        const data = await res.json();
+        if (!data.success) return;
+        const summary = data.data || {};
+        document.getElementById('pettyCashTotalAmount').textContent = pettyCashMoney(summary.total_amount);
+        document.getElementById('pettyCashUsedAmount').textContent = pettyCashMoney(summary.used_amount);
+        document.getElementById('pettyCashBalanceAmount').textContent = pettyCashMoney(summary.balance_amount);
+        document.getElementById('pettyCashUsageCount').textContent = summary.usage_count || 0;
+    } catch (e) {
+        showToast('备用金汇总加载失败', 'error');
+    }
+}
+
+async function loadPettyCashLoans() {
+    try {
+        const res = await api(`/api/petty-cash/loans${pettyCashQuery()}`);
+        const data = await res.json();
+        if (!data.success) {
+            showToast(data.message || '备用金记录加载失败', 'error');
+            return;
+        }
+        pettyCashLoans = data.data || [];
+        renderPettyCashLoans();
+        renderPettyCashUsageLoanOptions();
+    } catch (e) {
+        showToast('备用金记录加载失败', 'error');
+    }
+}
+
+async function loadPettyCashUsages() {
+    try {
+        const type = document.getElementById('pettyCashTypeFilter')?.value || '';
+        const res = await api(`/api/petty-cash/usages${pettyCashQuery({ expense_type: type })}`);
+        const data = await res.json();
+        if (!data.success) {
+            showToast(data.message || '使用情况加载失败', 'error');
+            return;
+        }
+        pettyCashUsages = data.data || [];
+        renderPettyCashUsages();
+    } catch (e) {
+        showToast('使用情况加载失败', 'error');
+    }
+}
+
+function renderPettyCashLoans() {
+    const tbody = document.getElementById('pettyCashLoanTable');
+    if (!tbody) return;
+    tbody.innerHTML = pettyCashLoans.length ? pettyCashLoans.map(item => `
+        <tr>
+            <td>${escapeHtml(item.loan_no || '-')}</td>
+            <td>${escapeHtml(item.project_name || '-')}</td>
+            <td>${pettyCashDate(item.loan_date)}</td>
+            <td>${pettyCashMoney(item.total_amount)}</td>
+            <td><strong>${pettyCashMoney(item.balance_amount)}</strong></td>
+            <td>${pettyCashMoney(item.used_amount)}</td>
+            <td>${escapeHtml(item.creator_name || '-')}</td>
+            <td>${pettyCashFileLink(item.payment_file_name)}</td>
+            <td class="owner-long-text">${escapeHtml(item.remark || '-')}</td>
+            <td><button class="btn btn-danger" onclick="deletePettyCashLoan(${item.id})">删除</button></td>
+        </tr>
+    `).join('') : '<tr><td colspan="10" class="empty-message">暂无备用金记录</td></tr>';
+}
+
+function renderPettyCashUsages() {
+    const tbody = document.getElementById('pettyCashUsageTable');
+    if (!tbody) return;
+    tbody.innerHTML = pettyCashUsages.length ? pettyCashUsages.map(item => `
+        <tr>
+            <td>${escapeHtml(item.usage_no || '-')}</td>
+            <td>${escapeHtml(item.loan_no || '-')}</td>
+            <td>${escapeHtml(item.project_name || '-')}</td>
+            <td>${pettyCashDate(item.use_date)}</td>
+            <td>${escapeHtml(item.expense_type || '-')}</td>
+            <td>${pettyCashMoney(item.amount)}</td>
+            <td>${escapeHtml(item.handler || '-')}</td>
+            <td>${pettyCashFileLink(item.proof_file_name)}</td>
+            <td class="owner-long-text">${escapeHtml(item.description || '-')}</td>
+            <td><button class="btn btn-danger" onclick="deletePettyCashUsage(${item.id})">删除</button></td>
+        </tr>
+    `).join('') : '<tr><td colspan="10" class="empty-message">暂无使用情况</td></tr>';
+}
+
+function renderPettyCashUsageLoanOptions() {
+    const select = document.getElementById('pettyCashUsageLoan');
+    if (!select) return;
+    select.innerHTML = '<option value="">-- 选择备用金单号 --</option>' + pettyCashLoans
+        .filter(item => Number(item.balance_amount || 0) > 0)
+        .map(item => `<option value="${item.id}">${escapeHtml(item.loan_no || '')} - ${escapeHtml(item.project_name || '')}（余额 ${pettyCashMoney(item.balance_amount)}）</option>`)
+        .join('');
+}
+
+function openPettyCashLoanModal() {
+    renderPettyCashProjectOptions();
+    document.getElementById('pettyCashLoanForm').reset();
+    document.getElementById('pettyCashLoanDate').value = new Date().toISOString().slice(0, 10);
+    const selectedProject = pettyCashSelectedProjectId() || (currentProjectId ? String(currentProjectId) : '');
+    if (selectedProject) document.getElementById('pettyCashLoanProject').value = selectedProject;
+    openModal('modal-petty-cash-loan');
+}
+
+function openPettyCashUsageModal() {
+    renderPettyCashUsageLoanOptions();
+    document.getElementById('pettyCashUsageForm').reset();
+    document.getElementById('pettyCashUsageDate').value = new Date().toISOString().slice(0, 10);
+    document.getElementById('pettyCashHandler').value = currentUser?.real_name || '';
+    openModal('modal-petty-cash-usage');
+}
+
+async function deletePettyCashLoan(id) {
+    if (!confirm('确定删除该备用金借款记录吗？已有使用明细的记录不能删除。')) return;
+    const res = await api(`/api/petty-cash/loans/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!data.success) {
+        showToast(data.message || '删除失败', 'error');
+        return;
+    }
+    showToast('删除成功', 'success');
+    await loadPettyCash();
+}
+
+async function deletePettyCashUsage(id) {
+    if (!confirm('确定删除该使用情况记录吗？删除后会恢复对应备用金余额。')) return;
+    const res = await api(`/api/petty-cash/usages/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!data.success) {
+        showToast(data.message || '删除失败', 'error');
+        return;
+    }
+    showToast('删除成功', 'success');
+    await loadPettyCash();
+}
+
+document.getElementById('pettyCashLoanForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const formData = new FormData(form);
+    const res = await api('/api/petty-cash/loans', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (!data.success) {
+        showToast(data.message || '保存失败', 'error');
+        return;
+    }
+    closeModal('modal-petty-cash-loan');
+    showToast(`保存成功，单号：${data.loan_no}`, 'success');
+    await loadPettyCash();
+});
+
+document.getElementById('pettyCashUsageForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const formData = new FormData(form);
+    const res = await api('/api/petty-cash/usages', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (!data.success) {
+        showToast(data.message || '保存失败', 'error');
+        return;
+    }
+    closeModal('modal-petty-cash-usage');
+    showToast(`保存成功，明细单号：${data.usage_no}`, 'success');
+    await loadPettyCash();
+});
 
 // ==================== 材料管理 ====================
 
