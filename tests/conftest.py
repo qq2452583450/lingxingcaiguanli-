@@ -440,6 +440,38 @@ def test_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE petty_cash_loans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            loan_no TEXT UNIQUE NOT NULL,
+            project_id INTEGER NOT NULL,
+            loan_date TEXT NOT NULL,
+            total_amount REAL DEFAULT 0,
+            payment_file_path TEXT,
+            payment_file_name TEXT,
+            creator_id INTEGER,
+            remark TEXT,
+            create_time TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE petty_cash_usages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usage_no TEXT UNIQUE NOT NULL,
+            loan_id INTEGER NOT NULL,
+            use_date TEXT NOT NULL,
+            expense_type TEXT NOT NULL,
+            amount REAL DEFAULT 0,
+            handler TEXT,
+            description TEXT,
+            proof_file_path TEXT,
+            proof_file_name TEXT,
+            creator_id INTEGER,
+            create_time TEXT
+        )
+    """)
+
     conn.commit()
 
     yield conn
@@ -463,7 +495,8 @@ def app(test_db):
     # 注册真实蓝图（config.DATABASE_PATH 已由 test_db fixture 设为临时文件路径）
     from blueprints import (
         auth_bp, material_bp, inquiry_bp, stock_bp,
-        sales_bp, reconciliation_bp, system_bp, dashboard_bp, transfer_bp
+        sales_bp, reconciliation_bp, system_bp, dashboard_bp, transfer_bp,
+        petty_cash_bp
     )
     app.register_blueprint(auth_bp)
     app.register_blueprint(material_bp)
@@ -474,6 +507,7 @@ def app(test_db):
     app.register_blueprint(system_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(transfer_bp)
+    app.register_blueprint(petty_cash_bp)
 
     return app
 

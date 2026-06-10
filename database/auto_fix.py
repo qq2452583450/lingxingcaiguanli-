@@ -356,6 +356,32 @@ def auto_fix_database():
             'detail': 'TEXT',
             'create_time': 'TEXT',
         },
+        'petty_cash_loans': {
+            'id': 'INTEGER PRIMARY KEY AUTOINCREMENT',
+            'loan_no': 'TEXT UNIQUE NOT NULL',
+            'project_id': 'INTEGER NOT NULL',
+            'loan_date': 'TEXT NOT NULL',
+            'total_amount': 'REAL DEFAULT 0',
+            'payment_file_path': 'TEXT',
+            'payment_file_name': 'TEXT',
+            'creator_id': 'INTEGER',
+            'remark': 'TEXT',
+            'create_time': 'TEXT',
+        },
+        'petty_cash_usages': {
+            'id': 'INTEGER PRIMARY KEY AUTOINCREMENT',
+            'usage_no': 'TEXT UNIQUE NOT NULL',
+            'loan_id': 'INTEGER NOT NULL',
+            'use_date': 'TEXT NOT NULL',
+            'expense_type': 'TEXT NOT NULL',
+            'amount': 'REAL DEFAULT 0',
+            'handler': 'TEXT',
+            'description': 'TEXT',
+            'proof_file_path': 'TEXT',
+            'proof_file_name': 'TEXT',
+            'creator_id': 'INTEGER',
+            'create_time': 'TEXT',
+        },
     }
 
     fixed_count = 0
