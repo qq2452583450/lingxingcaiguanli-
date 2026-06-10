@@ -2339,6 +2339,184 @@ def get_drafts():
     return jsonify({'success': True, 'data': drafts})
 
 
+@inquiry_bp.route('/purchase-inquiries/draft/<int:draft_id>/export-quote-sheet', methods=['GET'])
+def export_draft_quote_sheet(draft_id):
+    """导出草稿询价表，供材料员发给供应商填写报价。"""
+    from io import BytesIO
+    from urllib.parse import quote as url_quote
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT pi.*, p.project_code, p.project_name
+        FROM purchase_inquiries pi
+        LEFT JOIN projects p ON pi.project_id = p.id
+        WHERE pi.id = ?
+    """, (draft_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({'success': False, 'message': '草稿不存在'}), 404
+
+    draft = dict(row)
+    if draft.get('approval_status') != '草稿':
+        conn.close()
+        return jsonify({'success': False, 'message': '该询价单不是草稿'})
+    if draft.get('applicant_id') != user.get('id'):
+        conn.close()
+        return jsonify({'success': False, 'message': '只有申请人可以导出此草稿'}), 403
+
+    cursor.execute("""
+        SELECT i.id AS item_id, i.quantity, i.tax_rate, i.is_national_standard,
+               COALESCE(i.detail_spec, m.detail_spec, m.specification, '') AS export_spec,
+               COALESCE(i.brand, m.brand, '') AS export_brand,
+               m.material_name, m.specification, u.unit_name
+        FROM purchase_inquiry_items i
+        LEFT JOIN materials m ON m.id = i.material_id
+        LEFT JOIN units u ON u.id = m.unit_id
+        WHERE i.inquiry_id = ?
+        ORDER BY i.id
+    """, (draft_id,))
+    items = [dict(r) for r in cursor.fetchall()]
+    if not items:
+        conn.close()
+        return jsonify({'success': False, 'message': '草稿没有询价材料明细'})
+
+    item_ids = [item['item_id'] for item in items]
+    placeholders = ','.join('?' * len(item_ids))
+    cursor.execute(f"""
+        SELECT q.item_id, q.supplier_id, q.tax_rate, s.supplier_name
+        FROM purchase_inquiry_quotes q
+        LEFT JOIN suppliers s ON s.id = q.supplier_id
+        WHERE q.item_id IN ({placeholders}) AND q.supplier_id IS NOT NULL
+        ORDER BY q.id
+    """, item_ids)
+    suppliers = []
+    seen_suppliers = set()
+    for quote_row in cursor.fetchall():
+        quote_data = dict(quote_row)
+        supplier_id = quote_data.get('supplier_id')
+        if supplier_id in seen_suppliers:
+            continue
+        seen_suppliers.add(supplier_id)
+        suppliers.append({
+            'id': supplier_id,
+            'name': quote_data.get('supplier_name') or '供应商',
+            'tax_rate': quote_data.get('tax_rate') if quote_data.get('tax_rate') is not None else 0.01,
+        })
+    conn.close()
+
+    if not suppliers:
+        suppliers = [{'id': None, 'name': '供应商', 'tax_rate': 0.01}]
+
+    def tax_label(rate):
+        try:
+            return f"{int(round(float(rate) * 100))}%专票"
+        except (TypeError, ValueError):
+            return '专票'
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = '询价表'
+
+    base_cols = 7
+    total_cols = base_cols + len(suppliers) * 2
+    last_col = get_column_letter(total_cols)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=base_cols)
+    ws.merge_cells(start_row=2, start_column=base_cols + 1, end_row=2, end_column=total_cols)
+
+    ws['A1'] = '零星材采购比价表'
+    ws['A1'].font = Font(name='宋体', size=18, bold=True)
+    ws['A1'].alignment = Alignment(horizontal='center', vertical='center')
+    project_display = format_project_display(draft.get('project_code'), draft.get('project_name'))
+    ws['A2'] = f'项目名称：{project_display}'
+    ws.cell(row=2, column=base_cols + 1, value=f'时间：{draft.get("inquiry_date") or ""}')
+
+    headers = ['序号', '材料名称', '规格型号', '品牌', '是否国标', '单位', '数量']
+    for supplier in suppliers:
+        headers.extend([f'{supplier["name"]}单价{tax_label(supplier.get("tax_rate"))}', f'{supplier["name"]}总价'])
+
+    thin = Side(style='thin', color='000000')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    header_fill = PatternFill(start_color='D9EAF7', end_color='D9EAF7', fill_type='solid')
+    center = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    left = Alignment(horizontal='left', vertical='center', wrap_text=True)
+    right = Alignment(horizontal='right', vertical='center')
+
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=3, column=col, value=header)
+        cell.font = Font(name='宋体', size=11, bold=True)
+        cell.fill = header_fill
+        cell.border = border
+        cell.alignment = center
+
+    for idx, item in enumerate(items, 1):
+        row_idx = idx + 3
+        row_values = [
+            idx,
+            item.get('material_name') or '',
+            item.get('export_spec') or item.get('specification') or '',
+            item.get('export_brand') or '',
+            '是' if item.get('is_national_standard') else '否',
+            item.get('unit_name') or '',
+            item.get('quantity') or 0,
+        ]
+        for col, value in enumerate(row_values, 1):
+            cell = ws.cell(row=row_idx, column=col, value=value)
+            cell.border = border
+            cell.alignment = center if col in (1, 5, 6, 7) else left
+        for supplier_idx, _supplier in enumerate(suppliers):
+            price_col = base_cols + 1 + supplier_idx * 2
+            total_col = price_col + 1
+            price_cell = ws.cell(row=row_idx, column=price_col, value=None)
+            total_cell = ws.cell(row=row_idx, column=total_col, value=f'=IF({get_column_letter(price_col)}{row_idx}="","",{get_column_letter(price_col)}{row_idx}*$G{row_idx})')
+            for cell in (price_cell, total_cell):
+                cell.border = border
+                cell.alignment = right
+                cell.number_format = '#,##0.00'
+
+    ws.row_dimensions[1].height = 46
+    ws.row_dimensions[2].height = 22
+    ws.row_dimensions[3].height = 42
+    for row_idx in range(4, 4 + len(items)):
+        ws.row_dimensions[row_idx].height = 25
+
+    widths = {
+        'A': 4, 'B': 24, 'C': 36, 'D': 10, 'E': 10, 'F': 10, 'G': 9,
+    }
+    for col, width in widths.items():
+        ws.column_dimensions[col].width = width
+    for col_idx in range(8, total_cols + 1):
+        ws.column_dimensions[get_column_letter(col_idx)].width = 16 if col_idx % 2 else 12
+
+    for row in ws.iter_rows(min_row=1, max_row=3 + len(items), min_col=1, max_col=total_cols):
+        for cell in row:
+            cell.border = border
+            if not cell.font or cell.font.name is None:
+                cell.font = Font(name='宋体', size=11)
+    ws.freeze_panes = 'A4'
+    ws.auto_filter.ref = f'A3:{last_col}{3 + len(items)}'
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    filename = f'询价表_{draft.get("inquiry_no") or draft_id}.xlsx'
+    encoded_filename = url_quote(filename)
+    response = make_response(output.getvalue())
+    response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    response.headers['Content-Disposition'] = f"attachment; filename*=UTF-8''{encoded_filename}"
+    return response
+
+
 @inquiry_bp.route('/purchase-inquiries/draft/<int:draft_id>/submit', methods=['POST'])
 def submit_draft(draft_id):
     """提交草稿（转为待审批）"""

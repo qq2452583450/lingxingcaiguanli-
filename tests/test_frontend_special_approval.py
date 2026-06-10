@@ -17,3 +17,11 @@ def test_frontend_allows_approval_entry_for_unpublished_quote_status():
     assert "function isInquiryApprovalOpen" in source
     assert "报价未发布" in source
     assert "isInquiryApprovalOpen(i.approval_status)" in source
+
+
+def test_frontend_draft_rows_include_export_quote_sheet_action():
+    source = Path("static/js/app.js").read_text(encoding="utf-8")
+
+    assert "导出询价表" in source
+    assert "function exportDraftQuoteSheet" in source
+    assert "/api/purchase-inquiries/draft/${id}/export-quote-sheet" in source

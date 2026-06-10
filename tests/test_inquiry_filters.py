@@ -720,3 +720,71 @@ def test_export_supplier_orders_shows_city_code_and_project_name(client, test_db
     sheet = workbook["测试供应商"]
 
     assert sheet["A4"].value == "项目：成都 / CD-QUOTE / 成都报价项目"
+
+
+def test_export_draft_inquiry_xlsx_matches_quote_template(client, test_db):
+    cursor = test_db.cursor()
+    create_inquiry_delete_tables(cursor)
+    ensure_project_id_column(cursor)
+    clerk_id = seed_role_user(cursor, "材料员", "clerk_export", "材料员")
+    cursor.execute(
+        "INSERT INTO projects (project_code, project_name, create_time) VALUES (?, ?, ?)",
+        ("CD-DRAFT", "成都草稿项目", "2026-01-01 09:00:00"),
+    )
+    project_id = cursor.lastrowid
+    cursor.execute("INSERT INTO suppliers (supplier_name) VALUES (?)", ("测试供应商",))
+    supplier_id = cursor.lastrowid
+    cursor.execute("INSERT INTO units (unit_name) VALUES (?)", ("个",))
+    unit_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO materials (material_code, material_name, specification, unit_id)
+        VALUES (?, ?, ?, ?)
+        """,
+        ("CDLX00002", "测试材料", "DN25", unit_id),
+    )
+    material_id = cursor.lastrowid
+    inquiry_id = seed_inquiry(cursor, "XJ-DRAFT-EXPORT", clerk_id, status="草稿", project_id=project_id)
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiry_items (
+            inquiry_id, material_id, quantity, tax_rate, is_national_standard,
+            detail_spec, brand, create_time
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (inquiry_id, material_id, 5, 0.01, 1, "加厚", "测试品牌", "2026-06-06 10:00:00"),
+    )
+    item_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiry_quotes (
+            item_id, supplier_id, tax_price, tax_exempt_price, tax_rate,
+            total_amount, is_lowest, is_selected, create_time
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (item_id, supplier_id, 0, 0, 0.01, 0, 0, 0, "2026-06-06 10:00:00"),
+    )
+    test_db.commit()
+    set_session_user(client, clerk_id, "clerk_export", "材料员", "材料员")
+
+    response = client.get(f"/api/purchase-inquiries/draft/{inquiry_id}/export-quote-sheet")
+
+    assert response.status_code == 200
+    assert response.headers["Content-Type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert "filename*=UTF-8''" in response.headers["Content-Disposition"]
+    workbook = load_workbook(BytesIO(response.data), data_only=False)
+    sheet = workbook.active
+
+    assert sheet.title == "询价表"
+    assert sheet["A1"].value == "零星材采购比价表"
+    assert sheet["A2"].value == "项目名称：成都 / CD-DRAFT / 成都草稿项目"
+    assert sheet["H2"].value == "时间：2026-06-06"
+    assert [sheet.cell(3, col).value for col in range(1, 10)] == [
+        "序号", "材料名称", "规格型号", "品牌", "是否国标", "单位", "数量", "测试供应商单价1%专票", "测试供应商总价"
+    ]
+    assert [sheet.cell(4, col).value for col in range(1, 8)] == [
+        1, "测试材料", "加厚", "测试品牌", "是", "个", 5
+    ]
+    assert sheet["I4"].value == '=IF(H4="","",H4*$G4)'
