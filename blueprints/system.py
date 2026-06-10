@@ -177,6 +177,37 @@ def _get_or_create_role(cursor, role_name):
     return cursor.lastrowid
 
 
+def _ensure_supplier_user_account(cursor, supplier, now=None):
+    if supplier.get('user_id') and supplier.get('account_username'):
+        return supplier['user_id'], supplier['account_username'], False
+
+    now = now or datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    supplier_id = supplier['id']
+    supplier_name = supplier.get('supplier_name') or f'供应商{supplier_id}'
+    username = f'supplier_{supplier_id:05d}'
+    role_id = _get_or_create_role(cursor, '供应商')
+
+    cursor.execute("SELECT id FROM users WHERE username = ?", (username,))
+    user_row = cursor.fetchone()
+    if user_row:
+        user_id = user_row['id'] if hasattr(user_row, 'keys') else user_row[0]
+        cursor.execute("""
+            UPDATE users
+            SET real_name = ?, role_id = ?, is_active = 1, must_change_password = 1
+            WHERE id = ?
+        """, (supplier_name, role_id, user_id))
+    else:
+        cursor.execute("""
+            INSERT INTO users (
+                username, password, real_name, role_id, is_active, create_time, must_change_password
+            ) VALUES (?, ?, ?, ?, 1, ?, 1)
+        """, (username, hash_password('888888'), supplier_name, role_id, now))
+        user_id = cursor.lastrowid
+
+    cursor.execute("UPDATE suppliers SET user_id = ? WHERE id = ?", (user_id, supplier_id))
+    return user_id, username, True
+
+
 @system_bp.route('/suppliers', methods=['GET'])
 def get_suppliers():
     """获取所有供应商"""
@@ -189,6 +220,15 @@ def get_suppliers():
         ORDER BY s.supplier_name
     """)
     suppliers = [dict(row) for row in cursor.fetchall()]
+    changed = False
+    for supplier in suppliers:
+        _user_id, username, created = _ensure_supplier_user_account(cursor, supplier)
+        if created:
+            supplier['user_id'] = _user_id
+            supplier['account_username'] = username
+            changed = True
+    if changed:
+        conn.commit()
     conn.close()
     return jsonify({'success': True, 'data': suppliers})
 

@@ -483,6 +483,13 @@ function canDeleteInquiry(inquiry) {
     return isAdmin() || (isMaterialClerk() && inquiry.approval_status === '草稿');
 }
 
+function canCreateSupplier() {
+    const user = JSON.parse(sessionStorage.getItem('currentUser') || '{}');
+    const username = String(user.username || '').toLowerCase();
+    const realName = String(user.real_name || '');
+    return isAdmin() || isMaterialClerk() || username === 'tanxiang' || realName === '谭香';
+}
+
 function applyPermissionControls() {
     document.querySelectorAll('.admin-only').forEach(el => {
         el.style.display = isAdmin() ? '' : 'none';
@@ -501,6 +508,9 @@ function applyPermissionControls() {
     // 材料员不能删除供应商
     document.querySelectorAll('.supplier-delete-btn').forEach(el => {
         el.style.display = isAdmin() ? '' : 'none';
+    });
+    document.querySelectorAll('.supplier-create-btn').forEach(el => {
+        el.style.display = canCreateSupplier() ? '' : 'none';
     });
 }
 

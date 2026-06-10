@@ -67,6 +67,41 @@ def test_create_supplier_generates_default_account_requiring_password_change(cli
     assert verify_password("888888", user["password"]) is True
 
 
+def test_supplier_list_backfills_accounts_for_existing_suppliers(client, test_db):
+    cursor = test_db.cursor()
+    admin_id = seed_user(cursor, "admin", "管理员", "系统管理员")
+    cursor.execute(
+        "INSERT INTO suppliers (supplier_name, contact, phone, create_time) VALUES (?, ?, ?, ?)",
+        ("历史供应商", "李四", "13900000000", "2026-01-01 09:00:00"),
+    )
+    supplier_id = cursor.lastrowid
+    test_db.commit()
+    set_session_user(client, admin_id, "admin", "管理员", "系统管理员")
+
+    response = client.get("/api/suppliers")
+    data = response.get_json()
+
+    assert data["success"] is True
+    supplier = next(row for row in data["data"] if row["id"] == supplier_id)
+    assert supplier["account_username"] == f"supplier_{supplier_id:05d}"
+
+    row = test_db.execute(
+        """
+        SELECT u.username, u.password, u.real_name, u.must_change_password, r.role_name
+        FROM suppliers s
+        JOIN users u ON s.user_id = u.id
+        LEFT JOIN roles r ON u.role_id = r.id
+        WHERE s.id = ?
+        """,
+        (supplier_id,),
+    ).fetchone()
+    assert row["username"] == f"supplier_{supplier_id:05d}"
+    assert row["real_name"] == "历史供应商"
+    assert row["role_name"] == "供应商"
+    assert row["must_change_password"] == 1
+    assert verify_password("888888", row["password"]) is True
+
+
 def test_supplier_login_requires_password_change_then_can_clear_flag(client, test_db):
     cursor = test_db.cursor()
     role_id = seed_role(cursor, "供应商")
