@@ -1564,6 +1564,8 @@ function renderInquiryTable(inquiries) {
                     `<button class="btn btn-info" style="padding:4px 8px;font-size:12px;" onclick="recallInquiry(${i.id})">撤回</button>` : ''}
                 ${(i.approval_status === '退回修改' || i.approval_status === '草稿') && currentUser && i.applicant_id === currentUser.id ?
                     `<button class="btn btn-success" style="padding:4px 8px;font-size:12px;" onclick="editInquiry(${i.id})">编辑</button>` : ''}
+                ${i.approval_status === '草稿' && currentUser && i.applicant_id === currentUser.id ?
+                    `<button class="btn btn-secondary" style="padding:4px 8px;font-size:12px;" onclick="exportDraftQuoteSheet(${i.id})">询比价导出</button>` : ''}
                 ${canDeleteInquiry(i) ?
                     `<button class="btn btn-danger" style="padding:4px 8px;font-size:12px;" onclick="deleteInquiry(${i.id})">删除</button>` : ''}
             </td>
@@ -4883,7 +4885,7 @@ function renderDraftsTable(drafts) {
             <td>${d.remark || '-'}</td>
             <td style="white-space:nowrap;">
                 <button class="btn btn-success" style="padding:4px 8px;font-size:12px;" onclick="editInquiry(${d.id})">继续编辑</button>
-                <button class="btn btn-secondary" style="padding:4px 8px;font-size:12px;" onclick="exportDraftQuoteSheet(${d.id})">导出询价表</button>
+                <button class="btn btn-secondary" style="padding:4px 8px;font-size:12px;" onclick="exportDraftQuoteSheet(${d.id})">询比价导出</button>
                 <button class="btn btn-danger" style="padding:4px 8px;font-size:12px;" onclick="deleteInquiryDraft(${d.id})">删除</button>
             </td>
         </tr>
