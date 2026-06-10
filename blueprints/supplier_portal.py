@@ -52,6 +52,18 @@ def _current_supplier():
     return session.get('supplier_user')
 
 
+def _can_upgrade_default_supplier_password(username, password, stored_password, account):
+    """兼容批量生成的 supplier_数字 默认账号首次登录。"""
+    suffix = username.removeprefix('supplier_')
+    is_default_supplier_account = username.startswith('supplier_') and suffix.isdigit()
+    has_never_logged_in = not account.get('last_login_time')
+    return (
+        is_default_supplier_account
+        and password == '888888'
+        and has_never_logged_in
+    )
+
+
 # ==================== 注册 ====================
 
 @supplier_bp.route('/register', methods=['POST'])
@@ -143,6 +155,9 @@ def login():
     if verify_password(password, account['password']):
         password_ok = True
     elif account['password'] == password:
+        password_ok = True
+        password_needs_upgrade = True
+    elif _can_upgrade_default_supplier_password(username, password, account['password'], account):
         password_ok = True
         password_needs_upgrade = True
     else:
