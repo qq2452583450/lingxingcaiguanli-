@@ -54,8 +54,9 @@ def _current_supplier():
 
 def _can_upgrade_default_supplier_password(username, password, stored_password, account):
     """兼容批量生成的 supplier_数字 默认账号首次登录。"""
-    suffix = username.removeprefix('supplier_')
-    is_default_supplier_account = username.startswith('supplier_') and suffix.isdigit()
+    prefix = 'supplier_'
+    suffix = username[len(prefix):] if username.startswith(prefix) else ''
+    is_default_supplier_account = bool(suffix) and suffix.isdigit()
     profile_incomplete = not account.get('profile_completed')
     return (
         is_default_supplier_account
@@ -65,9 +66,10 @@ def _can_upgrade_default_supplier_password(username, password, stored_password, 
 
 
 def _default_supplier_id_from_username(username, password):
-    if password != '888888' or not username.startswith('supplier_'):
+    prefix = 'supplier_'
+    if password != '888888' or not username.startswith(prefix):
         return None
-    suffix = username.removeprefix('supplier_')
+    suffix = username[len(prefix):]
     if not suffix.isdigit():
         return None
     return int(suffix)
