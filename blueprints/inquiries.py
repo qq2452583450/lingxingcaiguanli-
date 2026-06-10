@@ -2344,9 +2344,8 @@ def export_draft_quote_sheet(draft_id):
     """导出草稿询价表，供材料员发给供应商填写报价。"""
     from io import BytesIO
     from urllib.parse import quote as url_quote
-    from openpyxl import Workbook
-    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-    from openpyxl.utils import get_column_letter
+    from zipfile import ZIP_DEFLATED, ZipFile
+    from xml.sax.saxutils import escape as xml_escape
 
     user = session.get('user')
     if not user:
@@ -2439,42 +2438,56 @@ def export_draft_quote_sheet(draft_id):
         except (TypeError, ValueError):
             return '专票'
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = '询价表'
-
     base_cols = 7
     total_cols = base_cols + len(suppliers) * 2
-    last_col = get_column_letter(total_cols)
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=base_cols)
-    ws.merge_cells(start_row=2, start_column=base_cols + 1, end_row=2, end_column=total_cols)
 
-    ws['A1'] = '零星材采购比价表'
-    ws['A1'].font = Font(name='宋体', size=18, bold=True)
-    ws['A1'].alignment = Alignment(horizontal='center', vertical='center')
+    def col_name(index):
+        name = ''
+        while index:
+            index, rem = divmod(index - 1, 26)
+            name = chr(65 + rem) + name
+        return name
+
+    def cell_ref(row, col):
+        return f'{col_name(col)}{row}'
+
+    def cell_xml(row, col, value=None, style=1, formula=None):
+        ref = cell_ref(row, col)
+        style_attr = f' s="{style}"' if style else ''
+        if formula:
+            return f'<c r="{ref}"{style_attr}><f>{xml_escape(formula)}</f></c>'
+        if value is None or value == '':
+            return f'<c r="{ref}"{style_attr}/>'
+        if isinstance(value, (int, float)):
+            return f'<c r="{ref}"{style_attr}><v>{value}</v></c>'
+        text = xml_escape(str(value))
+        return f'<c r="{ref}" t="inlineStr"{style_attr}><is><t xml:space="preserve">{text}</t></is></c>'
+
+    last_col = col_name(total_cols)
     project_display = format_project_display(draft.get('project_code'), draft.get('project_name'))
-    ws['A2'] = f'项目名称：{project_display}'
-    ws.cell(row=2, column=base_cols + 1, value=f'时间：{draft.get("inquiry_date") or ""}')
-
     headers = ['序号', '材料名称', '规格型号', '品牌', '是否国标', '单位', '数量']
     for supplier in suppliers:
         headers.extend([f'{supplier["name"]}单价{tax_label(supplier.get("tax_rate"))}', f'{supplier["name"]}总价'])
 
-    thin = Side(style='thin', color='000000')
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    header_fill = PatternFill(start_color='D9EAF7', end_color='D9EAF7', fill_type='solid')
-    center = Alignment(horizontal='center', vertical='center', wrap_text=True)
-    left = Alignment(horizontal='left', vertical='center', wrap_text=True)
-    right = Alignment(horizontal='right', vertical='center')
+    rows_xml = []
+    rows_xml.append(
+        '<row r="1" ht="46" customHeight="1">'
+        + cell_xml(1, 1, '零星材采购比价表', style=2)
+        + '</row>'
+    )
+    rows_xml.append(
+        '<row r="2" ht="22" customHeight="1">'
+        + cell_xml(2, 1, f'项目名称：{project_display}', style=1)
+        + cell_xml(2, base_cols + 1, f'时间：{draft.get("inquiry_date") or ""}', style=1)
+        + '</row>'
+    )
+    rows_xml.append(
+        '<row r="3" ht="42" customHeight="1">'
+        + ''.join(cell_xml(3, col, header, style=3) for col, header in enumerate(headers, 1))
+        + '</row>'
+    )
 
-    for col, header in enumerate(headers, 1):
-        cell = ws.cell(row=3, column=col, value=header)
-        cell.font = Font(name='宋体', size=11, bold=True)
-        cell.fill = header_fill
-        cell.border = border
-        cell.alignment = center
-
+    data_rows = []
     for idx, item in enumerate(items, 1):
         row_idx = idx + 3
         row_values = [
@@ -2486,44 +2499,78 @@ def export_draft_quote_sheet(draft_id):
             item.get('unit_name') or '',
             item.get('quantity') or 0,
         ]
-        for col, value in enumerate(row_values, 1):
-            cell = ws.cell(row=row_idx, column=col, value=value)
-            cell.border = border
-            cell.alignment = center if col in (1, 5, 6, 7) else left
+        cells = [cell_xml(row_idx, col, value, style=1) for col, value in enumerate(row_values, 1)]
         for supplier_idx, _supplier in enumerate(suppliers):
             price_col = base_cols + 1 + supplier_idx * 2
             total_col = price_col + 1
-            price_cell = ws.cell(row=row_idx, column=price_col, value=None)
-            total_cell = ws.cell(row=row_idx, column=total_col, value=f'=IF({get_column_letter(price_col)}{row_idx}="","",{get_column_letter(price_col)}{row_idx}*$G{row_idx})')
-            for cell in (price_cell, total_cell):
-                cell.border = border
-                cell.alignment = right
-                cell.number_format = '#,##0.00'
+            price_ref = cell_ref(row_idx, price_col)
+            cells.append(cell_xml(row_idx, price_col, None, style=4))
+            cells.append(cell_xml(row_idx, total_col, style=4, formula=f'IF({price_ref}="","",{price_ref}*$G{row_idx})'))
+        data_rows.append(f'<row r="{row_idx}" ht="25" customHeight="1">{"".join(cells)}</row>')
+    rows_xml.extend(data_rows)
 
-    ws.row_dimensions[1].height = 46
-    ws.row_dimensions[2].height = 22
-    ws.row_dimensions[3].height = 42
-    for row_idx in range(4, 4 + len(items)):
-        ws.row_dimensions[row_idx].height = 25
+    col_widths = {1: 4, 2: 24, 3: 36, 4: 10, 5: 10, 6: 10, 7: 9}
+    cols_xml = ''.join(
+        f'<col min="{idx}" max="{idx}" width="{col_widths.get(idx, 16 if idx % 2 else 12)}" customWidth="1"/>'
+        for idx in range(1, total_cols + 1)
+    )
+    merges_xml = (
+        '<mergeCells count="3">'
+        f'<mergeCell ref="A1:{last_col}1"/>'
+        f'<mergeCell ref="A2:{col_name(base_cols)}2"/>'
+        f'<mergeCell ref="{col_name(base_cols + 1)}2:{last_col}2"/>'
+        '</mergeCells>'
+    )
+    sheet_xml = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheetViews><sheetView workbookViewId="0"><pane ySplit="3" topLeftCell="A4" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+  <cols>{cols_xml}</cols>
+  <sheetData>{''.join(rows_xml)}</sheetData>
+  {merges_xml}
+  <autoFilter ref="A3:{last_col}{3 + len(items)}"/>
+</worksheet>'''
 
-    widths = {
-        'A': 4, 'B': 24, 'C': 36, 'D': 10, 'E': 10, 'F': 10, 'G': 9,
-    }
-    for col, width in widths.items():
-        ws.column_dimensions[col].width = width
-    for col_idx in range(8, total_cols + 1):
-        ws.column_dimensions[get_column_letter(col_idx)].width = 16 if col_idx % 2 else 12
-
-    for row in ws.iter_rows(min_row=1, max_row=3 + len(items), min_col=1, max_col=total_cols):
-        for cell in row:
-            cell.border = border
-            if not cell.font or cell.font.name is None:
-                cell.font = Font(name='宋体', size=11)
-    ws.freeze_panes = 'A4'
-    ws.auto_filter.ref = f'A3:{last_col}{3 + len(items)}'
+    styles_xml = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="3"><font><sz val="11"/><name val="宋体"/></font><font><b/><sz val="18"/><name val="宋体"/></font><font><b/><sz val="11"/><name val="宋体"/></font></fonts>
+  <fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFD9EAF7"/><bgColor indexed="64"/></patternFill></fill></fills>
+  <borders count="2"><border/><border><left style="thin"/><right style="thin"/><top style="thin"/><bottom style="thin"/><diagonal/></border></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="5">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"><alignment vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="2" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="4" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
+  </cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>'''
 
     output = BytesIO()
-    wb.save(output)
+    with ZipFile(output, 'w', ZIP_DEFLATED) as xlsx:
+        xlsx.writestr('[Content_Types].xml', '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>''')
+        xlsx.writestr('_rels/.rels', '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>''')
+        xlsx.writestr('xl/workbook.xml', '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets><sheet name="询价表" sheetId="1" r:id="rId1"/></sheets>
+</workbook>''')
+        xlsx.writestr('xl/_rels/workbook.xml.rels', '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>''')
+        xlsx.writestr('xl/worksheets/sheet1.xml', sheet_xml)
+        xlsx.writestr('xl/styles.xml', styles_xml)
     output.seek(0)
 
     filename = f'询价表_{draft.get("inquiry_no") or draft_id}.xlsx'
