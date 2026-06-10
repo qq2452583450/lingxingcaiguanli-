@@ -978,7 +978,7 @@ def _approve_inquiry_impl(inquiry_id):
         cursor.execute("""
             UPDATE purchase_inquiries
             SET approval_status = '已驳回', approver_id = ?, approve_time = ?, approval_remark = ?
-            WHERE id = ? AND approval_status IN ('待审批', '材料员已审')
+            WHERE id = ? AND approval_status IN ('待审批', '材料员已审', '报价未发布')
         """, (user['id'], now, remark, inquiry_id))
         updated_rows = cursor.rowcount
     elif action == 'return':
@@ -1042,7 +1042,7 @@ def _approve_inquiry_impl(inquiry_id):
         cursor.execute("""
             UPDATE purchase_inquiries
             SET approval_status = '退回修改', approver_id = ?, approve_time = ?, approval_remark = ?
-            WHERE id = ? AND approval_status IN ('待审批', '材料员已审', '已同意')
+            WHERE id = ? AND approval_status IN ('待审批', '材料员已审', '已同意', '报价未发布')
         """, (user['id'], now, remark, inquiry_id))
         updated_rows = cursor.rowcount
     elif action == 'material_clerk':
@@ -1058,7 +1058,7 @@ def _approve_inquiry_impl(inquiry_id):
             if username not in SPECIAL_APPROVER_USERNAMES:
                 conn.close()
                 return jsonify({'success': False, 'message': '该询价单必须由雷克峰和谭香审批'})
-            if special_ctx['approval_status'] not in ('待审批', '材料员已审', '退回修改'):
+            if special_ctx['approval_status'] not in ('待审批', '材料员已审', '退回修改', '报价未发布'):
                 conn.close()
                 return jsonify({'success': False, 'message': '操作失败，状态已更新'})
 
@@ -1081,7 +1081,7 @@ def _approve_inquiry_impl(inquiry_id):
         cursor.execute("""
             UPDATE purchase_inquiries
             SET approval_status = '已同意', approver_id = ?, approve_time = ?, approval_remark = ?
-            WHERE id = ? AND approval_status IN ('待审批', '材料员已审', '退回修改')
+            WHERE id = ? AND approval_status IN ('待审批', '材料员已审', '退回修改', '报价未发布')
         """, (user['id'], now, remark, inquiry_id))
         updated_rows = cursor.rowcount
 

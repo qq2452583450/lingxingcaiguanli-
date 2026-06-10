@@ -417,6 +417,44 @@ def test_material_approval_owner_can_approve_inquiry(client, test_db):
     assert data["success"] is True
 
 
+def test_admin_and_material_approval_owner_can_approve_unpublished_quote_inquiry(client, test_db):
+    cursor = test_db.cursor()
+    create_inquiry_delete_tables(cursor)
+    ensure_project_id_column(cursor)
+    ensure_stock_in_project_id_column(cursor)
+    admin_id = seed_role_user(cursor, "系统管理员", "admin_quote", "系统管理员")
+    approver_id = seed_role_user(cursor, "材料审批负责人", "quote_approver", "审批负责人")
+
+    admin_inquiry_id = seed_inquiry(cursor, "XJ-QUOTE-DRAFT-ADMIN", approver_id, status="报价未发布")
+    approver_inquiry_id = seed_inquiry(cursor, "XJ-QUOTE-DRAFT-APPROVER", admin_id, status="报价未发布")
+    test_db.commit()
+
+    set_session_user(client, admin_id, "admin_quote", "系统管理员", "系统管理员")
+    admin_response = client.post(
+        f"/api/purchase-inquiries/{admin_inquiry_id}/approve",
+        json={"action": "manager", "remark": "报价未发布管理员审批"},
+    )
+
+    assert admin_response.status_code == 200
+    assert json.loads(admin_response.data)["success"] is True
+
+    set_session_user(client, approver_id, "quote_approver", "审批负责人", "材料审批负责人")
+    approver_response = client.post(
+        f"/api/purchase-inquiries/{approver_inquiry_id}/approve",
+        json={"action": "manager", "remark": "报价未发布负责人审批"},
+    )
+
+    assert approver_response.status_code == 200
+    assert json.loads(approver_response.data)["success"] is True
+
+    cursor.execute(
+        "SELECT inquiry_no, approval_status FROM purchase_inquiries WHERE id IN (?, ?) ORDER BY inquiry_no",
+        (admin_inquiry_id, approver_inquiry_id),
+    )
+    rows = cursor.fetchall()
+    assert [row["approval_status"] for row in rows] == ["已同意", "已同意"]
+
+
 def test_admin_cannot_approve_gx_project_inquiry(client, test_db):
     cursor = test_db.cursor()
     create_inquiry_delete_tables(cursor)
