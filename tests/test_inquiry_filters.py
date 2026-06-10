@@ -1,4 +1,5 @@
 import json
+import builtins
 from io import BytesIO
 
 from openpyxl import load_workbook
@@ -854,3 +855,21 @@ def test_export_draft_inquiry_xlsx_tolerates_legacy_optional_columns(client, tes
     assert sheet["B4"].value == "旧库材料"
     assert sheet["C4"].value == "DN32"
     assert sheet["E4"].value == "否"
+
+
+def test_export_draft_inquiry_does_not_require_openpyxl_before_auth(client, monkeypatch):
+    original_import = builtins.__import__
+
+    def reject_openpyxl(name, *args, **kwargs):
+        if name.startswith("openpyxl"):
+            raise ModuleNotFoundError("No module named 'openpyxl'")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", reject_openpyxl)
+
+    response = client.get("/api/purchase-inquiries/draft/1/export-quote-sheet")
+
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data["success"] is False
+    assert "登录" in data["message"]
