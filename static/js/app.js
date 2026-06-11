@@ -5027,24 +5027,44 @@ async function importDraftQuoteSheet(id) {
 }
 
 function applyImportedQuoteItems(items) {
-    inquiryItems = (items || []).map(item => ({
-        material_id: item.material_id || '',
-        material_name: item.material_name || '',
-        material_code: item.material_code || '',
-        specification: item.specification || '',
-        detail_spec: item.detail_spec || '',
-        brand: item.brand || '',
-        unit_name: item.unit_name || '',
-        quantity: Number(item.quantity || 1),
-        library_price: Number(item.library_price || 0),
-        tax_price: Number(item.tax_price || 0),
-        cash_price: Number(item.cash_price || 0),
-        selected_quote_id: null,
-        is_national_standard: item.is_national_standard,
-        is_cash_price: item.is_cash_price || 0,
-        import_warnings: item.warnings || [],
-        quotes: item.quotes && item.quotes.length ? item.quotes : buildDefaultQuotes()
-    }));
+    inquiryItems = (items || []).map(item => {
+        // 过滤掉价格为0的供应商报价
+        let quotes = (item.quotes || []).filter(q => q.tax_price > 0);
+        if (quotes.length === 0) quotes = buildDefaultQuotes();
+
+        // 自动将最低价设为拟定
+        let lowestIdx = 0;
+        quotes.forEach((q, i) => {
+            q.is_lowest = 0;
+            q.is_selected = 0;
+            if (q.tax_price > 0 && (quotes[lowestIdx].tax_price <= 0 || q.tax_price < quotes[lowestIdx].tax_price)) {
+                lowestIdx = i;
+            }
+        });
+        if (quotes[lowestIdx].tax_price > 0) {
+            quotes[lowestIdx].is_lowest = 1;
+            quotes[lowestIdx].is_selected = 1;
+        }
+
+        return {
+            material_id: item.material_id || '',
+            material_name: item.material_name || '',
+            material_code: item.material_code || '',
+            specification: item.specification || '',
+            detail_spec: item.detail_spec || '',
+            brand: item.brand || '',
+            unit_name: item.unit_name || '',
+            quantity: Number(item.quantity || 1),
+            library_price: Number(item.library_price || 0),
+            tax_price: Number(item.tax_price || 0),
+            cash_price: Number(item.cash_price || 0),
+            selected_quote_id: null,
+            is_national_standard: item.is_national_standard,
+            is_cash_price: item.is_cash_price || 0,
+            import_warnings: item.warnings || [],
+            quotes
+        };
+    });
     renderInquiryItems();
     updateInquiryTotal();
 }
