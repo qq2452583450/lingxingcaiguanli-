@@ -796,6 +796,93 @@ def test_export_draft_inquiry_xlsx_matches_quote_template(client, test_db):
     assert sheet["J4"].value == '=IF(I4="","",I4*$H4)'
 
 
+def test_import_draft_quote_sheet_parses_exported_template(client, test_db):
+    cursor = test_db.cursor()
+    create_inquiry_delete_tables(cursor)
+    ensure_project_id_column(cursor)
+    clerk_id = seed_role_user(cursor, "材料员", "clerk_import", "材料员")
+    cursor.execute(
+        "INSERT INTO projects (project_code, project_name, create_time) VALUES (?, ?, ?)",
+        ("CD-IMPORT", "成都导入项目", "2026-01-01 09:00:00"),
+    )
+    project_id = cursor.lastrowid
+    cursor.execute("INSERT INTO suppliers (supplier_name) VALUES (?)", ("导入供应商",))
+    supplier_id = cursor.lastrowid
+    cursor.execute("INSERT INTO units (unit_name) VALUES (?)", ("个",))
+    unit_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO materials (
+            material_code, material_name, specification, detail_spec, brand,
+            unit_id, tax_price, cash_price
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("CDLX00009", "导入材料", "DN40", "加厚款", "导入品牌", unit_id, 10, 9),
+    )
+    material_id = cursor.lastrowid
+    inquiry_id = seed_inquiry(cursor, "XJ-DRAFT-IMPORT", clerk_id, status="草稿", project_id=project_id)
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiry_items (
+            inquiry_id, material_id, quantity, tax_rate, is_national_standard,
+            detail_spec, brand, create_time
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (inquiry_id, material_id, 5, 0.01, 1, "加厚款", "导入品牌", "2026-06-06 10:00:00"),
+    )
+    item_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiry_quotes (
+            item_id, supplier_id, tax_price, tax_exempt_price, tax_rate,
+            total_amount, is_lowest, is_selected, create_time
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (item_id, supplier_id, 0, 0, 0.13, 0, 0, 0, "2026-06-06 10:00:00"),
+    )
+    test_db.commit()
+    set_session_user(client, clerk_id, "clerk_import", "材料员", "材料员")
+
+    export_response = client.get(f"/api/purchase-inquiries/draft/{inquiry_id}/export-quote-sheet")
+    workbook = load_workbook(BytesIO(export_response.data), data_only=False)
+    sheet = workbook.active
+    sheet["H4"] = 7
+    sheet["I4"] = 12.5
+    uploaded = BytesIO()
+    workbook.save(uploaded)
+    uploaded.seek(0)
+
+    response = client.post(
+        f"/api/purchase-inquiries/draft/{inquiry_id}/import-quote-sheet",
+        data={"file": (uploaded, "询价表.xlsx")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data["success"] is True
+    assert data["warnings"] == []
+    assert len(data["items"]) == 1
+    item = data["items"][0]
+    assert item["material_id"] == material_id
+    assert item["material_code"] == "CDLX00009"
+    assert item["material_name"] == "导入材料"
+    assert item["specification"] == "DN40"
+    assert item["detail_spec"] == "加厚款"
+    assert item["brand"] == "导入品牌"
+    assert item["unit_name"] == "个"
+    assert item["quantity"] == 7
+    assert item["is_national_standard"] == 1
+    assert item["unmatched_material"] is False
+    assert item["quotes"][0]["supplier_id"] == supplier_id
+    assert item["quotes"][0]["supplier_name"] == "导入供应商"
+    assert item["quotes"][0]["tax_price"] == 12.5
+    assert item["quotes"][0]["tax_rate"] == 0.13
+
+
 def test_export_draft_inquiry_xlsx_tolerates_legacy_optional_columns(client, test_db):
     cursor = test_db.cursor()
     create_inquiry_delete_tables(cursor)

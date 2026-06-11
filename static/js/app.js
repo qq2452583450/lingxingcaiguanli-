@@ -1836,6 +1836,8 @@ async function viewInquiry(id) {
                     ${qs === 'collecting' ? `<button class="btn btn-warning" onclick="lockQuotes(${i.id})">锁定报价</button>` : ''}
                     ${qs === 'locked' ? '<span style="color:var(--scs);font-size:13px;">报价已锁定，供应商无法修改</span>' : ''}
                     <a href="/supplier-portal" target="_blank" class="btn btn-secondary" style="text-decoration:none;">供应商报价入口</a>
+                    ${i.approval_status === '草稿' && currentUser && i.applicant_id === currentUser.id ? `<button class="btn btn-secondary" onclick="exportDraftQuoteSheet(${i.id})">询比价导出</button>` : ''}
+                    ${i.approval_status === '草稿' && currentUser && i.applicant_id === currentUser.id ? `<button class="btn btn-secondary" onclick="importDraftQuoteSheet(${i.id})">询比价导入</button>` : ''}
                 </div>
                 <h4 style="margin:15px 0;">询价明细</h4>
                 <div class="table-container">
@@ -4957,7 +4959,6 @@ function renderDraftsTable(drafts) {
             <td>${d.remark || '-'}</td>
             <td style="white-space:nowrap;">
                 <button class="btn btn-success" style="padding:4px 8px;font-size:12px;" onclick="editInquiry(${d.id})">继续编辑</button>
-                <button class="btn btn-secondary" style="padding:4px 8px;font-size:12px;" onclick="exportDraftQuoteSheet(${d.id})">询比价导出</button>
                 <button class="btn btn-danger" style="padding:4px 8px;font-size:12px;" onclick="deleteInquiryDraft(${d.id})">删除</button>
             </td>
         </tr>
@@ -4966,6 +4967,64 @@ function renderDraftsTable(drafts) {
 
 function exportDraftQuoteSheet(id) {
     window.location.href = `/api/purchase-inquiries/draft/${id}/export-quote-sheet`;
+}
+
+async function importDraftQuoteSheet(id) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.xlsx';
+    input.onchange = async () => {
+        const file = input.files && input.files[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        try {
+            const res = await api(`/api/purchase-inquiries/draft/${id}/import-quote-sheet`, {
+                method: 'POST',
+                body: formData
+            });
+            const data = await res.json();
+            if (!data.success) {
+                showToast(data.message || '询比价导入失败', 'error');
+                return;
+            }
+
+            closeModal('modal-detail');
+            await editInquiry(id);
+            applyImportedQuoteItems(data.items || []);
+
+            const warningText = (data.warnings || []).join('；');
+            showToast(warningText ? `询比价导入完成：${warningText}` : '询比价导入完成');
+        } catch (e) {
+            showToast('询比价导入失败: ' + e.message, 'error');
+        }
+    };
+    input.click();
+}
+
+function applyImportedQuoteItems(items) {
+    inquiryItems = (items || []).map(item => ({
+        material_id: item.material_id || '',
+        material_name: item.material_name || '',
+        material_code: item.material_code || '',
+        specification: item.specification || '',
+        detail_spec: item.detail_spec || '',
+        brand: item.brand || '',
+        unit_name: item.unit_name || '',
+        quantity: Number(item.quantity || 1),
+        library_price: Number(item.library_price || 0),
+        tax_price: Number(item.tax_price || 0),
+        cash_price: Number(item.cash_price || 0),
+        selected_quote_id: null,
+        is_national_standard: item.is_national_standard,
+        is_cash_price: item.is_cash_price || 0,
+        import_warnings: item.warnings || [],
+        quotes: item.quotes && item.quotes.length ? item.quotes : buildDefaultQuotes()
+    }));
+    renderInquiryItems();
+    updateInquiryTotal();
 }
 
 async function deleteInquiryDraft(id) {

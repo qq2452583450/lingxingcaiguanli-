@@ -19,16 +19,32 @@ def test_frontend_allows_approval_entry_for_unpublished_quote_status():
     assert "isInquiryApprovalOpen(i.approval_status)" in source
 
 
-def test_frontend_draft_rows_include_export_quote_sheet_action():
+def test_frontend_draft_rows_do_not_include_export_quote_sheet_action():
     source = Path("static/js/app.js").read_text(encoding="utf-8")
+    render_start = source.index("function renderDraftsTable")
+    render_end = source.index("async function deleteInquiryDraft")
+    render_drafts = source[render_start:render_end]
 
-    assert "询比价导出" in source
     assert "function exportDraftQuoteSheet" in source
     assert "/api/purchase-inquiries/draft/${id}/export-quote-sheet" in source
+    assert "exportDraftQuoteSheet(${d.id})" not in render_drafts
 
 
-def test_frontend_main_inquiry_draft_rows_include_export_quote_sheet_action():
+def test_frontend_inquiry_detail_toolbar_includes_export_and_import_quote_sheet_actions():
     source = Path("static/js/app.js").read_text(encoding="utf-8")
+    view_start = source.index("async function viewInquiry")
+    view_end = source.index("async function editInquiry")
+    view_body = source[view_start:view_end]
 
     assert "i.approval_status === '草稿'" in source
-    assert "exportDraftQuoteSheet(${i.id})" in source
+    assert "exportDraftQuoteSheet(${i.id})" in view_body
+    assert "importDraftQuoteSheet(${i.id})" in view_body
+
+
+def test_frontend_import_quote_sheet_uploads_and_applies_items():
+    source = Path("static/js/app.js").read_text(encoding="utf-8")
+
+    assert "async function importDraftQuoteSheet" in source
+    assert "/api/purchase-inquiries/draft/${id}/import-quote-sheet" in source
+    assert "function applyImportedQuoteItems" in source
+    assert "renderInquiryItems();" in source

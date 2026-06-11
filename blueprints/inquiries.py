@@ -2598,6 +2598,186 @@ def export_draft_quote_sheet(draft_id):
     return response
 
 
+@inquiry_bp.route('/purchase-inquiries/draft/<int:draft_id>/import-quote-sheet', methods=['POST'])
+def import_draft_quote_sheet(draft_id):
+    """导入草稿询比价表，解析为前端询价明细数据。"""
+    from io import BytesIO
+    import re
+
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
+    upload = request.files.get('file')
+    if not upload:
+        return jsonify({'success': False, 'message': '请选择要导入的询比价表'})
+
+    try:
+        from openpyxl import load_workbook
+    except ModuleNotFoundError:
+        return jsonify({'success': False, 'message': '服务器缺少 Excel 解析依赖 openpyxl'})
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM purchase_inquiries WHERE id = ?", (draft_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({'success': False, 'message': '草稿不存在'}), 404
+
+    draft = dict(row)
+    if draft.get('approval_status') != '草稿':
+        conn.close()
+        return jsonify({'success': False, 'message': '该询价单不是草稿状态'})
+    if draft.get('applicant_id') != user.get('id'):
+        conn.close()
+        return jsonify({'success': False, 'message': '只有申请人可以导入此草稿'}), 403
+
+    try:
+        workbook = load_workbook(BytesIO(upload.read()), data_only=True)
+        sheet = workbook.active
+    except Exception:
+        conn.close()
+        return jsonify({'success': False, 'message': '无法读取 Excel，请使用询比价导出的模板导入'})
+
+    headers = [sheet.cell(3, col).value for col in range(1, sheet.max_column + 1)]
+    required_headers = ['材料名称', '规格型号', '详细规格', '品牌', '单位', '数量']
+    if not all(header in headers for header in required_headers):
+        conn.close()
+        return jsonify({'success': False, 'message': '模板表头不正确，请使用询比价导出的模板导入'})
+
+    def normalize(value):
+        if value is None:
+            return ''
+        if isinstance(value, str):
+            return value.strip()
+        return str(value).strip()
+
+    def to_number(value, default=0):
+        if value is None or value == '':
+            return default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def parse_yes_no(value):
+        text = normalize(value)
+        return 1 if text in ('是', '1', 'true', 'TRUE', 'True') else 0
+
+    def parse_supplier_header(value):
+        text = normalize(value)
+        if '单价' not in text:
+            return None
+        match = re.match(r'^(.*?)单价(?:(\d+(?:\.\d+)?)%)?', text)
+        if not match:
+            return None
+        name = match.group(1).strip()
+        if not name:
+            return None
+        rate_text = match.group(2)
+        rate = float(rate_text) / 100 if rate_text else 0.13
+        return {'name': name, 'tax_rate': rate}
+
+    supplier_columns = []
+    for col in range(9, sheet.max_column + 1, 2):
+        supplier_info = parse_supplier_header(sheet.cell(3, col).value)
+        if supplier_info:
+            supplier_info['price_col'] = col
+            supplier_columns.append(supplier_info)
+
+    warnings = []
+    parsed_items = []
+    for row_idx in range(4, sheet.max_row + 1):
+        material_name = normalize(sheet.cell(row_idx, 2).value)
+        specification = normalize(sheet.cell(row_idx, 3).value)
+        detail_spec = normalize(sheet.cell(row_idx, 4).value)
+        brand = normalize(sheet.cell(row_idx, 5).value)
+        is_national_standard = parse_yes_no(sheet.cell(row_idx, 6).value)
+        unit_name = normalize(sheet.cell(row_idx, 7).value)
+        quantity = to_number(sheet.cell(row_idx, 8).value, 1)
+
+        if not any([material_name, specification, detail_spec, brand, unit_name]):
+            continue
+
+        cursor.execute("""
+            SELECT m.id, m.material_code, m.material_name, m.specification,
+                   m.detail_spec, m.brand, m.tax_price, m.cash_price,
+                   COALESCE(m.is_cash_price, 0) AS is_cash_price,
+                   u.unit_name
+            FROM materials m
+            LEFT JOIN units u ON u.id = m.unit_id
+            WHERE m.material_name = ?
+              AND COALESCE(m.specification, '') = ?
+              AND COALESCE(m.detail_spec, '') = ?
+              AND COALESCE(m.brand, '') = ?
+              AND COALESCE(u.unit_name, '') = ?
+            LIMIT 1
+        """, (material_name, specification, detail_spec, brand, unit_name))
+        material_row = cursor.fetchone()
+        material = dict(material_row) if material_row else None
+
+        item_warnings = []
+        if not material:
+            item_warnings.append(f'第{row_idx}行材料未匹配：{material_name}')
+
+        quotes = []
+        for supplier in supplier_columns:
+            supplier_name = supplier['name']
+            cursor.execute("SELECT id, supplier_name FROM suppliers WHERE supplier_name = ? LIMIT 1", (supplier_name,))
+            supplier_row = cursor.fetchone()
+            tax_price = to_number(sheet.cell(row_idx, supplier['price_col']).value, 0)
+            if not supplier_row:
+                message = f'第{row_idx}行供应商未匹配：{supplier_name}'
+                item_warnings.append(message)
+                warnings.append(message)
+                continue
+            supplier_data = dict(supplier_row)
+            tax_rate = supplier['tax_rate']
+            tax_exempt_price = round(tax_price / (1 + tax_rate), 2) if tax_price > 0 and tax_rate > -1 else 0
+            quotes.append({
+                'supplier_id': supplier_data['id'],
+                'supplier_name': supplier_data['supplier_name'],
+                'tax_price': round(tax_price, 2),
+                'tax_exempt_price': tax_exempt_price,
+                'tax_rate': tax_rate,
+                'total_amount': round(tax_price * quantity, 2) if tax_price > 0 else 0,
+                'is_lowest': 0,
+                'is_selected': 0,
+            })
+
+        parsed_items.append({
+            'material_id': material.get('id') if material else '',
+            'material_code': material.get('material_code') if material else '',
+            'material_name': material.get('material_name') if material else material_name,
+            'specification': material.get('specification') if material else specification,
+            'detail_spec': material.get('detail_spec') if material else detail_spec,
+            'brand': material.get('brand') if material else brand,
+            'unit_name': material.get('unit_name') if material else unit_name,
+            'quantity': quantity,
+            'library_price': material.get('tax_price', 0) if material else 0,
+            'tax_price': material.get('tax_price', 0) if material else 0,
+            'cash_price': material.get('cash_price', 0) if material else 0,
+            'is_cash_price': material.get('is_cash_price', 0) if material else 0,
+            'is_national_standard': is_national_standard,
+            'unmatched_material': material is None,
+            'quotes': quotes,
+            'warnings': item_warnings,
+        })
+
+    conn.close()
+
+    if not parsed_items:
+        return jsonify({'success': False, 'message': '未读取到有效的询价明细'})
+
+    for item in parsed_items:
+        for message in item.get('warnings', []):
+            if message not in warnings:
+                warnings.append(message)
+
+    return jsonify({'success': True, 'items': parsed_items, 'warnings': warnings})
+
+
 @inquiry_bp.route('/purchase-inquiries/draft/<int:draft_id>/submit', methods=['POST'])
 def submit_draft(draft_id):
     """提交草稿（转为待审批）"""
