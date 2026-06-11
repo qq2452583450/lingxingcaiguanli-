@@ -44,6 +44,16 @@ function Stop-PythonListenerOnPort {
     }
 }
 
+function Stop-AppPythonProcesses {
+    Write-Host "Clearing Python processes launched from $AppDir before service start."
+    $EscapedAppDir = $AppDir.Replace('\', '\\')
+    $Processes = Get-CimInstance Win32_Process -Filter "Name LIKE 'python%.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like "*$AppDir*" -or $_.CommandLine -match $EscapedAppDir }
+    foreach ($ProcessInfo in $Processes) {
+        Stop-Process -Id $ProcessInfo.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $LocalEnv = Join-Path $AppDir "deploy\server.env.ps1"
 if (Test-Path -LiteralPath $LocalEnv) {
     . $LocalEnv
@@ -99,6 +109,7 @@ if ($Service) {
     if (-not $Stopped) {
         Write-Host "Service did not stop in time."
     }
+    Stop-AppPythonProcesses
     Stop-PythonListenerOnPort -TargetPort $Port
     Start-Service -Name $ServiceName
     Start-Sleep -Seconds 3
@@ -109,6 +120,7 @@ if ($Service) {
 } elseif (Get-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue) {
     Write-Host "Restarting startup task: $ServiceName"
     Stop-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue
+    Stop-AppPythonProcesses
     Stop-PythonListenerOnPort -TargetPort $Port
     Start-ScheduledTask -TaskName $ServiceName
 } else {

@@ -20,6 +20,8 @@ def test_deploy_script_restarts_service_with_port_cleanup_fallback():
     assert 'Stop-Service -Name $ServiceName' in script
     assert 'Get-NetTCPConnection -LocalPort $Port -State Listen' in script
     assert 'Clearing Python listener on port $TargetPort before service start.' in script
+    assert 'Get-CimInstance Win32_Process' in script
+    assert 'CommandLine -like "*$AppDir*"' in script
     assert 'Stop-Process -Id $Process.Id -Force' in script
     assert 'Start-Service -Name $ServiceName' in script
     assert 'throw "Windows service $ServiceName failed to start"' in script
