@@ -31,6 +31,19 @@ function Invoke-NativeCommandWithRetry {
     throw $FailureMessage
 }
 
+function Stop-PythonListenerOnPort {
+    param([int]$TargetPort)
+
+    Write-Host "Clearing Python listener on port $TargetPort before service start."
+    $Listeners = Get-NetTCPConnection -LocalPort $TargetPort -State Listen -ErrorAction SilentlyContinue
+    foreach ($Listener in $Listeners) {
+        $Process = Get-Process -Id $Listener.OwningProcess -ErrorAction SilentlyContinue
+        if ($Process -and $Process.ProcessName -match "python") {
+            Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 $LocalEnv = Join-Path $AppDir "deploy\server.env.ps1"
 if (Test-Path -LiteralPath $LocalEnv) {
     . $LocalEnv
@@ -84,15 +97,9 @@ if ($Service) {
         Start-Sleep -Seconds 5
     }
     if (-not $Stopped) {
-        Write-Host "Service did not stop in time. Killing Python listener on port $Port."
-        $Listeners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-        foreach ($Listener in $Listeners) {
-            $Process = Get-Process -Id $Listener.OwningProcess -ErrorAction SilentlyContinue
-            if ($Process -and $Process.ProcessName -match "python") {
-                Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
-            }
-        }
+        Write-Host "Service did not stop in time."
     }
+    Stop-PythonListenerOnPort -TargetPort $Port
     Start-Service -Name $ServiceName
     Start-Sleep -Seconds 3
     $Service.Refresh()
@@ -102,13 +109,7 @@ if ($Service) {
 } elseif (Get-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue) {
     Write-Host "Restarting startup task: $ServiceName"
     Stop-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue
-    $Listeners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-    foreach ($Listener in $Listeners) {
-        $Process = Get-Process -Id $Listener.OwningProcess -ErrorAction SilentlyContinue
-        if ($Process -and $Process.ProcessName -match "python") {
-            Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
-        }
-    }
+    Stop-PythonListenerOnPort -TargetPort $Port
     Start-ScheduledTask -TaskName $ServiceName
 } else {
     throw "Auto-start '$ServiceName' is not installed. Run deploy\install-service.ps1 once on the server first."
