@@ -2743,6 +2743,7 @@ def import_draft_quote_sheet(draft_id):
         if not any([material_name, specification, detail_spec, brand, unit_name]):
             continue
 
+        # 第一轮：精确匹配（含 detail_spec、brand）
         cursor.execute("""
             SELECT m.id, m.material_code, m.material_name, m.specification,
                    m.detail_spec, m.brand, m.tax_price, m.cash_price,
@@ -2760,9 +2761,67 @@ def import_draft_quote_sheet(draft_id):
         material_row = cursor.fetchone()
         material = dict(material_row) if material_row else None
 
+        # 第二轮：放宽匹配（name + specification + unit，忽略 detail_spec/brand）
+        if not material:
+            cursor.execute("""
+                SELECT m.id, m.material_code, m.material_name, m.specification,
+                       m.detail_spec, m.brand, m.tax_price, m.cash_price,
+                       COALESCE(m.is_cash_price, 0) AS is_cash_price,
+                       u.unit_name
+                FROM materials m
+                LEFT JOIN units u ON u.id = m.unit_id
+                WHERE m.material_name = ?
+                  AND COALESCE(m.specification, '') = ?
+                  AND COALESCE(u.unit_name, '') = ?
+                LIMIT 1
+            """, (material_name, specification, unit_name))
+            material_row = cursor.fetchone()
+            material = dict(material_row) if material_row else None
+
+        # 第三轮：未匹配则自动创建新材料
         item_warnings = []
         if not material:
-            item_warnings.append(f'第{row_idx}行材料未匹配：{material_name}')
+            # 查找单位ID
+            cursor.execute("SELECT id FROM units WHERE unit_name = ? LIMIT 1", (unit_name,))
+            unit_row = cursor.fetchone()
+            unit_id = unit_row[0] if unit_row else None
+
+            # 生成材料编码
+            cursor.execute("SELECT material_code FROM materials ORDER BY id DESC LIMIT 1")
+            last_row = cursor.fetchone()
+            if last_row and last_row[0]:
+                try:
+                    parts = last_row[0].rsplit('-', 1)
+                    new_num = int(parts[1]) + 1
+                    new_code = f"{parts[0]}-{new_num:03d}"
+                except (ValueError, IndexError):
+                    new_code = f"LX-{(last_row[0] or '0').replace('LX-','').replace('-','')}"
+            else:
+                new_code = "LX-001"
+
+            now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            cursor.execute("""
+                INSERT INTO materials (
+                    material_code, material_name, specification, detail_spec, brand,
+                    unit_id, tax_price, is_cash_price, cash_price, create_time, tax_rate
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 0.01)
+            """, (new_code, material_name, specification, detail_spec or '常规', brand or '无',
+                  unit_id, now_str))
+            new_mat_id = cursor.lastrowid
+
+            material = {
+                'id': new_mat_id,
+                'material_code': new_code,
+                'material_name': material_name,
+                'specification': specification,
+                'detail_spec': detail_spec or '常规',
+                'brand': brand or '无',
+                'tax_price': 0,
+                'cash_price': 0,
+                'is_cash_price': 0,
+                'unit_name': unit_name,
+            }
+            item_warnings.append(f'第{row_idx}行材料已自动创建：{material_name}')
 
         quotes = []
         for supplier in supplier_columns:
