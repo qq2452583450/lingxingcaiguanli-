@@ -32,6 +32,7 @@ def test_workflow_uses_force_restart_script_for_route_reload():
     force_restart = Path('deploy/force-restart-app.ps1').read_text(encoding='utf-8')
 
     assert 'deploy\\force-restart-app.ps1' in workflow
+    assert "Invoke-Retry 'pull'" in workflow
     assert 'petty-cash/usages/1' in workflow
     assert 'force_restart_done=1' in force_restart
     assert 'Get-CimInstance Win32_Process' in force_restart
