@@ -30,6 +30,15 @@ def test_frontend_draft_rows_do_not_include_export_quote_sheet_action():
     assert "exportDraftQuoteSheet(${d.id})" not in render_drafts
 
 
+def test_frontend_main_inquiry_rows_do_not_include_export_quote_sheet_action():
+    source = Path("static/js/app.js").read_text(encoding="utf-8")
+    render_start = source.index("function renderInquiryTable")
+    render_end = source.index("function exportSupplierOrders")
+    render_inquiries = source[render_start:render_end]
+
+    assert "exportDraftQuoteSheet(${i.id})" not in render_inquiries
+
+
 def test_frontend_inquiry_detail_toolbar_includes_export_and_import_quote_sheet_actions():
     source = Path("static/js/app.js").read_text(encoding="utf-8")
     view_start = source.index("async function viewInquiry")

@@ -1636,8 +1636,6 @@ function renderInquiryTable(inquiries) {
                     `<button class="btn btn-info" style="padding:4px 8px;font-size:12px;" onclick="recallInquiry(${i.id})">撤回</button>` : ''}
                 ${(i.approval_status === '退回修改' || i.approval_status === '草稿') && currentUser && i.applicant_id === currentUser.id ?
                     `<button class="btn btn-success" style="padding:4px 8px;font-size:12px;" onclick="editInquiry(${i.id})">编辑</button>` : ''}
-                ${i.approval_status === '草稿' && currentUser && i.applicant_id === currentUser.id ?
-                    `<button class="btn btn-secondary" style="padding:4px 8px;font-size:12px;" onclick="exportDraftQuoteSheet(${i.id})">询比价导出</button>` : ''}
                 ${canDeleteInquiry(i) ?
                     `<button class="btn btn-danger" style="padding:4px 8px;font-size:12px;" onclick="deleteInquiry(${i.id})">删除</button>` : ''}
             </td>
@@ -1866,9 +1864,6 @@ async function editInquiry(id) {
         // 设置编辑模式
         editingInquiryId = id;
 
-        // 确保材料和供应商数据已加载
-        await Promise.all([loadUnitsAndSuppliers(), loadAllMaterialsForSelect()]);
-
         // 将 items/quotes 映射到 inquiryItems 表单数据
         inquiryItems = items.map(item => {
             const m = (allMaterialsCache.length > 0 ? allMaterialsCache : materials || []).find(x => x?.id == item.material_id);
@@ -1896,8 +1891,8 @@ async function editInquiry(id) {
                 unit_name: item.unit_name || (m ? m.unit_name : ''),
                 quantity: item.quantity || 1,
                 library_price: item.library_price || 0,
-                tax_price: m ? (m.tax_price || 0) : 0,
-                cash_price: m ? (m.cash_price || 0) : 0,
+                tax_price: m ? (m.tax_price || 0) : (item.tax_price || item.library_price || 0),
+                cash_price: m ? (m.cash_price || 0) : (item.cash_price || 0),
                 selected_quote_id: selectedQuote ? selectedQuote.supplier_id : null,
                 is_national_standard: item.is_national_standard,
                 is_cash_price: item.is_cash_price,
@@ -1917,15 +1912,37 @@ async function editInquiry(id) {
         document.getElementById('inquiryDate').value = inquiry.inquiry_date || new Date().toISOString().split('T')[0];
         document.getElementById('inquiryRemark').value = inquiry.remark || '';
 
-        // 加载项目并回填
-        await loadProjectsToInquirySelect();
-        if (inquiry.project_id) {
-            document.getElementById('inquiryProject').value = inquiry.project_id;
-        }
-
         // 渲染明细
         renderInquiryItems();
         updateInquiryTotal();
+
+        Promise.all([
+            loadUnitsAndSuppliers(),
+            allMaterialsCache.length === 0 ? loadAllMaterialsForSelect() : Promise.resolve(),
+            loadProjectsToInquirySelect()
+        ]).then(() => {
+            if (editingInquiryId !== id) return;
+            if (inquiry.project_id) {
+                document.getElementById('inquiryProject').value = inquiry.project_id;
+            }
+            inquiryItems.forEach(item => {
+                const m = (allMaterialsCache.length > 0 ? allMaterialsCache : materials || []).find(x => x?.id == item.material_id);
+                if (!m) return;
+                item.material_name = item.material_name || m.material_name || '';
+                item.material_code = item.material_code || m.material_code || '';
+                item.specification = item.specification || m.specification || '';
+                item.unit_name = item.unit_name || m.unit_name || '';
+                item.tax_price = m.tax_price || item.tax_price || 0;
+                item.cash_price = m.cash_price || item.cash_price || 0;
+                if (!item.library_price) {
+                    item.library_price = item.is_cash_price === 1 ? item.cash_price : item.tax_price;
+                }
+            });
+            renderInquiryItems();
+            updateInquiryTotal();
+        }).catch(e => {
+            console.error('编辑询价单后台数据加载失败:', e);
+        });
     } catch (e) {
         console.error('编辑询价单失败:', e);
         showToast('加载询价单失败: ' + e.message, 'error');
