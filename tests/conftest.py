@@ -485,6 +485,10 @@ def test_db():
             expense_type TEXT NOT NULL,
             amount REAL DEFAULT 0,
             handler TEXT,
+            supplier_name TEXT,
+            material_name TEXT,
+            invoice_amount REAL DEFAULT 0,
+            invoice_type TEXT,
             description TEXT,
             proof_file_path TEXT,
             proof_file_name TEXT,
@@ -541,6 +545,16 @@ def test_db():
             user_id INTEGER NOT NULL,
             project_id INTEGER NOT NULL,
             UNIQUE(user_id, project_id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE petty_cash_usage_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usage_id INTEGER NOT NULL,
+            file_path TEXT,
+            file_name TEXT NOT NULL,
+            create_time TEXT
         )
     """)
 

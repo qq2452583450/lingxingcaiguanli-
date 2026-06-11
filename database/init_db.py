@@ -884,6 +884,10 @@ def init_database():
             expense_type TEXT NOT NULL,
             amount REAL DEFAULT 0,
             handler TEXT,
+            supplier_name TEXT,
+            material_name TEXT,
+            invoice_amount REAL DEFAULT 0,
+            invoice_type TEXT,
             description TEXT,
             proof_file_path TEXT,
             proof_file_name TEXT,
@@ -891,6 +895,17 @@ def init_database():
             create_time TEXT,
             FOREIGN KEY (loan_id) REFERENCES petty_cash_loans(id),
             FOREIGN KEY (creator_id) REFERENCES users(id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS petty_cash_usage_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usage_id INTEGER NOT NULL,
+            file_path TEXT,
+            file_name TEXT NOT NULL,
+            create_time TEXT,
+            FOREIGN KEY (usage_id) REFERENCES petty_cash_usages(id)
         )
     """)
 
@@ -964,6 +979,7 @@ def create_indexes(conn=None):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_owner_issues_project_status ON owner_warning_issues(project_id, closure_status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_petty_cash_loans_project ON petty_cash_loans(project_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_petty_cash_usages_loan ON petty_cash_usages(loan_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_petty_cash_usage_files_usage ON petty_cash_usage_files(usage_id)")
 
     conn.commit()
 
