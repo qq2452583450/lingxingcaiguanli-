@@ -786,14 +786,14 @@ def test_export_draft_inquiry_xlsx_matches_quote_template(client, test_db):
     assert sheet.title == "询价表"
     assert sheet["A1"].value == "零星材采购比价表"
     assert sheet["A2"].value == "项目名称：成都 / CD-DRAFT / 成都草稿项目"
-    assert sheet["H2"].value == "时间：2026-06-06"
-    assert [sheet.cell(3, col).value for col in range(1, 10)] == [
-        "序号", "材料名称", "规格型号", "品牌", "是否国标", "单位", "数量", "测试供应商单价1%专票", "测试供应商总价"
+    assert sheet["I2"].value == "时间：2026-06-06"
+    assert [sheet.cell(3, col).value for col in range(1, 11)] == [
+        "序号", "材料名称", "规格型号", "详细规格", "品牌", "是否国标", "单位", "数量", "测试供应商单价1%专票", "测试供应商总价"
     ]
-    assert [sheet.cell(4, col).value for col in range(1, 8)] == [
-        1, "测试材料", "加厚", "测试品牌", "是", "个", 5
+    assert [sheet.cell(4, col).value for col in range(1, 9)] == [
+        1, "测试材料", "DN25", "加厚", "测试品牌", "是", "个", 5
     ]
-    assert sheet["I4"].value == '=IF(H4="","",H4*$G4)'
+    assert sheet["J4"].value == '=IF(I4="","",I4*$H4)'
 
 
 def test_export_draft_inquiry_xlsx_tolerates_legacy_optional_columns(client, test_db):
@@ -854,7 +854,7 @@ def test_export_draft_inquiry_xlsx_tolerates_legacy_optional_columns(client, tes
     sheet = workbook.active
     assert sheet["B4"].value == "旧库材料"
     assert sheet["C4"].value == "DN32"
-    assert sheet["E4"].value == "否"
+    assert sheet["F4"].value == "否"
 
 
 def test_export_draft_inquiry_does_not_require_openpyxl_before_auth(client, monkeypatch):

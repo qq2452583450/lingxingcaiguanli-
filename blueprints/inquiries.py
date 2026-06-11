@@ -2406,7 +2406,8 @@ def export_draft_quote_sheet(draft_id):
 
     cursor.execute(f"""
         SELECT i.id AS item_id, i.quantity, {national_standard_expr} AS is_national_standard,
-               COALESCE({item_detail_expr}, {material_detail_expr}, m.specification, '') AS export_spec,
+               COALESCE(m.specification, '') AS export_spec,
+               COALESCE({item_detail_expr}, {material_detail_expr}, '') AS export_detail_spec,
                COALESCE({item_brand_expr}, {material_brand_expr}, '') AS export_brand,
                m.material_name, m.specification, u.unit_name
         FROM purchase_inquiry_items i
@@ -2453,7 +2454,7 @@ def export_draft_quote_sheet(draft_id):
         except (TypeError, ValueError):
             return '专票'
 
-    base_cols = 7
+    base_cols = 8
     total_cols = base_cols + len(suppliers) * 2
 
     def col_name(index):
@@ -2480,7 +2481,7 @@ def export_draft_quote_sheet(draft_id):
 
     last_col = col_name(total_cols)
     project_display = format_project_display(draft.get('project_code'), draft.get('project_name'))
-    headers = ['序号', '材料名称', '规格型号', '品牌', '是否国标', '单位', '数量']
+    headers = ['序号', '材料名称', '规格型号', '详细规格', '品牌', '是否国标', '单位', '数量']
     for supplier in suppliers:
         headers.extend([f'{supplier["name"]}单价{tax_label(supplier.get("tax_rate"))}', f'{supplier["name"]}总价'])
 
@@ -2509,6 +2510,7 @@ def export_draft_quote_sheet(draft_id):
             idx,
             item.get('material_name') or '',
             item.get('export_spec') or item.get('specification') or '',
+            item.get('export_detail_spec') or '',
             item.get('export_brand') or '',
             '是' if item.get('is_national_standard') else '否',
             item.get('unit_name') or '',
@@ -2520,11 +2522,11 @@ def export_draft_quote_sheet(draft_id):
             total_col = price_col + 1
             price_ref = cell_ref(row_idx, price_col)
             cells.append(cell_xml(row_idx, price_col, None, style=4))
-            cells.append(cell_xml(row_idx, total_col, style=4, formula=f'IF({price_ref}="","",{price_ref}*$G{row_idx})'))
+            cells.append(cell_xml(row_idx, total_col, style=4, formula=f'IF({price_ref}="","",{price_ref}*$H{row_idx})'))
         data_rows.append(f'<row r="{row_idx}" ht="25" customHeight="1">{"".join(cells)}</row>')
     rows_xml.extend(data_rows)
 
-    col_widths = {1: 4, 2: 24, 3: 36, 4: 10, 5: 10, 6: 10, 7: 9}
+    col_widths = {1: 4, 2: 24, 3: 20, 4: 28, 5: 10, 6: 10, 7: 10, 8: 9}
     cols_xml = ''.join(
         f'<col min="{idx}" max="{idx}" width="{col_widths.get(idx, 16 if idx % 2 else 12)}" customWidth="1"/>'
         for idx in range(1, total_cols + 1)
