@@ -775,14 +775,14 @@ def delete_inquiry(inquiry_id):
             cursor.execute("DELETE FROM stock_in_details WHERE order_id = ?", (si_id,))
         cursor.execute("DELETE FROM stock_in_orders WHERE related_order_no = ?", (inquiry_no,))
 
-        # 2. 删除跨区域创建的材料及其库存记录
+        # 2. 删除询价单明细和报价（含旧版 purchase_inquiry_details 表）
+        cursor.execute("DELETE FROM purchase_inquiry_quotes WHERE item_id IN (SELECT id FROM purchase_inquiry_items WHERE inquiry_id = ?)", (inquiry_id,))
+        cursor.execute("DELETE FROM purchase_inquiry_items WHERE inquiry_id = ?", (inquiry_id,))
+
+        # 3. 删除跨区域创建的材料及其库存记录（必须在删除 items 之后，避免 FK 约束）
         for mid in cross_region_material_ids:
             cursor.execute("DELETE FROM inventory WHERE material_id = ?", (mid,))
             cursor.execute("DELETE FROM materials WHERE id = ?", (mid,))
-
-        # 3. 删除询价单明细和报价（含旧版 purchase_inquiry_details 表）
-        cursor.execute("DELETE FROM purchase_inquiry_quotes WHERE item_id IN (SELECT id FROM purchase_inquiry_items WHERE inquiry_id = ?)", (inquiry_id,))
-        cursor.execute("DELETE FROM purchase_inquiry_items WHERE inquiry_id = ?", (inquiry_id,))
         cursor.execute("DELETE FROM purchase_inquiry_details WHERE inquiry_id = ?", (inquiry_id,))
         cursor.execute("DELETE FROM approval_records WHERE order_type = 'purchase_inquiry' AND order_id = ?", (inquiry_id,))
         cursor.execute("DELETE FROM purchase_inquiries WHERE id = ?", (inquiry_id,))
