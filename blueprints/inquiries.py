@@ -1847,6 +1847,7 @@ def export_supplier_orders(inquiry_id):
         SELECT i.id as item_id, i.quantity, i.material_id,
                m.material_name, m.specification, m.material_code,
                COALESCE(i.detail_spec, m.detail_spec, '') AS detail_spec,
+               COALESCE(i.brand, m.brand, '') AS brand,
                u.unit_name
         FROM purchase_inquiry_items i
         LEFT JOIN materials m ON m.id = i.material_id
@@ -1956,7 +1957,7 @@ def export_supplier_orders(inquiry_id):
         ws = wb.create_sheet(title=sheet_name)
 
         # 标题行
-        ws.merge_cells('A1:I1')
+        ws.merge_cells('A1:J1')
         ws['A1'] = f'供货清单 - {group["name"]}'
         ws['A1'].font = title_font
         ws['A1'].alignment = center_align
@@ -1967,7 +1968,7 @@ def export_supplier_orders(inquiry_id):
         ws['A4'] = f'项目：{inquiry.get("project_id", "-")}'
 
         # 表头
-        headers = ['序号', '材料编码', '材料名称', '规格型号', '详细规格', '单位', '数量', '含税单价', '金额']
+        headers = ['序号', '材料编码', '材料名称', '规格型号', '详细规格', '品牌', '单位', '数量', '含税单价', '金额']
         for col, header in enumerate(headers, 1):
             cell = ws.cell(row=6, column=col, value=header)
             cell.font = header_font_white
@@ -1989,6 +1990,7 @@ def export_supplier_orders(inquiry_id):
                 item.get('material_name', ''),
                 item.get('specification', ''),
                 item.get('detail_spec', ''),
+                item.get('brand', ''),
                 item.get('unit_name', ''),
                 quantity,
                 tax_price,
@@ -1997,7 +1999,7 @@ def export_supplier_orders(inquiry_id):
             for col, value in enumerate(row_data, 1):
                 cell = ws.cell(row=6 + idx, column=col, value=value)
                 cell.border = thin_border
-                if col in (7, 8, 9):
+                if col in (8, 9, 10):
                     cell.number_format = '#,##0.00'
                     cell.alignment = right_align
                 elif col == 1:
@@ -2006,8 +2008,8 @@ def export_supplier_orders(inquiry_id):
         # 汇总行
         total_row = 6 + len(group['items']) + 1
         ws.cell(row=total_row, column=1, value='合计').font = Font(bold=True)
-        ws.merge_cells(start_row=total_row, start_column=1, end_row=total_row, end_column=8)
-        total_cell = ws.cell(row=total_row, column=9, value=total_amount)
+        ws.merge_cells(start_row=total_row, start_column=1, end_row=total_row, end_column=9)
+        total_cell = ws.cell(row=total_row, column=10, value=total_amount)
         total_cell.font = Font(bold=True)
         total_cell.number_format = '#,##0.00'
         total_cell.border = thin_border
@@ -2022,6 +2024,7 @@ def export_supplier_orders(inquiry_id):
         ws.column_dimensions['G'].width = 12
         ws.column_dimensions['H'].width = 12
         ws.column_dimensions['I'].width = 14
+        ws.column_dimensions['J'].width = 14
 
     # 保存到内存
     output = BytesIO()
