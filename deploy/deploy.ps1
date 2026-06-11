@@ -54,7 +54,32 @@ if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 $Service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($Service) {
     Write-Host "Restarting Windows service: $ServiceName"
-    Restart-Service -Name $ServiceName -Force
+    Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+    $Stopped = $false
+    for ($i = 0; $i -lt 12; $i++) {
+        $Service.Refresh()
+        if ($Service.Status -eq "Stopped") {
+            $Stopped = $true
+            break
+        }
+        Start-Sleep -Seconds 5
+    }
+    if (-not $Stopped) {
+        Write-Host "Service did not stop in time. Killing Python listener on port $Port."
+        $Listeners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+        foreach ($Listener in $Listeners) {
+            $Process = Get-Process -Id $Listener.OwningProcess -ErrorAction SilentlyContinue
+            if ($Process -and $Process.ProcessName -match "python") {
+                Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    Start-Service -Name $ServiceName
+    Start-Sleep -Seconds 3
+    $Service.Refresh()
+    if ($Service.Status -ne "Running") {
+        throw "Windows service $ServiceName failed to start"
+    }
 } elseif (Get-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue) {
     Write-Host "Restarting startup task: $ServiceName"
     Stop-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue
