@@ -4736,7 +4736,9 @@ async function submitInquiryForm() {
     }
 
     // 深拷贝 inquiryItems 避免修改原始数据
+    console.log('[DEBUG] submitInquiryForm: inquiryItems count =', inquiryItems?.length);
     const rawItems = (inquiryItems || []).filter(item => item && item.material_id);
+    console.log('[DEBUG] submitInquiryForm: rawItems after filter =', rawItems.length, 'material_ids:', rawItems.map(i => i.material_id));
 
     if (rawItems.length === 0) {
         showToast('请添加有效的询价材料（需选择材料）', 'warning');
@@ -5027,6 +5029,7 @@ async function importDraftQuoteSheet(id) {
 }
 
 function applyImportedQuoteItems(items) {
+    console.log('[DEBUG] applyImportedQuoteItems called with', items?.length, 'items');
     inquiryItems = (items || []).map(item => {
         // 过滤掉价格为0的供应商报价
         let quotes = (item.quotes || []).filter(q => q.tax_price > 0);
@@ -5065,6 +5068,7 @@ function applyImportedQuoteItems(items) {
             quotes
         };
     });
+    console.log('[DEBUG] applyImportedQuoteItems result:', inquiryItems.length, 'items, material_ids:', inquiryItems.map(i => i.material_id));
     renderInquiryItems();
     updateInquiryTotal();
 }

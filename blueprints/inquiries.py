@@ -2747,7 +2747,18 @@ def import_draft_quote_sheet(draft_id):
         detail_spec = detail_spec or '常规'
         brand = brand or '无'
 
-        # 放宽匹配：名称 + 规格型号 + 单位（忽略 detail_spec/brand）
+        # 归一化规格：去掉末尾 .0，去掉 DN 前缀
+        def normalize_spec(s):
+            s = s.strip()
+            if s.endswith('.0'):
+                s = s[:-2]
+            if s.upper().startswith('DN'):
+                s = s[2:]
+            return s
+
+        spec_norm = normalize_spec(specification)
+
+        # 第一轮：精确匹配（名称 + 规格 + 单位）
         cursor.execute("""
             SELECT m.id, m.material_code, m.material_name, m.specification,
                    m.detail_spec, m.brand, m.tax_price, m.cash_price,
@@ -2762,6 +2773,39 @@ def import_draft_quote_sheet(draft_id):
         """, (material_name, specification, unit_name))
         material_row = cursor.fetchone()
         material = dict(material_row) if material_row else None
+
+        # 第二轮：归一化规格匹配（解决 "25" vs "25.0" vs "DN25"）
+        if not material:
+            cursor.execute("""
+                SELECT m.id, m.material_code, m.material_name, m.specification,
+                       m.detail_spec, m.brand, m.tax_price, m.cash_price,
+                       COALESCE(m.is_cash_price, 0) AS is_cash_price,
+                       u.unit_name
+                FROM materials m
+                LEFT JOIN units u ON u.id = m.unit_id
+                WHERE m.material_name = ?
+                  AND COALESCE(u.unit_name, '') = ?
+            """, (material_name, unit_name))
+            for row in cursor.fetchall():
+                if normalize_spec(row['specification'] or '') == spec_norm:
+                    material = dict(row)
+                    break
+
+        # 第三轮：名称 + 单位匹配（忽略规格）
+        if not material:
+            cursor.execute("""
+                SELECT m.id, m.material_code, m.material_name, m.specification,
+                       m.detail_spec, m.brand, m.tax_price, m.cash_price,
+                       COALESCE(m.is_cash_price, 0) AS is_cash_price,
+                       u.unit_name
+                FROM materials m
+                LEFT JOIN units u ON u.id = m.unit_id
+                WHERE m.material_name = ?
+                  AND COALESCE(u.unit_name, '') = ?
+                LIMIT 1
+            """, (material_name, unit_name))
+            material_row = cursor.fetchone()
+            material = dict(material_row) if material_row else None
 
         item_warnings = []
         if not material:
@@ -2810,6 +2854,10 @@ def import_draft_quote_sheet(draft_id):
         })
 
     conn.close()
+
+    # DEBUG: log import results
+    matched = sum(1 for i in parsed_items if not i.get('unmatched_material'))
+    logger.warning("IMPORT DEBUG: total=%d, matched=%d, unmatched=%d", len(parsed_items), matched, len(parsed_items) - matched)
 
     if not parsed_items:
         return jsonify({'success': False, 'message': '未读取到有效的询价明细'})
