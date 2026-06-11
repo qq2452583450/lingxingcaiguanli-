@@ -92,6 +92,14 @@ def seed_inquiry(cursor, inquiry_no, applicant_id, status="待审批", project_i
     return cursor.lastrowid
 
 
+def seed_project(cursor, project_code, project_name):
+    cursor.execute(
+        "INSERT INTO projects (project_code, project_name, create_time) VALUES (?, ?, ?)",
+        (project_code, project_name, "2026-01-01 09:00:00"),
+    )
+    return cursor.lastrowid
+
+
 def set_session_user(client, user_id, username, real_name, role_name):
     with client.session_transaction() as sess:
         sess["user"] = {
@@ -152,6 +160,59 @@ def test_purchase_inquiries_support_list_filters(client, test_db):
     data = json.loads(response.data)
     assert data["success"] is True
     assert [row["inquiry_no"] for row in data["data"]] == ["XJ-202606-001"]
+
+
+def test_submit_draft_regenerates_generic_inquiry_no_for_final_project(client, test_db):
+    cursor = test_db.cursor()
+    clerk_id = seed_role_user(cursor, "材料员", "zhengrongjie", "郑荣杰")
+    project_id = seed_project(cursor, "KMJJYC", "京江隐翠")
+    cursor.execute("INSERT INTO units (unit_name, unit_code) VALUES (?, ?)", ("个", "GE"))
+    unit_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO materials (material_code, material_name, unit_id, tax_price, create_time)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("KMLX00001", "测试材料", unit_id, 10, "2026-06-11 10:00:00"),
+    )
+    material_id = cursor.lastrowid
+    cursor.execute(
+        "INSERT INTO suppliers (supplier_name, create_time) VALUES (?, ?)",
+        ("测试供应商", "2026-06-11 10:00:00"),
+    )
+    supplier_id = cursor.lastrowid
+    draft_id = seed_inquiry(cursor, "CGXJ-260612-001", clerk_id, status="草稿", project_id=None)
+    test_db.commit()
+    set_session_user(client, clerk_id, "zhengrongjie", "郑荣杰", "材料员")
+
+    response = client.post(
+        f"/api/purchase-inquiries/draft/{draft_id}/submit",
+        json={
+            "project_id": project_id,
+            "inquiry_date": "2026-06-11",
+            "items": [
+                {
+                    "material_id": material_id,
+                    "quantity": 1,
+                    "library_price": 10,
+                    "quotes": [
+                        {
+                            "supplier_id": supplier_id,
+                            "tax_price": 12,
+                            "tax_rate": 0.13,
+                            "is_lowest": 1,
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+
+    data = response.get_json()
+    assert data["success"] is True
+    assert data["inquiry_no"] == "KMJJYC-20260611-001"
+    row = test_db.execute("SELECT inquiry_no FROM purchase_inquiries WHERE id = ?", (draft_id,)).fetchone()
+    assert row["inquiry_no"] == "KMJJYC-20260611-001"
 
 
 def test_purchase_inquiries_include_project_city_code_and_name(client, test_db):

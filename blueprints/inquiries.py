@@ -3017,13 +3017,16 @@ def submit_draft(draft_id):
         # 更新主表
         project_id = data.get('project_id', draft.get('project_id'))
         inquiry_date = data.get('inquiry_date', draft.get('inquiry_date', now[:10]))
+        inquiry_no = draft['inquiry_no']
+        if project_id:
+            inquiry_no = generate_inquiry_no_by_project(project_id, inquiry_date, exclude_id=draft_id)
         cursor.execute("""
             UPDATE purchase_inquiries
-            SET inquiry_date = ?, project_id = ?, total_amount = ?,
+            SET inquiry_no = ?, inquiry_date = ?, project_id = ?, total_amount = ?,
                 is_below_library_price = ?, approval_status = '待审批',
                 remark = ?, create_time = ?
             WHERE id = ?
-        """, (inquiry_date, project_id, total_amount, is_below,
+        """, (inquiry_no, inquiry_date, project_id, total_amount, is_below,
               data.get('remark', draft.get('remark', '')), now, draft_id))
 
         # 写入新 items + quotes
@@ -3094,7 +3097,7 @@ def submit_draft(draft_id):
 
         conn.commit()
         conn.close()
-        return jsonify({'success': True, 'inquiry_no': draft['inquiry_no'], 'id': draft_id})
+        return jsonify({'success': True, 'inquiry_no': inquiry_no, 'id': draft_id})
 
     except Exception as e:
         logger.error("提交草稿失败: %s", e)
