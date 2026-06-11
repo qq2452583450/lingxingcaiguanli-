@@ -778,11 +778,6 @@ def delete_inquiry(inquiry_id):
         # 2. 删除询价单明细和报价（含旧版 purchase_inquiry_details 表）
         cursor.execute("DELETE FROM purchase_inquiry_quotes WHERE item_id IN (SELECT id FROM purchase_inquiry_items WHERE inquiry_id = ?)", (inquiry_id,))
         cursor.execute("DELETE FROM purchase_inquiry_items WHERE inquiry_id = ?", (inquiry_id,))
-
-        # 3. 删除跨区域创建的材料及其库存记录（必须在删除 items 之后，避免 FK 约束）
-        for mid in cross_region_material_ids:
-            cursor.execute("DELETE FROM inventory WHERE material_id = ?", (mid,))
-            cursor.execute("DELETE FROM materials WHERE id = ?", (mid,))
         cursor.execute("DELETE FROM purchase_inquiry_details WHERE inquiry_id = ?", (inquiry_id,))
         cursor.execute("DELETE FROM approval_records WHERE order_type = 'purchase_inquiry' AND order_id = ?", (inquiry_id,))
         cursor.execute("DELETE FROM purchase_inquiries WHERE id = ?", (inquiry_id,))
@@ -2853,9 +2848,48 @@ def import_draft_quote_sheet(draft_id):
             material_row = cursor.fetchone()
             material = dict(material_row) if material_row else None
 
+        # 所有匹配均失败，自动创建新材料
         item_warnings = []
         if not material:
-            item_warnings.append(f'第{row_idx}行材料未匹配：{material_name}')
+            cursor.execute("SELECT id FROM units WHERE unit_name = ? LIMIT 1", (unit_name,))
+            unit_row = cursor.fetchone()
+            unit_id = unit_row[0] if unit_row else None
+
+            # 生成材料编码
+            cursor.execute("SELECT material_code FROM materials ORDER BY id DESC LIMIT 1")
+            last_row = cursor.fetchone()
+            if last_row and last_row[0]:
+                try:
+                    parts = last_row[0].rsplit('-', 1)
+                    new_num = int(parts[1]) + 1
+                    new_code = f"{parts[0]}-{new_num:03d}"
+                except (ValueError, IndexError):
+                    new_code = f"LX-{(last_row[0] or '0').replace('LX-','').replace('-','')}"
+            else:
+                new_code = "LX-001"
+
+            now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            cursor.execute("""
+                INSERT INTO materials (
+                    material_code, material_name, specification, detail_spec, brand,
+                    unit_id, tax_price, is_cash_price, cash_price, create_time, tax_rate
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, ?, 0.01)
+            """, (new_code, material_name, specification, detail_spec, brand, unit_id, now_str))
+            new_mat_id = cursor.lastrowid
+
+            material = {
+                'id': new_mat_id,
+                'material_code': new_code,
+                'material_name': material_name,
+                'specification': specification,
+                'detail_spec': detail_spec,
+                'brand': brand,
+                'tax_price': 0,
+                'cash_price': 0,
+                'is_cash_price': 0,
+                'unit_name': unit_name,
+            }
+            item_warnings.append(f'第{row_idx}行材料已自动创建：{material_name}')
 
         quotes = []
         for supplier in supplier_columns:
