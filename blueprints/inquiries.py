@@ -2855,10 +2855,6 @@ def import_draft_quote_sheet(draft_id):
 
     conn.close()
 
-    # DEBUG: log import results
-    matched = sum(1 for i in parsed_items if not i.get('unmatched_material'))
-    logger.warning("IMPORT DEBUG: total=%d, matched=%d, unmatched=%d", len(parsed_items), matched, len(parsed_items) - matched)
-
     if not parsed_items:
         return jsonify({'success': False, 'message': '未读取到有效的询价明细'})
 
