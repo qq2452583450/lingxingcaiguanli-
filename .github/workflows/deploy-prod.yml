@@ -22,6 +22,8 @@ jobs:
           key: ${{ secrets.PROD_SSH_KEY }}
           port: ${{ secrets.PROD_SSH_PORT || 22 }}
           script_stop: true
+          command_timeout: 20m
           script: |
+            powershell -NoProfile -Command "Set-Location -LiteralPath 'C:\wwwroot\lxclgl'; git stash push -m deploy-autostash-${{ github.sha }}; git fetch origin prod; git checkout prod; git pull --ff-only origin prod"
             powershell -NoProfile -ExecutionPolicy Bypass -File C:\wwwroot\lxclgl\deploy\deploy.ps1 -AppDir C:\wwwroot\lxclgl -ServiceName lxclgl -Branch prod -Port 5000
             powershell -NoProfile -Command "$r = Invoke-WebRequest -Uri 'http://127.0.0.1:5000' -UseBasicParsing -TimeoutSec 10; if ([int]$r.StatusCode -ne 200) { throw 'HTTP health check failed' }"
