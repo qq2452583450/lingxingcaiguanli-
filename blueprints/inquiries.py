@@ -466,8 +466,8 @@ def create_inquiry():
                 tax_rate = float(item.get('tax_rate', 0.01) or 0.01)
                 is_national_standard = item.get('is_national_standard', 0)
                 is_cash_price = item.get('is_cash_price', 0)
-                detail_spec = item.get('detail_spec', '')
-                brand = item.get('brand', '')
+                detail_spec = item.get('detail_spec', '') or '常规'
+                brand = item.get('brand', '') or '无'
 
                 # 如果选择了现金含税价，默认税率为1%
                 if is_cash_price:
@@ -731,6 +731,26 @@ def delete_inquiry(inquiry_id):
         if cursor.fetchone()[0] > 0:
             continue  # 材料已入库，不删除
 
+        # 检查该材料是否被采购订单引用
+        cursor.execute("SELECT COUNT(*) FROM purchase_order_details WHERE material_id = ?", (mid,))
+        if cursor.fetchone()[0] > 0:
+            continue
+
+        # 检查该材料是否被出库明细引用
+        cursor.execute("SELECT COUNT(*) FROM stock_out_details WHERE material_id = ?", (mid,))
+        if cursor.fetchone()[0] > 0:
+            continue
+
+        # 检查该材料是否被对账明细引用
+        cursor.execute("SELECT COUNT(*) FROM reconciliation_details WHERE material_id = ?", (mid,))
+        if cursor.fetchone()[0] > 0:
+            continue
+
+        # 检查该材料是否被基地库存引用
+        cursor.execute("SELECT COUNT(*) FROM base_inventory WHERE material_id = ?", (mid,))
+        if cursor.fetchone()[0] > 0:
+            continue
+
         cursor.execute("SELECT material_code FROM materials WHERE id = ?", (mid,))
         mat_row = cursor.fetchone()
         if mat_row:
@@ -855,8 +875,8 @@ def update_inquiry(inquiry_id):
             tax_rate = float(item.get('tax_rate', 0.01) or 0.01)
             is_national_standard = item.get('is_national_standard', 0)
             is_cash_price = item.get('is_cash_price', 0)
-            detail_spec = item.get('detail_spec', '')
-            brand = item.get('brand', '')
+            detail_spec = item.get('detail_spec', '') or '常规'
+            brand = item.get('brand', '') or '无'
 
             if is_cash_price:
                 tax_rate = 0.01
@@ -1730,7 +1750,7 @@ def print_inquiry_approval(inquiry_id):
         for idx, item in enumerate(items):
             material_name = item.get('material_name', '')
             specification = item.get('specification', '-')
-            detail_spec = item.get('detail_spec', '')
+            detail_spec = item.get('detail_spec', '') or '常规'
             unit_name = item.get('unit_name', '-')
             quantity = item.get('quantity', 1)
             library_price = item.get('library_price', 0)
@@ -2271,8 +2291,8 @@ def save_draft():
             tax_rate = float(item.get('tax_rate', 0.01) or 0.01)
             is_national_standard = item.get('is_national_standard', 0)
             is_cash_price = item.get('is_cash_price', 0)
-            detail_spec = item.get('detail_spec', '')
-            brand = item.get('brand', '')
+            detail_spec = item.get('detail_spec', '') or '常规'
+            brand = item.get('brand', '') or '无'
 
             if is_cash_price:
                 tax_rate = 0.01
@@ -2888,8 +2908,8 @@ def submit_draft(draft_id):
             tax_rate = float(item.get('tax_rate', 0.01) or 0.01)
             is_national_standard = item.get('is_national_standard', 0)
             is_cash_price = item.get('is_cash_price', 0)
-            detail_spec = item.get('detail_spec', '')
-            brand = item.get('brand', '')
+            detail_spec = item.get('detail_spec', '') or '常规'
+            brand = item.get('brand', '') or '无'
 
             if is_cash_price:
                 tax_rate = 0.01
