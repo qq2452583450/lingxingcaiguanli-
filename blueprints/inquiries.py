@@ -2807,6 +2807,52 @@ def import_draft_quote_sheet(draft_id):
             material_row = cursor.fetchone()
             material = dict(material_row) if material_row else None
 
+        # 第四轮：仅按名称匹配（忽略单位和规格）
+        if not material:
+            cursor.execute("""
+                SELECT m.id, m.material_code, m.material_name, m.specification,
+                       m.detail_spec, m.brand, m.tax_price, m.cash_price,
+                       COALESCE(m.is_cash_price, 0) AS is_cash_price,
+                       u.unit_name
+                FROM materials m
+                LEFT JOIN units u ON u.id = m.unit_id
+                WHERE m.material_name = ?
+                LIMIT 1
+            """, (material_name,))
+            material_row = cursor.fetchone()
+            material = dict(material_row) if material_row else None
+
+        # 第五轮：模糊名称匹配（名称前2字 + 单位）
+        if not material and len(material_name) >= 2:
+            cursor.execute("""
+                SELECT m.id, m.material_code, m.material_name, m.specification,
+                       m.detail_spec, m.brand, m.tax_price, m.cash_price,
+                       COALESCE(m.is_cash_price, 0) AS is_cash_price,
+                       u.unit_name
+                FROM materials m
+                LEFT JOIN units u ON u.id = m.unit_id
+                WHERE m.material_name LIKE ?
+                  AND COALESCE(u.unit_name, '') = ?
+                LIMIT 1
+            """, (f'%{material_name[:2]}%', unit_name))
+            material_row = cursor.fetchone()
+            material = dict(material_row) if material_row else None
+
+        # 第六轮：模糊名称匹配（忽略单位）
+        if not material and len(material_name) >= 2:
+            cursor.execute("""
+                SELECT m.id, m.material_code, m.material_name, m.specification,
+                       m.detail_spec, m.brand, m.tax_price, m.cash_price,
+                       COALESCE(m.is_cash_price, 0) AS is_cash_price,
+                       u.unit_name
+                FROM materials m
+                LEFT JOIN units u ON u.id = m.unit_id
+                WHERE m.material_name LIKE ?
+                LIMIT 1
+            """, (f'%{material_name[:2]}%',))
+            material_row = cursor.fetchone()
+            material = dict(material_row) if material_row else None
+
         item_warnings = []
         if not material:
             item_warnings.append(f'第{row_idx}行材料未匹配：{material_name}')
