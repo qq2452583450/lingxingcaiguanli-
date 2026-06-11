@@ -2747,7 +2747,7 @@ def import_draft_quote_sheet(draft_id):
         detail_spec = detail_spec or '常规'
         brand = brand or '无'
 
-        # 匹配材料：detail_spec/brand 兼容数据库 NULL（NULL 视为 "常规"/"无"）
+        # 放宽匹配：名称 + 规格型号 + 单位（忽略 detail_spec/brand）
         cursor.execute("""
             SELECT m.id, m.material_code, m.material_name, m.specification,
                    m.detail_spec, m.brand, m.tax_price, m.cash_price,
@@ -2757,11 +2757,9 @@ def import_draft_quote_sheet(draft_id):
             LEFT JOIN units u ON u.id = m.unit_id
             WHERE m.material_name = ?
               AND COALESCE(m.specification, '') = ?
-              AND (COALESCE(m.detail_spec, '') = ? OR (m.detail_spec IS NULL AND ? = '常规'))
-              AND (COALESCE(m.brand, '') = ? OR (m.brand IS NULL AND ? = '无'))
               AND COALESCE(u.unit_name, '') = ?
             LIMIT 1
-        """, (material_name, specification, detail_spec, detail_spec, brand, brand, unit_name))
+        """, (material_name, specification, unit_name))
         material_row = cursor.fetchone()
         material = dict(material_row) if material_row else None
 
