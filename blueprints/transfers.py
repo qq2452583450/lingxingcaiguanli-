@@ -11,6 +11,7 @@ from helpers.order_no_generator import generate_stock_transfer_no
 
 
 transfer_bp = Blueprint('transfer', __name__, url_prefix='/api')
+BASE_INVENTORY_REGIONS = ('成都', '云南', '广西')
 
 
 def _current_user():
@@ -19,6 +20,13 @@ def _current_user():
 
 def _can_manage_stock(user):
     return user and user.get('role_name') in ('系统管理员', '材料员', '基地负责人')
+
+
+def _get_base_inventory_region(data):
+    region = (data.get('region') or '成都').strip()
+    if region not in BASE_INVENTORY_REGIONS:
+        return None, '地区只能选择成都、云南或广西'
+    return region, None
 
 
 def _get_base_warehouse(cursor, create_if_missing=False):
@@ -90,6 +98,7 @@ def get_base_inventory():
     cursor = conn.cursor()
     cursor.execute("""
         SELECT bi.id, bi.material_id, bi.quantity, bi.unit_price, bi.update_time, bi.remark,
+               COALESCE(NULLIF(bi.region, ''), '成都') AS region,
                COALESCE(m.material_code, '基地自有') AS material_code,
                COALESCE(m.material_name, bi.material_name) AS material_name,
                COALESCE(m.specification, bi.specification) AS specification,
@@ -99,7 +108,7 @@ def get_base_inventory():
         LEFT JOIN materials m ON bi.material_id = m.id
         LEFT JOIN units u ON m.unit_id = u.id
         WHERE bi.quantity != 0
-        ORDER BY m.material_code ASC
+        ORDER BY COALESCE(NULLIF(bi.region, ''), '成都') ASC, m.material_code ASC
     """)
     return jsonify({
         'success': True,
@@ -159,21 +168,30 @@ def update_base_inventory(base_inventory_id):
     specification = (data.get('specification') or '').strip()
     detail_spec = (data.get('detail_spec') or '').strip()
     unit_name = (data.get('unit_name') or '').strip()
+    region, region_error = _get_base_inventory_region(data)
+    if region_error:
+        return jsonify({'success': False, 'message': region_error})
     remark = escape((data.get('remark') or '').strip())
 
     if not material_name:
         return jsonify({'success': False, 'message': '请填写材料名称'})
 
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    cursor.execute("""
-        UPDATE base_inventory
-        SET material_name = ?, specification = ?, detail_spec = ?,
-            unit_name = ?, quantity = ?, unit_price = ?,
-            update_time = ?, remark = ?
-        WHERE id = ?
-    """, (material_name, specification, detail_spec, unit_name,
-          quantity, unit_price, now, remark, base_inventory_id))
-    conn.commit()
+    try:
+        cursor.execute("""
+            UPDATE base_inventory
+            SET material_name = ?, specification = ?, detail_spec = ?,
+                unit_name = ?, region = ?, quantity = ?, unit_price = ?,
+                update_time = ?, remark = ?
+            WHERE id = ?
+        """, (material_name, specification, detail_spec, unit_name, region,
+              quantity, unit_price, now, remark, base_inventory_id))
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        if 'UNIQUE' in str(exc).upper():
+            return jsonify({'success': False, 'message': '该材料在此地区已有基地库存记录'})
+        return jsonify({'success': False, 'message': str(exc)})
     return jsonify({'success': True, 'message': f'「{material_name}」已更新'})
 
 
@@ -211,6 +229,9 @@ def stock_in_base_inventory():
     specification = (data.get('specification') or '').strip()
     detail_spec = (data.get('detail_spec') or '').strip()
     unit_name = (data.get('unit_name') or '').strip()
+    region, region_error = _get_base_inventory_region(data)
+    if region_error:
+        return jsonify({'success': False, 'message': region_error})
     remark = escape((data.get('remark') or '').strip())
 
     if material_id is not None:
@@ -240,9 +261,9 @@ def stock_in_base_inventory():
 
     if material_id is not None:
         cursor.execute("""
-            INSERT INTO base_inventory (material_id, quantity, unit_price, update_time, remark)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(material_id) DO UPDATE SET
+            INSERT INTO base_inventory (material_id, region, quantity, unit_price, update_time, remark)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(material_id, region) DO UPDATE SET
                 quantity = quantity + excluded.quantity,
                 unit_price = CASE
                     WHEN excluded.unit_price > 0 THEN excluded.unit_price
@@ -253,7 +274,7 @@ def stock_in_base_inventory():
                     WHEN ? != '' THEN ?
                     ELSE base_inventory.remark
                 END
-        """, (material_id, quantity, unit_price, now, remark, remark, remark))
+        """, (material_id, region, quantity, unit_price, now, remark, remark, remark))
     else:
         cursor.execute("""
             SELECT id
@@ -263,7 +284,8 @@ def stock_in_base_inventory():
               AND COALESCE(specification, '') = ?
               AND COALESCE(detail_spec, '') = ?
               AND COALESCE(unit_name, '') = ?
-        """, (material_name, specification, detail_spec, unit_name))
+              AND COALESCE(region, '成都') = ?
+        """, (material_name, specification, detail_spec, unit_name, region))
         existing = cursor.fetchone()
         if existing:
             cursor.execute("""
@@ -277,10 +299,10 @@ def stock_in_base_inventory():
         else:
             cursor.execute("""
                 INSERT INTO base_inventory (
-                    material_name, specification, detail_spec, unit_name,
+                    material_name, specification, detail_spec, unit_name, region,
                     quantity, unit_price, update_time, remark
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (material_name, specification, detail_spec, unit_name, quantity, unit_price, now, remark))
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (material_name, specification, detail_spec, unit_name, region, quantity, unit_price, now, remark))
     conn.commit()
     return jsonify({
         'success': True,

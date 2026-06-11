@@ -18,6 +18,11 @@ let baseTransferRecordsCache = [];
 let cartItems = [];
 let selectedMaterialIds = new Set();
 let csrfToken = '';
+let pettyCashLoans = [];
+let pettyCashUsages = [];
+let pettyCashProjects = [];
+let editingPettyCashLoanId = null;
+let editingPettyCashUsageId = null;
 
 // ==================== CSRF Token 管理 ====================
 async function fetchCsrfToken() {
@@ -126,23 +131,11 @@ async function login() {
             currentUser = data.user;
             sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
 
-            // 获取用户绑定的项目
-            const projRes = await api('/api/projects?mine=1');
-            const projData = await projRes.json();
-            userProjects = projData.success ? projData.data : [];
-
-            // 判断是否需要选择项目
-            if (currentUser.role_name === '系统管理员' || userProjects.length <= 1) {
-                // admin 或只有一个项目，直接进入
-                if (userProjects.length === 1) {
-                    currentProjectId = userProjects[0].id;
-                    sessionStorage.setItem('currentProjectId', currentProjectId);
-                }
-                enterMainSystem();
-            } else {
-                // 多于一个项目，显示项目选择页面
-                showProjectSelect();
+            if (data.must_change_password || currentUser.must_change_password) {
+                showForcePasswordChange();
+                return;
             }
+            await continueAfterLogin();
         } else {
             document.getElementById('loginPage').classList.remove('hidden');
             showToast(data.message, 'error');
@@ -151,6 +144,71 @@ async function login() {
         document.getElementById('loginPage').classList.remove('hidden');
         showToast('登录失败: ' + e.message, 'error');
     }
+}
+
+function isAllBoundProjectsUser(user = currentUser) {
+    const username = String(user?.username || '').toLowerCase();
+    const realName = String(user?.real_name || '');
+    return username === 'leikefeng' || username === 'tanxiang' || realName === '雷克峰' || realName === '谭香';
+}
+
+async function continueAfterLogin() {
+    const projRes = await api('/api/projects?mine=1');
+    const projData = await projRes.json();
+    userProjects = projData.success ? projData.data : [];
+
+    if (isAllBoundProjectsUser()) {
+        currentProjectId = null;
+        sessionStorage.removeItem('currentProjectId');
+        enterMainSystem();
+    } else if (currentUser.role_name === '系统管理员' || userProjects.length <= 1) {
+        if (userProjects.length === 1) {
+            currentProjectId = userProjects[0].id;
+            sessionStorage.setItem('currentProjectId', currentProjectId);
+        }
+        enterMainSystem();
+    } else {
+        showProjectSelect();
+    }
+}
+
+function showForcePasswordChange() {
+    document.getElementById('loginPage').classList.add('hidden');
+    document.getElementById('projectSelectPage').classList.add('hidden');
+    document.getElementById('mainPage').classList.add('hidden');
+    document.getElementById('forceNewPassword').value = '';
+    document.getElementById('forceConfirmPassword').value = '';
+    openModal('modal-force-password-change');
+}
+
+async function submitForcePasswordChange(event) {
+    event.preventDefault();
+    const newPassword = document.getElementById('forceNewPassword').value.trim();
+    const confirmPassword = document.getElementById('forceConfirmPassword').value.trim();
+    if (newPassword.length < 6) {
+        showToast('新密码至少6位', 'warning');
+        return;
+    }
+    if (newPassword !== confirmPassword) {
+        showToast('两次输入的密码不一致', 'warning');
+        return;
+    }
+
+    const res = await api('/api/change-password', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ new_password: newPassword })
+    });
+    const data = await res.json();
+    if (!data.success) {
+        showToast(data.message || '修改密码失败', 'error');
+        return;
+    }
+    currentUser.must_change_password = false;
+    sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
+    closeModal('modal-force-password-change');
+    showToast('密码已修改', 'success');
+    await continueAfterLogin();
 }
 
 function showProjectSelect() {
@@ -223,7 +281,14 @@ function enterMainSystem() {
     document.getElementById('userInfo').textContent = `用户: ${currentUser.real_name}`;
     document.getElementById('userRoleDisplay').textContent = currentUser.role_name;
 
+    document.getElementById('currentProjectDisplay').style.display = 'none';
+    document.getElementById('switchProjectBtn').style.display = 'none';
+
     // 显示项目信息和切换按钮
+    if (isAllBoundProjectsUser() && !currentProjectId) {
+        document.getElementById('selectedProjectName').textContent = `全部绑定项目(${userProjects.length})`;
+        document.getElementById('currentProjectDisplay').style.display = 'block';
+    }
     if (currentProjectId) {
         const proj = userProjects.find(p => p.id === currentProjectId);
         if (proj) {
@@ -272,7 +337,13 @@ async function checkLogin() {
                 currentProjectId = userProjects.length === 1 ? userProjects[0].id : null;
             }
 
-            if (currentUser.role_name === '系统管理员' || userProjects.length <= 1) {
+            if (currentUser.must_change_password) {
+                showForcePasswordChange();
+            } else if (isAllBoundProjectsUser()) {
+                currentProjectId = null;
+                sessionStorage.removeItem('currentProjectId');
+                enterMainSystem();
+            } else if (currentUser.role_name === '系统管理员' || userProjects.length <= 1) {
                 if (userProjects.length === 1) {
                     currentProjectId = userProjects[0].id;
                 }
@@ -318,6 +389,7 @@ function showModule(module) {
         case 'project': loadProjects(); break;
         case 'reconciliation': loadReconciliation(); break;
         case 'owner_supplied': loadOwnerSupplied(); break;
+        case 'petty_cash': loadPettyCash(); break;
         case 'system': loadUsers(); break;
     }
 }
@@ -339,6 +411,303 @@ async function loadHome() {
         console.error('加载首页数据失败', e);
     }
 }
+
+// ==================== 备用金管理 ====================
+
+function pettyCashMoney(value) {
+    const num = Number(value || 0);
+    return Number.isFinite(num) ? num.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00';
+}
+
+function pettyCashDate(value) {
+    return value ? String(value).slice(0, 10) : '-';
+}
+
+function pettyCashFileLink(filename) {
+    if (!filename) return '-';
+    const url = `/api/petty-cash/files/${encodeURIComponent(filename)}`;
+    return `<a href="${url}" target="_blank" rel="noopener">查看</a>`;
+}
+
+function canManagePettyCash() {
+    return isAdmin() || isMaterialApprovalOwner();
+}
+
+function pettyCashAttachmentLinks(item) {
+    const files = Array.isArray(item?.proof_files) ? item.proof_files : [];
+    const normalized = files.length ? files : (item?.proof_file_name ? [item.proof_file_name] : []);
+    if (!normalized.length) return '-';
+    const count = Number(item?.proof_file_count || normalized.length);
+    return normalized.map((filename, index) => {
+        const url = `/api/petty-cash/files/${encodeURIComponent(filename)}`;
+        const text = index === 0 ? `显示附件（${count}）` : `附件${index + 1}`;
+        return `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
+    }).join(' ');
+}
+
+function pettyCashSelectedProjectId() {
+    const el = document.getElementById('pettyCashProjectFilter');
+    return el?.value || '';
+}
+
+function pettyCashQuery(extra = {}) {
+    const params = new URLSearchParams();
+    const projectId = pettyCashSelectedProjectId();
+    if (projectId) params.set('project_id', projectId);
+    Object.entries(extra).forEach(([key, value]) => {
+        if (value) params.set(key, value);
+    });
+    const query = params.toString();
+    return query ? `?${query}` : '';
+}
+
+async function loadPettyCashProjects() {
+    if (pettyCashProjects.length) return;
+    const res = await api('/api/projects?mine=1');
+    const data = await res.json();
+    pettyCashProjects = data.success ? (data.data || []) : [];
+    renderPettyCashProjectOptions();
+}
+
+function renderPettyCashProjectOptions() {
+    const filter = document.getElementById('pettyCashProjectFilter');
+    const loanProject = document.getElementById('pettyCashLoanProject');
+    if (!filter || !loanProject) return;
+
+    const selected = filter.value || (currentProjectId ? String(currentProjectId) : '');
+    const options = pettyCashProjects.map(project => {
+        const id = String(project.id);
+        const name = escapeHtml(project.project_name || project.name || '');
+        return `<option value="${id}" ${id === selected ? 'selected' : ''}>${name}</option>`;
+    }).join('');
+    filter.innerHTML = `<option value="">全部项目</option>${options}`;
+    if (selected) filter.value = selected;
+    loanProject.innerHTML = `<option value="">-- 选择项目 --</option>${options}`;
+}
+
+async function loadPettyCash() {
+    await loadPettyCashProjects();
+    await Promise.all([loadPettyCashSummary(), loadPettyCashLoans(), loadPettyCashUsages()]);
+}
+
+async function loadPettyCashSummary() {
+    try {
+        const res = await api(`/api/petty-cash/summary${pettyCashQuery()}`);
+        const data = await res.json();
+        if (!data.success) return;
+        const summary = data.data || {};
+        document.getElementById('pettyCashTotalAmount').textContent = pettyCashMoney(summary.total_amount);
+        document.getElementById('pettyCashUsedAmount').textContent = pettyCashMoney(summary.used_amount);
+        document.getElementById('pettyCashBalanceAmount').textContent = pettyCashMoney(summary.balance_amount);
+        document.getElementById('pettyCashUsageCount').textContent = summary.usage_count || 0;
+    } catch (e) {
+        showToast('备用金汇总加载失败', 'error');
+    }
+}
+
+async function loadPettyCashLoans() {
+    try {
+        const res = await api(`/api/petty-cash/loans${pettyCashQuery()}`);
+        const data = await res.json();
+        if (!data.success) {
+            showToast(data.message || '备用金记录加载失败', 'error');
+            return;
+        }
+        pettyCashLoans = data.data || [];
+        renderPettyCashLoans();
+        renderPettyCashUsageLoanOptions();
+    } catch (e) {
+        showToast('备用金记录加载失败', 'error');
+    }
+}
+
+async function loadPettyCashUsages() {
+    try {
+        const type = document.getElementById('pettyCashTypeFilter')?.value || '';
+        const res = await api(`/api/petty-cash/usages${pettyCashQuery({ expense_type: type })}`);
+        const data = await res.json();
+        if (!data.success) {
+            showToast(data.message || '使用情况加载失败', 'error');
+            return;
+        }
+        pettyCashUsages = data.data || [];
+        renderPettyCashUsages();
+    } catch (e) {
+        showToast('使用情况加载失败', 'error');
+    }
+}
+
+function renderPettyCashLoans() {
+    const tbody = document.getElementById('pettyCashLoanTable');
+    if (!tbody) return;
+    const canManage = canManagePettyCash();
+    tbody.innerHTML = pettyCashLoans.length ? pettyCashLoans.map(item => `
+        <tr>
+            <td>${escapeHtml(item.loan_no || '-')}</td>
+            <td>${escapeHtml(item.project_name || '-')}</td>
+            <td>${pettyCashDate(item.loan_date)}</td>
+            <td>${pettyCashMoney(item.total_amount)}</td>
+            <td><strong>${pettyCashMoney(item.balance_amount)}</strong></td>
+            <td>${pettyCashMoney(item.used_amount)}</td>
+            <td>${escapeHtml(item.creator_name || '-')}</td>
+            <td>${pettyCashFileLink(item.payment_file_name)}</td>
+            <td class="owner-long-text">${escapeHtml(item.remark || '-')}</td>
+            <td>${canManage ? `
+                <button class="btn btn-secondary" onclick="openPettyCashLoanModal(${item.id})">编辑</button>
+                <button class="btn btn-danger" onclick="deletePettyCashLoan(${item.id})">删除</button>
+            ` : '-'}</td>
+        </tr>
+    `).join('') : '<tr><td colspan="10" class="empty-message">暂无备用金记录</td></tr>';
+}
+
+function renderPettyCashUsages() {
+    const tbody = document.getElementById('pettyCashUsageTable');
+    if (!tbody) return;
+    const canManage = canManagePettyCash();
+    tbody.innerHTML = pettyCashUsages.length ? pettyCashUsages.map(item => `
+        <tr>
+            <td>${escapeHtml(item.project_name || '-')}</td>
+            <td>${pettyCashDate(item.use_date)}</td>
+            <td>${escapeHtml(item.expense_type || '-')}</td>
+            <td>${pettyCashMoney(item.amount)}</td>
+            <td>${escapeHtml(item.supplier_name || '-')}</td>
+            <td>${escapeHtml(item.material_name || '-')}</td>
+            <td>${pettyCashMoney(item.invoice_amount)}</td>
+            <td>${escapeHtml(item.invoice_type || '-')}</td>
+            <td>${escapeHtml(item.handler || '-')}</td>
+            <td>${pettyCashAttachmentLinks(item)}</td>
+            <td class="owner-long-text" style="max-width:120px;">${escapeHtml(item.description || '-')}</td>
+            <td>${canManage ? `
+                <button class="btn btn-secondary" onclick="openPettyCashUsageModal(${item.id})">编辑</button>
+                <button class="btn btn-danger" onclick="deletePettyCashUsage(${item.id})">删除</button>
+            ` : '-'}</td>
+        </tr>
+    `).join('') : '<tr><td colspan="12" class="empty-message">暂无使用情况</td></tr>';
+}
+
+function renderPettyCashUsageLoanOptions() {
+    const select = document.getElementById('pettyCashUsageLoan');
+    if (!select) return;
+    select.innerHTML = '<option value="">-- 选择备用金单号 --</option>' + pettyCashLoans
+        .map(item => `<option value="${item.id}">${escapeHtml(item.loan_no || '')} - ${escapeHtml(item.project_name || '')}（余额 ${pettyCashMoney(item.balance_amount)}）</option>`)
+        .join('');
+}
+
+function openPettyCashLoanModal(id = null) {
+    renderPettyCashProjectOptions();
+    const form = document.getElementById('pettyCashLoanForm');
+    form.reset();
+    editingPettyCashLoanId = id;
+    const title = document.getElementById('pettyCashLoanModalTitle');
+    if (title) title.textContent = id ? '编辑备用金' : '新增备用金';
+    if (id) {
+        const item = pettyCashLoans.find(row => Number(row.id) === Number(id));
+        if (item) {
+            document.getElementById('pettyCashLoanProject').value = item.project_id || '';
+            document.getElementById('pettyCashLoanDate').value = pettyCashDate(item.loan_date);
+            document.getElementById('pettyCashLoanAmount').value = item.total_amount || '';
+            document.getElementById('pettyCashLoanRemark').value = item.remark || '';
+        }
+    } else {
+        document.getElementById('pettyCashLoanDate').value = new Date().toISOString().slice(0, 10);
+        const selectedProject = pettyCashSelectedProjectId() || (currentProjectId ? String(currentProjectId) : '');
+        if (selectedProject) document.getElementById('pettyCashLoanProject').value = selectedProject;
+    }
+    openModal('modal-petty-cash-loan');
+}
+
+function openPettyCashUsageModal(id = null) {
+    renderPettyCashUsageLoanOptions();
+    const form = document.getElementById('pettyCashUsageForm');
+    form.reset();
+    editingPettyCashUsageId = id;
+    const title = document.getElementById('pettyCashUsageModalTitle');
+    if (title) title.textContent = id ? '编辑使用情况' : '登记使用情况';
+    if (id) {
+        const item = pettyCashUsages.find(row => Number(row.id) === Number(id));
+        if (item) {
+            document.getElementById('pettyCashUsageLoan').value = item.loan_id || '';
+            document.getElementById('pettyCashUsageDate').value = pettyCashDate(item.use_date);
+            document.getElementById('pettyCashExpenseType').value = item.expense_type || '其他';
+            document.getElementById('pettyCashUsageAmount').value = item.amount || '';
+            document.getElementById('pettyCashHandler').value = item.handler || '';
+            document.getElementById('pettyCashSupplierName').value = item.supplier_name || '';
+            document.getElementById('pettyCashMaterialName').value = item.material_name || '';
+            document.getElementById('pettyCashInvoiceAmount').value = item.invoice_amount || '';
+            document.getElementById('pettyCashInvoiceType').value = item.invoice_type || '';
+            document.getElementById('pettyCashUsageDescription').value = item.description || '';
+        }
+    } else {
+        document.getElementById('pettyCashUsageDate').value = new Date().toISOString().slice(0, 10);
+        document.getElementById('pettyCashHandler').value = currentUser?.real_name || '';
+    }
+    openModal('modal-petty-cash-usage');
+}
+
+async function deletePettyCashLoan(id) {
+    if (!confirm('确定删除该备用金借款记录吗？已有使用明细的记录不能删除。')) return;
+    const res = await api(`/api/petty-cash/loans/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!data.success) {
+        showToast(data.message || '删除失败', 'error');
+        return;
+    }
+    showToast('删除成功', 'success');
+    await loadPettyCash();
+}
+
+async function deletePettyCashUsage(id) {
+    if (!confirm('确定删除该使用情况记录吗？删除后会恢复对应备用金余额。')) return;
+    const res = await api(`/api/petty-cash/usages/${id}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!data.success) {
+        showToast(data.message || '删除失败', 'error');
+        return;
+    }
+    showToast('删除成功', 'success');
+    await loadPettyCash();
+}
+
+document.getElementById('pettyCashLoanForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const formData = new FormData(form);
+    const url = editingPettyCashLoanId ? `/api/petty-cash/loans/${editingPettyCashLoanId}` : '/api/petty-cash/loans';
+    const method = editingPettyCashLoanId ? 'PUT' : 'POST';
+    const res = await api(url, { method, body: formData });
+    const data = await res.json();
+    if (!data.success) {
+        showToast(data.message || '保存失败', 'error');
+        return;
+    }
+    closeModal('modal-petty-cash-loan');
+    showToast(editingPettyCashLoanId ? '修改成功' : `保存成功，单号：${data.loan_no}`, 'success');
+    editingPettyCashLoanId = null;
+    await loadPettyCash();
+});
+
+document.getElementById('pettyCashUsageForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const proofInput = document.getElementById('pettyCashProofFile');
+    if (proofInput?.files?.length > 9) {
+        showToast('票据附件最多上传9张', 'error');
+        return;
+    }
+    const formData = new FormData(form);
+    const url = editingPettyCashUsageId ? `/api/petty-cash/usages/${editingPettyCashUsageId}` : '/api/petty-cash/usages';
+    const method = editingPettyCashUsageId ? 'PUT' : 'POST';
+    const res = await api(url, { method, body: formData });
+    const data = await res.json();
+    if (!data.success) {
+        showToast(data.message || '保存失败', 'error');
+        return;
+    }
+    closeModal('modal-petty-cash-usage');
+    showToast(editingPettyCashUsageId ? '修改成功' : `保存成功，明细单号：${data.usage_no}`, 'success');
+    editingPettyCashUsageId = null;
+    await loadPettyCash();
+});
 
 // ==================== 材料管理 ====================
 
@@ -372,7 +741,7 @@ function formatNationalStandard(val) {
 function codeToRegion(code) {
     if (!code) return '-';
     const prefix = (code.substring(0, 2) || '').toUpperCase();
-    const map = { 'AN': '安宁', 'KM': '昆明', 'BN': '版纳', 'DL': '大理', 'YX': '玉溪', 'CD': '成都' };
+    const map = { 'AN': '安宁', 'KM': '昆明', 'BN': '版纳', 'DL': '大理', 'YX': '玉溪', 'CD': '成都', 'GX': '广西' };
     return map[prefix] || '-';
 }
 
@@ -413,8 +782,19 @@ function canApproveInquiry(inquiry) {
     return isSpecialRequiredApprover();
 }
 
+function isInquiryApprovalOpen(status) {
+    return status === '待审批' || status === '退回修改' || status === '报价未发布';
+}
+
 function canDeleteInquiry(inquiry) {
     return isAdmin() || (isMaterialClerk() && inquiry.approval_status === '草稿');
+}
+
+function canCreateSupplier() {
+    const user = JSON.parse(sessionStorage.getItem('currentUser') || '{}');
+    const username = String(user.username || '').toLowerCase();
+    const realName = String(user.real_name || '');
+    return isAdmin() || isMaterialClerk() || username === 'tanxiang' || realName === '谭香';
 }
 
 function applyPermissionControls() {
@@ -435,6 +815,9 @@ function applyPermissionControls() {
     // 材料员不能删除供应商
     document.querySelectorAll('.supplier-delete-btn').forEach(el => {
         el.style.display = isAdmin() ? '' : 'none';
+    });
+    document.querySelectorAll('.supplier-create-btn').forEach(el => {
+        el.style.display = canCreateSupplier() ? '' : 'none';
     });
 }
 
@@ -1236,6 +1619,7 @@ function renderInquiryTable(inquiries) {
         return `
         <tr>
             <td>${i.inquiry_no}</td>
+            <td>${escapeHtml(i.project_display_name || [i.project_city, i.project_code, i.project_name].filter(Boolean).join(' / ') || '-')}</td>
             <td>${i.inquiry_date || '-'}</td>
             <td>${i.applicant_name || '-'}</td>
             <td>¥${(i.total_amount || 0).toFixed(2)}</td>
@@ -1246,12 +1630,14 @@ function renderInquiryTable(inquiries) {
                 <button class="btn btn-secondary" style="padding:4px 8px;font-size:12px;" onclick="viewInquiry(${i.id})">查看</button>
                 ${i.approval_status === '已同意' ? `<button class="btn btn-primary" style="padding:4px 8px;font-size:12px;" onclick="printInquiryApproval(${i.id})">打印签字单</button>` : ''}
                 ${i.approval_status === '已同意' ? `<button class="btn btn-success" style="padding:4px 8px;font-size:12px;" onclick="exportSupplierOrders(${i.id})">导出供货单</button>` : ''}
-                ${(i.approval_status === '待审批' && canApproveInquiry(i)) || (i.approval_status === '已同意' && isAdmin() && !isSpecialApprovalInquiry(i)) ?
+                ${(isInquiryApprovalOpen(i.approval_status) && canApproveInquiry(i)) || (i.approval_status === '已同意' && isAdmin() && !isSpecialApprovalInquiry(i)) ?
                     `<button class="btn btn-warning" style="padding:4px 8px;font-size:12px;" onclick="approveInquiry(${i.id})">${i.approval_status === '已同意' ? '退回' : '审批'}</button>` : ''}
                 ${i.approval_status === '待审批' && currentUser && i.applicant_id === currentUser.id ?
                     `<button class="btn btn-info" style="padding:4px 8px;font-size:12px;" onclick="recallInquiry(${i.id})">撤回</button>` : ''}
                 ${(i.approval_status === '退回修改' || i.approval_status === '草稿') && currentUser && i.applicant_id === currentUser.id ?
                     `<button class="btn btn-success" style="padding:4px 8px;font-size:12px;" onclick="editInquiry(${i.id})">编辑</button>` : ''}
+                ${i.approval_status === '草稿' && currentUser && i.applicant_id === currentUser.id ?
+                    `<button class="btn btn-secondary" style="padding:4px 8px;font-size:12px;" onclick="exportDraftQuoteSheet(${i.id})">询比价导出</button>` : ''}
                 ${canDeleteInquiry(i) ?
                     `<button class="btn btn-danger" style="padding:4px 8px;font-size:12px;" onclick="deleteInquiry(${i.id})">删除</button>` : ''}
             </td>
@@ -1355,7 +1741,8 @@ function getStatusClass(status) {
         '已同意': 'approved',
         '已驳回': 'rejected',
         '退回修改': 'return',
-        '草稿': 'draft'
+        '草稿': 'draft',
+        '报价未发布': 'draft'
     };
     return map[status] || '';
 }
@@ -1436,6 +1823,7 @@ async function viewInquiry(id) {
                 <div class="card">
                     <p><strong>单号:</strong> ${i.inquiry_no}</p>
                     <p><strong>日期:</strong> ${i.inquiry_date || '-'}</p>
+                    <p><strong>项目:</strong> ${escapeHtml(i.project_display_name || [i.project_city, i.project_code, i.project_name].filter(Boolean).join(' / ') || '-')}</p>
                     <p><strong>申请人:</strong> ${i.applicant_name || '-'}</p>
                     <p><strong>总金额:</strong> ¥${displayTotal.toFixed(2)}</p>
                     <p><strong>状态:</strong> <span class="status ${getStatusClass(i.approval_status)}">${i.approval_status}</span></p>
@@ -1646,7 +2034,7 @@ async function approveInquiry(id) {
         document.getElementById('approvalRemark').value = '';
         document.getElementById('approvalRemark').classList.remove('reject-required');
 
-        if (inquiry.approval_status === '待审批' || inquiry.approval_status === '退回修改' || inquiry.approval_status === '已同意') {
+        if (isInquiryApprovalOpen(inquiry.approval_status) || inquiry.approval_status === '已同意') {
             actionSection.style.display = '';
             const isAdmin = currentUser && currentUser.role_name === '系统管理员';
             const isSpecialApproval = isSpecialApprovalInquiry(inquiry);
@@ -2218,6 +2606,7 @@ function renderBaseInventoryTable(records) {
         <tr>
             <td style="text-align:center;"><input type="checkbox" ${selectedBaseInventoryIds.has(item.id) ? 'checked' : ''} onchange="toggleBaseInventorySelect(${item.id})"></td>
             <td>${escapeHtml(item.material_code || '-')}</td>
+            <td>${escapeHtml(item.region || '成都')}</td>
             <td>${escapeHtml(item.material_name || '-')}</td>
             <td>${escapeHtml(item.specification || '-')}</td>
             <td>${escapeHtml(item.detail_spec || '-')}</td>
@@ -2229,7 +2618,7 @@ function renderBaseInventoryTable(records) {
             <td>${escapeHtml(item.remark || '-')}</td>
             <td><button class="btn btn-primary" style="padding:4px 10px;font-size:12px;" onclick="openBaseTransferModal(${item.id})">调拨到项目</button> <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="editBaseInventory(${item.id})">编辑</button> <button class="btn btn-danger" style="padding:4px 10px;font-size:12px;" onclick="deleteBaseInventory(${item.id})">删除</button></td>
         </tr>
-    `).join('') || '<tr><td colspan="12" class="loading">暂无基地库存，请点击"基地材料新增"补录历史材料</td></tr>';
+    `).join('') || '<tr><td colspan="13" class="loading">暂无基地库存，请点击"基地材料新增"补录历史材料</td></tr>';
 }
 
 function renderBaseTransferRecords(records) {
@@ -2504,6 +2893,7 @@ function editBaseInventory(inventoryId) {
     document.getElementById('baseStockInSpecification').value = item.specification || '';
     document.getElementById('baseStockInDetailSpec').value = item.detail_spec || '';
     document.getElementById('baseStockInUnitName').value = item.unit_name || '';
+    document.getElementById('baseStockInRegion').value = item.region || '成都';
     document.getElementById('baseStockInQuantity').value = item.quantity || 0;
     document.getElementById('baseStockInPrice').value = Number(item.unit_price || 0);
     document.getElementById('baseStockInRemark').value = item.remark || '';
@@ -2554,6 +2944,7 @@ async function openBatchTransferModal() {
     document.getElementById('batchTransferItemsBody').innerHTML = selectedItems.map((item, idx) => `
         <tr data-batch-item-id="${item.id}">
             <td style="padding:6px;">${escapeHtml(item.material_name || '-')}</td>
+            <td style="padding:6px;">${escapeHtml(item.region || '成都')}</td>
             <td style="padding:6px;">${escapeHtml(item.specification || '-')}</td>
             <td style="padding:6px;text-align:right;">${item.quantity || 0}</td>
             <td style="padding:6px;text-align:right;"><input type="number" class="batch-item-qty" min="0.01" step="0.01" max="${item.quantity || 0}" value="${item.quantity || 0}" style="width:80px;text-align:right;"></td>
@@ -2649,6 +3040,7 @@ async function openBaseStockInModal(materialId = null, quantity = 1, unitPrice =
     Object.values(fields).forEach(field => { field.readOnly = Boolean(materialId); });
     document.getElementById('baseStockInQuantity').value = Number(quantity) > 0 ? Number(quantity) : 1;
     document.getElementById('baseStockInPrice').value = Number(unitPrice || 0);
+    document.getElementById('baseStockInRegion').value = '成都';
     document.getElementById('baseStockInRemark').value = '';
     openModal('modal-base-stock-in');
 }
@@ -2670,6 +3062,7 @@ async function submitBaseStockIn(event) {
             specification: document.getElementById('baseStockInSpecification').value.trim(),
             detail_spec: document.getElementById('baseStockInDetailSpec').value.trim(),
             unit_name: document.getElementById('baseStockInUnitName').value.trim(),
+            region: document.getElementById('baseStockInRegion').value,
             quantity,
             unit_price: unitPrice,
             remark: document.getElementById('baseStockInRemark').value.trim(),
@@ -2715,22 +3108,14 @@ function renderSupplierTable() {
     const rateMap = {0.01:'1%', 0.03:'3%', 0.06:'6%', 0.09:'9%', 0.13:'13%'};
     tbody.innerHTML = suppliers.map(s => {
         const rate = s.tax_rate !== undefined && s.tax_rate !== null ? (rateMap[s.tax_rate] || (s.tax_rate * 100).toFixed(0) + '%') : '-';
-        const acc = (s.accounts && s.accounts[0]) || null;
-        let accStatus = '无账号';
-        let accClass = '';
-        if (acc) {
-            const isActive = acc.is_active && acc.status === 'active';
-            accStatus = isActive ? '已启用' : (acc.status === 'pending' ? '待审核' : '已禁用');
-            accClass = isActive ? 'status-agreed' : (acc.status === 'pending' ? 'status-pending' : 'status-rejected');
-        }
         return `
         <tr>
             <td>${escapeHtml(s.supplier_name)}</td>
             <td>${escapeHtml(s.business_scope || '-')}</td>
             <td>${escapeHtml(s.contact || '-')}</td>
             <td>${escapeHtml(s.phone || '-')}</td>
+            <td>${escapeHtml(s.account_username || '-')}</td>
             <td>${rate}</td>
-            <td><span class="status ${accClass}">${accStatus}</span></td>
             <td><button class="btn btn-sm btn-warning" onclick="openEditSupplier(${s.id})">编辑</button></td>
             <td class="admin-only"><button class="btn btn-sm btn-danger" onclick="deleteSupplier(${s.id})">删除</button></td>
         </tr>
@@ -2747,26 +3132,6 @@ function openEditSupplier(id) {
     document.getElementById('supplierPhone').value = s.phone || '';
     document.getElementById('supplierTaxRate').value = s.tax_rate !== null && s.tax_rate !== undefined ? String(s.tax_rate) : '';
     document.getElementById('supplierRemark').value = s.remark || '';
-    document.getElementById('supplierAccountUsername').value = '';
-    document.getElementById('supplierAccountPassword').value = '';
-
-    const accountRow = document.getElementById('supplierAccountStatusRow');
-    const accounts = s.accounts || [];
-    if (accounts.length > 0) {
-        accountRow.classList.remove('hidden');
-        const acc = accounts[0];
-        const statusText = document.getElementById('supplierAccountStatusText');
-        const toggleBtn = document.getElementById('supplierAccountToggle');
-        const isActive = acc.is_active && acc.status === 'active';
-        statusText.textContent = isActive ? '已启用' : (acc.status === 'pending' ? '待审核' : '已禁用');
-        statusText.className = 'status-badge ' + (isActive ? 'status-agreed' : (acc.status === 'pending' ? 'status-pending' : 'status-rejected'));
-        toggleBtn.textContent = isActive ? '禁用' : '启用';
-        document.getElementById('supplierAccountUsername').placeholder = acc.username || '供应商登录用';
-        document.getElementById('supplierAccountUsername').disabled = true;
-    } else {
-        accountRow.classList.add('hidden');
-        document.getElementById('supplierAccountUsername').disabled = false;
-    }
 
     document.getElementById('supplierModalTitle').textContent = '编辑供应商';
     openModal('modal-supplier');
@@ -2780,10 +3145,6 @@ function resetSupplierModal() {
     document.getElementById('supplierPhone').value = '';
     document.getElementById('supplierTaxRate').value = '';
     document.getElementById('supplierRemark').value = '';
-    document.getElementById('supplierAccountUsername').value = '';
-    document.getElementById('supplierAccountPassword').value = '';
-    document.getElementById('supplierAccountUsername').disabled = false;
-    document.getElementById('supplierAccountStatusRow').classList.add('hidden');
     document.getElementById('supplierModalTitle').textContent = '新建供应商';
 }
 
@@ -2815,12 +3176,6 @@ document.getElementById('supplierForm').addEventListener('submit', async (e) => 
         remark: document.getElementById('supplierRemark').value,
         tax_rate: document.getElementById('supplierTaxRate').value ? parseFloat(document.getElementById('supplierTaxRate').value) : null
     };
-    // 新建或编辑时都可填写账号密码
-    const accUsername = document.getElementById('supplierAccountUsername').value.trim();
-    const accPassword = document.getElementById('supplierAccountPassword').value.trim();
-    if (accUsername) body.account_username = accUsername;
-    if (accPassword) body.account_password = accPassword;
-
     try {
         const url = id ? `/api/suppliers/${id}` : '/api/suppliers';
         const method = id ? 'PUT' : 'POST';
@@ -2831,7 +3186,13 @@ document.getElementById('supplierForm').addEventListener('submit', async (e) => 
         });
         const data = await res.json();
         if (data.success) {
-            showToast(id ? '更新成功' : '创建成功', { credentials: 'same-origin' });
+            if (id) {
+                showToast('更新成功', { credentials: 'same-origin' });
+            } else if (data.username) {
+                showToast(`创建成功，账号：${data.username}，初始密码：888888`, { credentials: 'same-origin' });
+            } else {
+                showToast('创建成功', { credentials: 'same-origin' });
+            }
             closeModal('modal-supplier');
             resetSupplierModal();
             loadSuppliers();
@@ -3754,6 +4115,7 @@ function renderMaterialPickerList() {
 
     list.innerHTML = display.map(m => {
         const code = m.material_code || '';
+        const regionCode = (code.substring(0, 2) || '').toUpperCase();
         const region = codeToRegion(code);
         const name = escapeHtml(m.material_name || '');
         const spec = escapeHtml(m.specification || '');
@@ -3770,7 +4132,7 @@ function renderMaterialPickerList() {
                      style="display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer;border-bottom:1px solid #f0f0f0;transition:background 0.15s;">
             <div style="flex:1;min-width:0;">
                 <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
-                    <span style="font-size:11px;color:#fff;background:${region === 'AN' ? '#1976d2' : region === 'KM' ? '#e65100' : region === 'BN' ? '#2e7d32' : region === 'DL' ? '#6a1b9a' : region === 'YX' ? '#c62828' : region === 'CD' ? '#00838f' : '#999'};padding:1px 6px;border-radius:3px;flex-shrink:0;">${region || '??'}</span>
+                    <span style="font-size:11px;color:#fff;background:${regionCode === 'AN' ? '#1976d2' : regionCode === 'KM' ? '#e65100' : regionCode === 'BN' ? '#2e7d32' : regionCode === 'DL' ? '#6a1b9a' : regionCode === 'YX' ? '#c62828' : regionCode === 'CD' ? '#00838f' : regionCode === 'GX' ? '#16a34a' : '#999'};padding:1px 6px;border-radius:3px;flex-shrink:0;">${region || '??'}</span>
                     <strong style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${name}</strong>
                     ${spec ? `<span style="color:#666;font-size:12px;flex-shrink:0;">${spec}</span>` : ''}
                 </div>
@@ -4595,10 +4957,15 @@ function renderDraftsTable(drafts) {
             <td>${d.remark || '-'}</td>
             <td style="white-space:nowrap;">
                 <button class="btn btn-success" style="padding:4px 8px;font-size:12px;" onclick="editInquiry(${d.id})">继续编辑</button>
+                <button class="btn btn-secondary" style="padding:4px 8px;font-size:12px;" onclick="exportDraftQuoteSheet(${d.id})">询比价导出</button>
                 <button class="btn btn-danger" style="padding:4px 8px;font-size:12px;" onclick="deleteInquiryDraft(${d.id})">删除</button>
             </td>
         </tr>
     `).join('');
+}
+
+function exportDraftQuoteSheet(id) {
+    window.location.href = `/api/purchase-inquiries/draft/${id}/export-quote-sheet`;
 }
 
 async function deleteInquiryDraft(id) {
@@ -5403,88 +5770,3 @@ async function lockQuotes(inquiryId) {
     }
 }
 
-// ==================== 供应商账号管理 ====================
-
-function openEditSupplier(id) {
-    const s = (suppliers || []).find(x => x.id === id);
-    if (!s) return;
-    document.getElementById('supplierId').value = s.id;
-    document.getElementById('supplierName').value = s.supplier_name || '';
-    document.getElementById('supplierContact').value = s.contact || '';
-    document.getElementById('supplierPhone').value = s.phone || '';
-    document.getElementById('supplierTaxRate').value = s.tax_rate || '';
-    document.getElementById('supplierRemark').value = s.remark || '';
-    document.getElementById('supplierAccountUsername').value = '';
-    document.getElementById('supplierAccountPassword').value = '';
-
-    const accountRow = document.getElementById('supplierAccountStatusRow');
-    const accounts = s.accounts || [];
-    if (accounts.length > 0) {
-        accountRow.classList.remove('hidden');
-        const acc = accounts[0];
-        const statusText = document.getElementById('supplierAccountStatusText');
-        const toggleBtn = document.getElementById('supplierAccountToggle');
-        const isActive = acc.is_active && acc.status === 'active';
-        statusText.textContent = isActive ? '已启用' : (acc.status === 'pending' ? '待审核' : '已禁用');
-        statusText.className = 'status-badge ' + (isActive ? 'status-agreed' : (acc.status === 'pending' ? 'status-pending' : 'status-rejected'));
-        toggleBtn.textContent = isActive ? '禁用' : '启用';
-        document.getElementById('supplierAccountUsername').placeholder = acc.username || '供应商登录用';
-        document.getElementById('supplierAccountUsername').disabled = true;
-    } else {
-        accountRow.classList.add('hidden');
-        document.getElementById('supplierAccountUsername').disabled = false;
-    }
-
-    document.getElementById('supplierModalTitle').textContent = '编辑供应商';
-    openModal('modal-supplier');
-}
-
-async function toggleSupplierAccount() {
-    const supplierId = document.getElementById('supplierId').value;
-    if (!supplierId) return;
-    const s = (suppliers || []).find(x => x.id == supplierId);
-    const acc = (s && s.accounts && s.accounts[0]) || {};
-    const isActive = acc.is_active && acc.status === 'active';
-    const newStatus = isActive ? 'disabled' : 'active';
-    const newActive = isActive ? 0 : 1;
-    try {
-        const res = await api(`/api/suppliers/${supplierId}/account`, {
-            method: 'PUT',
-            body: JSON.stringify({ status: newStatus, is_active: newActive })
-        });
-        const data = await res.json();
-        if (!data.success) {
-            showToast(data.message || '操作失败', 'error');
-            return;
-        }
-        showToast('账号状态已更新', 'success');
-        await loadSuppliers();
-        openEditSupplier(parseInt(supplierId));
-    } catch (e) {
-        showToast('操作失败', 'error');
-    }
-}
-
-async function resetSupplierPassword() {
-    const supplierId = document.getElementById('supplierId').value;
-    if (!supplierId) return;
-    const newPwd = prompt('请输入新密码（至少6位）:');
-    if (!newPwd || newPwd.length < 6) {
-        if (newPwd !== null) showToast('密码至少6位', 'error');
-        return;
-    }
-    try {
-        const res = await api(`/api/suppliers/${supplierId}/account/reset-password`, {
-            method: 'POST',
-            body: JSON.stringify({ password: newPwd })
-        });
-        const data = await res.json();
-        if (!data.success) {
-            showToast(data.message || '重置失败', 'error');
-            return;
-        }
-        showToast('密码已重置', 'success');
-    } catch (e) {
-        showToast('重置失败', 'error');
-    }
-}

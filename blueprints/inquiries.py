@@ -5,6 +5,12 @@ from flask import Blueprint, request, jsonify, session, make_response
 from datetime import datetime
 from html import escape
 from helpers import amount_to_chinese, get_db, generate_inquiry_no
+from helpers.material_regions import (
+    format_project_display,
+    generate_material_code,
+    get_region_name,
+    resolve_material_region_code,
+)
 import sys
 import logging
 import config
@@ -16,6 +22,34 @@ logger = logging.getLogger(__name__)
 inquiry_bp = Blueprint('inquiries', __name__, url_prefix='/api')
 
 SPECIAL_APPROVER_USERNAMES = ('leikefeng', 'tanxiang')
+
+
+def _get_supplier_id_for_user(cursor, user_id):
+    cursor.execute("SELECT id FROM suppliers WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    return row['id'] if row else None
+
+
+def _supplier_can_access_inquiry(cursor, inquiry_id, supplier_id):
+    cursor.execute("""
+        SELECT 1
+        FROM purchase_inquiry_items pii
+        JOIN purchase_inquiry_quotes piq ON piq.item_id = pii.id
+        WHERE pii.inquiry_id = ?
+          AND piq.supplier_id = ?
+        LIMIT 1
+    """, (inquiry_id, supplier_id))
+    if cursor.fetchone():
+        return True
+
+    cursor.execute("""
+        SELECT 1
+        FROM purchase_inquiry_details
+        WHERE inquiry_id = ?
+          AND supplier_id = ?
+        LIMIT 1
+    """, (inquiry_id, supplier_id))
+    return cursor.fetchone() is not None
 
 
 def _get_special_approval_context(cursor, inquiry_id):
@@ -79,7 +113,7 @@ def get_inquiries():
     role_name = dict(role_row)['role_name'] if role_row else None
     cursor.execute("PRAGMA table_info(purchase_inquiries)")
     inquiry_columns = {row[1] for row in cursor.fetchall()}
-    project_select = "p.project_code" if 'project_id' in inquiry_columns else "NULL AS project_code"
+    project_select = "p.project_code, p.project_name" if 'project_id' in inquiry_columns else "NULL AS project_code, NULL AS project_name"
     project_join = "LEFT JOIN projects p ON pi.project_id = p.id" if 'project_id' in inquiry_columns else ""
 
     keyword = (request.args.get('keyword') or '').strip()
@@ -123,6 +157,37 @@ def get_inquiries():
             {where_sql}
             ORDER BY pi.create_time DESC
         """, params)
+    elif role_name == '供应商':
+        supplier_id = _get_supplier_id_for_user(cursor, user['id'])
+        if not supplier_id:
+            conn.close()
+            return jsonify({'success': True, 'data': []})
+
+        permission_sql = """(
+                EXISTS (
+                    SELECT 1
+                    FROM purchase_inquiry_items pii
+                    JOIN purchase_inquiry_quotes piq ON piq.item_id = pii.id
+                    WHERE pii.inquiry_id = pi.id
+                      AND piq.supplier_id = ?
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM purchase_inquiry_details pid
+                    WHERE pid.inquiry_id = pi.id
+                      AND pid.supplier_id = ?
+                )
+            )"""
+        where_parts = [permission_sql] + filters
+        cursor.execute(f"""
+            SELECT pi.*, u.real_name as applicant_name, u.username as applicant_username,
+                   {project_select}
+            FROM purchase_inquiries pi
+            LEFT JOIN users u ON pi.applicant_id = u.id
+            {project_join}
+            WHERE {' AND '.join(where_parts)}
+            ORDER BY pi.create_time DESC
+        """, [supplier_id, supplier_id, *params])
     else:
         # 普通用户只能看到自己绑定项目的询价单
         permission_sql = """(
@@ -141,7 +206,15 @@ def get_inquiries():
             ORDER BY pi.create_time DESC
         """, [user['id'], user['id'], *params])
 
-    inquiries = [dict(row) for row in cursor.fetchall()]
+    inquiries = []
+    for row in cursor.fetchall():
+        inquiry = dict(row)
+        inquiry['project_city'] = get_region_name(inquiry.get('project_code'))
+        inquiry['project_display_name'] = format_project_display(
+            inquiry.get('project_code'),
+            inquiry.get('project_name'),
+        )
+        inquiries.append(inquiry)
     conn.close()
     return jsonify({'success': True, 'data': inquiries})
 
@@ -149,11 +222,12 @@ def get_inquiries():
 @inquiry_bp.route('/purchase-inquiries/<int:inquiry_id>', methods=['GET'])
 def get_inquiry(inquiry_id):
     """获取询价单详情（嵌套结构）"""
+    user = session.get('user')
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("PRAGMA table_info(purchase_inquiries)")
     inquiry_columns = {row[1] for row in cursor.fetchall()}
-    project_select = "p.project_code" if 'project_id' in inquiry_columns else "NULL AS project_code"
+    project_select = "p.project_code, p.project_name" if 'project_id' in inquiry_columns else "NULL AS project_code, NULL AS project_name"
     project_join = "LEFT JOIN projects p ON pi.project_id = p.id" if 'project_id' in inquiry_columns else ""
     cursor.execute(f"""
         SELECT pi.*, u.real_name as applicant_name, u.username as applicant_username,
@@ -165,34 +239,76 @@ def get_inquiry(inquiry_id):
     """, (inquiry_id,))
     row = cursor.fetchone()
     inquiry = dict(row) if row else None
+    supplier_id_for_response = None
+    if inquiry:
+        inquiry['project_city'] = get_region_name(inquiry.get('project_code'))
+        inquiry['project_display_name'] = format_project_display(
+            inquiry.get('project_code'),
+            inquiry.get('project_name'),
+        )
+
+    if user:
+        cursor.execute("SELECT r.role_name FROM users u LEFT JOIN roles r ON u.role_id = r.id WHERE u.id = ?", (user['id'],))
+        role_row = cursor.fetchone()
+        role_name = dict(role_row)['role_name'] if role_row else None
+        if role_name == '供应商':
+            supplier_id = _get_supplier_id_for_user(cursor, user['id'])
+            if not supplier_id or not _supplier_can_access_inquiry(cursor, inquiry_id, supplier_id):
+                conn.close()
+                return jsonify({'success': False, 'message': '无权访问该询价单'}), 403
+            supplier_id_for_response = supplier_id
 
     # 查询新的 items + quotes 嵌套结构
-    cursor.execute("""
+    item_supplier_filter = ""
+    item_params = [inquiry_id]
+    if supplier_id_for_response:
+        item_supplier_filter = """
+          AND EXISTS (
+              SELECT 1
+              FROM purchase_inquiry_quotes pq2
+              WHERE pq2.item_id = pi.id
+                AND pq2.supplier_id = ?
+          )
+        """
+        item_params.append(supplier_id_for_response)
+    cursor.execute(f"""
         SELECT pi.*, m.material_name, m.specification, m.material_code, u.unit_name
         FROM purchase_inquiry_items pi
         LEFT JOIN materials m ON pi.material_id = m.id
         LEFT JOIN units u ON m.unit_id = u.id
         WHERE pi.inquiry_id = ?
+        {item_supplier_filter}
         ORDER BY pi.id
-    """, (inquiry_id,))
+    """, item_params)
     items = []
     for item_row in cursor.fetchall():
         item = dict(item_row)
         item_id = item['id']
         # 查询该item下的所有报价
-        cursor.execute("""
+        quote_supplier_filter = ""
+        quote_params = [item_id]
+        if supplier_id_for_response:
+            quote_supplier_filter = "AND pq.supplier_id = ?"
+            quote_params.append(supplier_id_for_response)
+        cursor.execute(f"""
             SELECT pq.*, s.supplier_name
             FROM purchase_inquiry_quotes pq
             LEFT JOIN suppliers s ON pq.supplier_id = s.id
             WHERE pq.item_id = ?
+            {quote_supplier_filter}
             ORDER BY pq.id
-        """, (item_id,))
+        """, quote_params)
         item['quotes'] = [dict(q) for q in cursor.fetchall()]
         items.append(item)
 
     # 如果没有新结构数据，尝试兼容旧结构（purchase_inquiry_details）
     if not items:
-        cursor.execute("""
+        legacy_supplier_filter = ""
+        legacy_params = [inquiry_id]
+        if supplier_id_for_response:
+            legacy_supplier_filter = "AND pd.supplier_id = ?"
+            legacy_params.append(supplier_id_for_response)
+        cursor.execute(f"""
             SELECT pd.*, m.material_name, m.specification, m.material_code,
                    u.unit_name, s.supplier_name
             FROM purchase_inquiry_details pd
@@ -200,7 +316,8 @@ def get_inquiry(inquiry_id):
             LEFT JOIN units u ON m.unit_id = u.id
             LEFT JOIN suppliers s ON pd.supplier_id = s.id
             WHERE pd.inquiry_id = ?
-        """, (inquiry_id,))
+            {legacy_supplier_filter}
+        """, legacy_params)
         details = [dict(row) for row in cursor.fetchall()]
         conn.close()
         return jsonify({'success': True, 'data': inquiry, 'details': details, 'legacy': True})
@@ -579,11 +696,21 @@ def delete_inquiry(inquiry_id):
 
     # 获取询价单所属项目的编码前缀
     inquiry_prefix = ''
+    applicant_user = None
+    cursor.execute("""
+        SELECT username, real_name
+        FROM users
+        WHERE id = ?
+    """, (inq.get('applicant_id'),))
+    applicant_row = cursor.fetchone()
+    if applicant_row:
+        applicant_user = dict(applicant_row)
+
     if inquiry_project_id:
         cursor.execute("SELECT project_code FROM projects WHERE id = ?", (inquiry_project_id,))
         proj_row = cursor.fetchone()
         if proj_row:
-            inquiry_prefix = (proj_row[0] or '')[:2].upper()
+            inquiry_prefix = resolve_material_region_code(proj_row[0], applicant_user)
 
     # 获取询价单关联的材料ID列表，识别跨区域创建的材料
     # 跨区域材料条件：(1) 编码前缀与项目前缀一致 (2) 仅被本询价单引用
@@ -863,7 +990,7 @@ def _approve_inquiry_impl(inquiry_id):
         cursor.execute("""
             UPDATE purchase_inquiries
             SET approval_status = '已驳回', approver_id = ?, approve_time = ?, approval_remark = ?
-            WHERE id = ? AND approval_status IN ('待审批', '材料员已审')
+            WHERE id = ? AND approval_status IN ('待审批', '材料员已审', '报价未发布')
         """, (user['id'], now, remark, inquiry_id))
         updated_rows = cursor.rowcount
     elif action == 'return':
@@ -927,7 +1054,7 @@ def _approve_inquiry_impl(inquiry_id):
         cursor.execute("""
             UPDATE purchase_inquiries
             SET approval_status = '退回修改', approver_id = ?, approve_time = ?, approval_remark = ?
-            WHERE id = ? AND approval_status IN ('待审批', '材料员已审', '已同意')
+            WHERE id = ? AND approval_status IN ('待审批', '材料员已审', '已同意', '报价未发布')
         """, (user['id'], now, remark, inquiry_id))
         updated_rows = cursor.rowcount
     elif action == 'material_clerk':
@@ -943,7 +1070,7 @@ def _approve_inquiry_impl(inquiry_id):
             if username not in SPECIAL_APPROVER_USERNAMES:
                 conn.close()
                 return jsonify({'success': False, 'message': '该询价单必须由雷克峰和谭香审批'})
-            if special_ctx['approval_status'] not in ('待审批', '材料员已审', '退回修改'):
+            if special_ctx['approval_status'] not in ('待审批', '材料员已审', '退回修改', '报价未发布'):
                 conn.close()
                 return jsonify({'success': False, 'message': '操作失败，状态已更新'})
 
@@ -966,7 +1093,7 @@ def _approve_inquiry_impl(inquiry_id):
         cursor.execute("""
             UPDATE purchase_inquiries
             SET approval_status = '已同意', approver_id = ?, approve_time = ?, approval_remark = ?
-            WHERE id = ? AND approval_status IN ('待审批', '材料员已审', '退回修改')
+            WHERE id = ? AND approval_status IN ('待审批', '材料员已审', '退回修改', '报价未发布')
         """, (user['id'], now, remark, inquiry_id))
         updated_rows = cursor.rowcount
 
@@ -983,29 +1110,14 @@ def _approve_inquiry_impl(inquiry_id):
         cursor.execute("SELECT project_code FROM projects WHERE id = ?", (inquiry_project_id,))
         proj_row = cursor.fetchone()
         inquiry_project_code = proj_row[0] if proj_row else ''
-        inquiry_prefix = inquiry_project_code[:2].upper() if inquiry_project_code else ''
+        cursor.execute("SELECT username, real_name FROM users WHERE id = ?", (inq.get('applicant_id'),))
+        applicant_row = cursor.fetchone()
+        inquiry_applicant = dict(applicant_row) if applicant_row else None
+        inquiry_prefix = resolve_material_region_code(inquiry_project_code, inquiry_applicant) if inquiry_project_code else ''
 
         def generate_new_material_code(cursor, project_code):
             """根据项目编码生成新的材料编号（确保不重复）"""
-            prefix = project_code[:2].upper() + 'LX'
-            cursor.execute("SELECT material_code FROM materials WHERE material_code LIKE ? ORDER BY material_code DESC LIMIT 1",
-                           (prefix + '%',))
-            last_row = cursor.fetchone()
-            if last_row:
-                last_code = last_row[0]
-                try:
-                    next_num = int(last_code[len(prefix):]) + 1
-                except ValueError:
-                    next_num = 1
-            else:
-                next_num = 1
-            new_code = prefix + str(next_num).zfill(5)
-            while True:
-                cursor.execute("SELECT 1 FROM materials WHERE material_code = ?", (new_code,))
-                if not cursor.fetchone():
-                    return new_code
-                next_num += 1
-                new_code = prefix + str(next_num).zfill(5)
+            return generate_material_code(cursor, project_code, inquiry_applicant)
 
         if items:
             for item in items:
@@ -1830,9 +1942,10 @@ def export_supplier_orders(inquiry_id):
 
     # 获取询价单信息
     cursor.execute("""
-        SELECT pi.*, u.real_name as applicant_name
+        SELECT pi.*, u.real_name as applicant_name, p.project_code, p.project_name
         FROM purchase_inquiries pi
         LEFT JOIN users u ON pi.applicant_id = u.id
+        LEFT JOIN projects p ON pi.project_id = p.id
         WHERE pi.id = ?
     """, (inquiry_id,))
     row = cursor.fetchone()
@@ -1841,6 +1954,10 @@ def export_supplier_orders(inquiry_id):
         return jsonify({'success': False, 'message': '询价单不存在'})
 
     inquiry = dict(row)
+    project_display = format_project_display(
+        inquiry.get('project_code'),
+        inquiry.get('project_name'),
+    )
 
     # 获取所有items
     cursor.execute("""
@@ -1965,7 +2082,7 @@ def export_supplier_orders(inquiry_id):
         # 询价单信息
         ws['A2'] = f'询价单号：{inquiry["inquiry_no"]}'
         ws['A3'] = f'日期：{inquiry.get("inquiry_date", "-")}'
-        ws['A4'] = f'项目：{inquiry.get("project_id", "-")}'
+        ws['A4'] = f'项目：{project_display}'
 
         # 表头
         headers = ['序号', '材料编码', '材料名称', '规格型号', '详细规格', '品牌', '单位', '数量', '含税单价', '金额']
@@ -2235,6 +2352,248 @@ def get_drafts():
     drafts = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return jsonify({'success': True, 'data': drafts})
+
+
+@inquiry_bp.route('/purchase-inquiries/draft/<int:draft_id>/export-quote-sheet', methods=['GET'])
+def export_draft_quote_sheet(draft_id):
+    """导出草稿询价表，供材料员发给供应商填写报价。"""
+    from io import BytesIO
+    from urllib.parse import quote as url_quote
+    from zipfile import ZIP_DEFLATED, ZipFile
+    from xml.sax.saxutils import escape as xml_escape
+
+    user = session.get('user')
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT pi.*, p.project_code, p.project_name
+        FROM purchase_inquiries pi
+        LEFT JOIN projects p ON pi.project_id = p.id
+        WHERE pi.id = ?
+    """, (draft_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return jsonify({'success': False, 'message': '草稿不存在'}), 404
+
+    draft = dict(row)
+    if draft.get('approval_status') != '草稿':
+        conn.close()
+        return jsonify({'success': False, 'message': '该询价单不是草稿'})
+    if draft.get('applicant_id') != user.get('id'):
+        conn.close()
+        return jsonify({'success': False, 'message': '只有申请人可以导出此草稿'}), 403
+
+    def table_columns(table_name):
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        return {col[1] for col in cursor.fetchall()}
+
+    item_columns = table_columns('purchase_inquiry_items')
+    material_columns = table_columns('materials')
+    item_detail_expr = 'i.detail_spec' if 'detail_spec' in item_columns else 'NULL'
+    material_detail_expr = 'm.detail_spec' if 'detail_spec' in material_columns else 'NULL'
+    item_brand_expr = 'i.brand' if 'brand' in item_columns else 'NULL'
+    material_brand_expr = 'm.brand' if 'brand' in material_columns else 'NULL'
+    if 'is_national_standard' in item_columns:
+        national_standard_expr = 'i.is_national_standard'
+    elif 'is_national_standard' in material_columns:
+        national_standard_expr = 'm.is_national_standard'
+    else:
+        national_standard_expr = '0'
+
+    cursor.execute(f"""
+        SELECT i.id AS item_id, i.quantity, {national_standard_expr} AS is_national_standard,
+               COALESCE({item_detail_expr}, {material_detail_expr}, m.specification, '') AS export_spec,
+               COALESCE({item_brand_expr}, {material_brand_expr}, '') AS export_brand,
+               m.material_name, m.specification, u.unit_name
+        FROM purchase_inquiry_items i
+        LEFT JOIN materials m ON m.id = i.material_id
+        LEFT JOIN units u ON u.id = m.unit_id
+        WHERE i.inquiry_id = ?
+        ORDER BY i.id
+    """, (draft_id,))
+    items = [dict(r) for r in cursor.fetchall()]
+    if not items:
+        conn.close()
+        return jsonify({'success': False, 'message': '草稿没有询价材料明细'})
+
+    item_ids = [item['item_id'] for item in items]
+    placeholders = ','.join('?' * len(item_ids))
+    cursor.execute(f"""
+        SELECT q.item_id, q.supplier_id, q.tax_rate, s.supplier_name
+        FROM purchase_inquiry_quotes q
+        LEFT JOIN suppliers s ON s.id = q.supplier_id
+        WHERE q.item_id IN ({placeholders}) AND q.supplier_id IS NOT NULL
+        ORDER BY q.id
+    """, item_ids)
+    suppliers = []
+    seen_suppliers = set()
+    for quote_row in cursor.fetchall():
+        quote_data = dict(quote_row)
+        supplier_id = quote_data.get('supplier_id')
+        if supplier_id in seen_suppliers:
+            continue
+        seen_suppliers.add(supplier_id)
+        suppliers.append({
+            'id': supplier_id,
+            'name': quote_data.get('supplier_name') or '供应商',
+            'tax_rate': quote_data.get('tax_rate') if quote_data.get('tax_rate') is not None else 0.01,
+        })
+    conn.close()
+
+    if not suppliers:
+        suppliers = [{'id': None, 'name': '供应商', 'tax_rate': 0.01}]
+
+    def tax_label(rate):
+        try:
+            return f"{int(round(float(rate) * 100))}%专票"
+        except (TypeError, ValueError):
+            return '专票'
+
+    base_cols = 7
+    total_cols = base_cols + len(suppliers) * 2
+
+    def col_name(index):
+        name = ''
+        while index:
+            index, rem = divmod(index - 1, 26)
+            name = chr(65 + rem) + name
+        return name
+
+    def cell_ref(row, col):
+        return f'{col_name(col)}{row}'
+
+    def cell_xml(row, col, value=None, style=1, formula=None):
+        ref = cell_ref(row, col)
+        style_attr = f' s="{style}"' if style else ''
+        if formula:
+            return f'<c r="{ref}"{style_attr}><f>{xml_escape(formula)}</f></c>'
+        if value is None or value == '':
+            return f'<c r="{ref}"{style_attr}/>'
+        if isinstance(value, (int, float)):
+            return f'<c r="{ref}"{style_attr}><v>{value}</v></c>'
+        text = xml_escape(str(value))
+        return f'<c r="{ref}" t="inlineStr"{style_attr}><is><t xml:space="preserve">{text}</t></is></c>'
+
+    last_col = col_name(total_cols)
+    project_display = format_project_display(draft.get('project_code'), draft.get('project_name'))
+    headers = ['序号', '材料名称', '规格型号', '品牌', '是否国标', '单位', '数量']
+    for supplier in suppliers:
+        headers.extend([f'{supplier["name"]}单价{tax_label(supplier.get("tax_rate"))}', f'{supplier["name"]}总价'])
+
+    rows_xml = []
+    rows_xml.append(
+        '<row r="1" ht="46" customHeight="1">'
+        + cell_xml(1, 1, '零星材采购比价表', style=2)
+        + '</row>'
+    )
+    rows_xml.append(
+        '<row r="2" ht="22" customHeight="1">'
+        + cell_xml(2, 1, f'项目名称：{project_display}', style=1)
+        + cell_xml(2, base_cols + 1, f'时间：{draft.get("inquiry_date") or ""}', style=1)
+        + '</row>'
+    )
+    rows_xml.append(
+        '<row r="3" ht="42" customHeight="1">'
+        + ''.join(cell_xml(3, col, header, style=3) for col, header in enumerate(headers, 1))
+        + '</row>'
+    )
+
+    data_rows = []
+    for idx, item in enumerate(items, 1):
+        row_idx = idx + 3
+        row_values = [
+            idx,
+            item.get('material_name') or '',
+            item.get('export_spec') or item.get('specification') or '',
+            item.get('export_brand') or '',
+            '是' if item.get('is_national_standard') else '否',
+            item.get('unit_name') or '',
+            item.get('quantity') or 0,
+        ]
+        cells = [cell_xml(row_idx, col, value, style=1) for col, value in enumerate(row_values, 1)]
+        for supplier_idx, _supplier in enumerate(suppliers):
+            price_col = base_cols + 1 + supplier_idx * 2
+            total_col = price_col + 1
+            price_ref = cell_ref(row_idx, price_col)
+            cells.append(cell_xml(row_idx, price_col, None, style=4))
+            cells.append(cell_xml(row_idx, total_col, style=4, formula=f'IF({price_ref}="","",{price_ref}*$G{row_idx})'))
+        data_rows.append(f'<row r="{row_idx}" ht="25" customHeight="1">{"".join(cells)}</row>')
+    rows_xml.extend(data_rows)
+
+    col_widths = {1: 4, 2: 24, 3: 36, 4: 10, 5: 10, 6: 10, 7: 9}
+    cols_xml = ''.join(
+        f'<col min="{idx}" max="{idx}" width="{col_widths.get(idx, 16 if idx % 2 else 12)}" customWidth="1"/>'
+        for idx in range(1, total_cols + 1)
+    )
+    merges_xml = (
+        '<mergeCells count="3">'
+        f'<mergeCell ref="A1:{last_col}1"/>'
+        f'<mergeCell ref="A2:{col_name(base_cols)}2"/>'
+        f'<mergeCell ref="{col_name(base_cols + 1)}2:{last_col}2"/>'
+        '</mergeCells>'
+    )
+    sheet_xml = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheetViews><sheetView workbookViewId="0"><pane ySplit="3" topLeftCell="A4" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+  <cols>{cols_xml}</cols>
+  <sheetData>{''.join(rows_xml)}</sheetData>
+  {merges_xml}
+  <autoFilter ref="A3:{last_col}{3 + len(items)}"/>
+</worksheet>'''
+
+    styles_xml = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="3"><font><sz val="11"/><name val="宋体"/></font><font><b/><sz val="18"/><name val="宋体"/></font><font><b/><sz val="11"/><name val="宋体"/></font></fonts>
+  <fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFD9EAF7"/><bgColor indexed="64"/></patternFill></fill></fills>
+  <borders count="2"><border/><border><left style="thin"/><right style="thin"/><top style="thin"/><bottom style="thin"/><diagonal/></border></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="5">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"><alignment vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+    <xf numFmtId="0" fontId="2" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+    <xf numFmtId="4" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
+  </cellXfs>
+  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>'''
+
+    output = BytesIO()
+    with ZipFile(output, 'w', ZIP_DEFLATED) as xlsx:
+        xlsx.writestr('[Content_Types].xml', '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>''')
+        xlsx.writestr('_rels/.rels', '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>''')
+        xlsx.writestr('xl/workbook.xml', '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets><sheet name="询价表" sheetId="1" r:id="rId1"/></sheets>
+</workbook>''')
+        xlsx.writestr('xl/_rels/workbook.xml.rels', '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>''')
+        xlsx.writestr('xl/worksheets/sheet1.xml', sheet_xml)
+        xlsx.writestr('xl/styles.xml', styles_xml)
+    output.seek(0)
+
+    filename = f'询价表_{draft.get("inquiry_no") or draft_id}.xlsx'
+    encoded_filename = url_quote(filename)
+    response = make_response(output.getvalue())
+    response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    response.headers['Content-Disposition'] = f"attachment; filename*=UTF-8''{encoded_filename}"
+    return response
 
 
 @inquiry_bp.route('/purchase-inquiries/draft/<int:draft_id>/submit', methods=['POST'])

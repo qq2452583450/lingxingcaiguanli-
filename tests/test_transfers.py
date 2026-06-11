@@ -136,6 +136,7 @@ def test_base_inventory_manual_stock_in_creates_standalone_base_material(client,
         'specification': 'DN50',
         'detail_spec': '镀锌钢管 6米',
         'unit_name': '根',
+        'region': '云南',
         'quantity': 8,
         'unit_price': 13.5,
         'remark': '旧料盘点补录',
@@ -144,7 +145,7 @@ def test_base_inventory_manual_stock_in_creates_standalone_base_material(client,
 
     assert data['success'] is True
     base_inventory = test_db.execute("""
-        SELECT material_id, material_name, specification, detail_spec, unit_name, quantity, unit_price, remark
+        SELECT material_id, material_name, specification, detail_spec, unit_name, region, quantity, unit_price, remark
         FROM base_inventory
     """).fetchone()
     assert test_db.execute("SELECT COUNT(*) FROM materials").fetchone()[0] == material_count
@@ -153,6 +154,7 @@ def test_base_inventory_manual_stock_in_creates_standalone_base_material(client,
     assert base_inventory['specification'] == 'DN50'
     assert base_inventory['detail_spec'] == '镀锌钢管 6米'
     assert base_inventory['unit_name'] == '根'
+    assert base_inventory['region'] == '云南'
     assert base_inventory['quantity'] == 8
     assert base_inventory['unit_price'] == 13.5
     assert base_inventory['remark'] == '旧料盘点补录'
@@ -162,7 +164,23 @@ def test_base_inventory_manual_stock_in_creates_standalone_base_material(client,
     assert listed['material_name'] == '基地旧材料'
     assert listed['specification'] == 'DN50'
     assert listed['detail_spec'] == '镀锌钢管 6米'
+    assert listed['region'] == '云南'
     assert listed['remark'] == '旧料盘点补录'
+
+
+def test_base_inventory_rejects_invalid_region(client, test_db):
+    login_as_material_clerk(client)
+
+    response = client.post('/api/base-inventory', json={
+        'material_name': '基地旧材料',
+        'region': '重庆',
+        'quantity': 8,
+    })
+    data = response.get_json()
+
+    assert data['success'] is False
+    assert '地区' in data['message']
+    assert test_db.execute("SELECT COUNT(*) FROM base_inventory").fetchone()[0] == 0
 
 
 def test_base_inventory_quick_stock_in_moves_project_inventory(client, test_db):
@@ -184,6 +202,28 @@ def test_base_inventory_quick_stock_in_moves_project_inventory(client, test_db):
     assert test_db.execute("""
         SELECT quantity FROM base_inventory WHERE material_id = ?
     """, (material_id,)).fetchone()[0] == 8
+
+
+def test_base_inventory_tracks_same_material_by_region(client, test_db):
+    login_as_material_clerk(client)
+    material_id, project_warehouse_id, _ = seed_transfer_inventory(test_db)
+
+    for region, quantity in [('成都', 5), ('广西', 7)]:
+        response = client.post('/api/base-inventory', json={
+            'material_id': material_id,
+            'region': region,
+            'quantity': quantity,
+            'unit_price': 13.5,
+            'source_warehouse_id': project_warehouse_id,
+        })
+        assert response.get_json()['success'] is True
+
+    rows = test_db.execute("""
+        SELECT region, quantity
+        FROM base_inventory
+        WHERE material_id = ?
+    """, (material_id,)).fetchall()
+    assert {row['region']: row['quantity'] for row in rows} == {'成都': 5, '广西': 7}
 
 
 def test_base_inventory_list_only_returns_explicitly_stocked_materials(client, test_db):

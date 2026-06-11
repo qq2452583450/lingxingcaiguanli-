@@ -2,7 +2,7 @@
 认证蓝图
 """
 from flask import Blueprint, request, jsonify, session
-from helpers import verify_password, get_db
+from helpers import hash_password, verify_password, get_db
 from helpers.auth_decorators import login_required
 from datetime import datetime, timedelta
 import threading
@@ -76,6 +76,7 @@ def login():
 
     cursor.execute("""
         SELECT u.id, u.username, u.password, u.real_name, u.role_id, u.is_active,
+               COALESCE(u.must_change_password, 0) AS must_change_password,
                r.role_name, r.permissions
         FROM users u
         LEFT JOIN roles r ON u.role_id = r.id
@@ -105,11 +106,41 @@ def login():
         'username': row['username'],
         'real_name': row['real_name'],
         'role_name': row['role_name'],
-        'permissions': row['permissions'] or ''
+        'permissions': row['permissions'] or '',
+        'must_change_password': bool(row['must_change_password'])
     }
     session['user'] = user
 
-    return jsonify({'success': True, 'user': user})
+    return jsonify({
+        'success': True,
+        'user': user,
+        'must_change_password': bool(row['must_change_password']),
+    })
+
+
+@auth_bp.route('/change-password', methods=['POST'])
+@login_required
+def change_password():
+    """当前用户修改自己的密码，首次登录强制改密后清除标记。"""
+    user = session.get('user')
+    data = request.json or {}
+    new_password = (data.get('new_password') or '').strip()
+    if len(new_password) < 6:
+        return jsonify({'success': False, 'message': '新密码至少6位'})
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE users
+        SET password = ?, must_change_password = 0
+        WHERE id = ?
+    """, (hash_password(new_password), user['id']))
+    conn.commit()
+    conn.close()
+
+    user['must_change_password'] = False
+    session['user'] = user
+    return jsonify({'success': True})
 
 
 @auth_bp.route('/logout', methods=['POST'])

@@ -21,6 +21,7 @@ def auto_fix_database():
             'role_id': 'INTEGER',
             'is_active': 'INTEGER DEFAULT 1',
             'create_time': 'TEXT',
+            'must_change_password': 'INTEGER DEFAULT 0',
         },
         'roles': {
             'id': 'INTEGER PRIMARY KEY AUTOINCREMENT',
@@ -47,6 +48,7 @@ def auto_fix_database():
             'phone': 'TEXT',
             'address': 'TEXT',
             'business_scope': 'TEXT',
+            'user_id': 'INTEGER',
             'remark': 'TEXT',
             'tax_rate': 'REAL',
             'create_time': 'TEXT',
@@ -117,6 +119,7 @@ def auto_fix_database():
             'specification': 'TEXT',
             'detail_spec': 'TEXT',
             'unit_name': 'TEXT',
+            'region': "TEXT DEFAULT '成都'",
             'quantity': 'REAL DEFAULT 0',
             'unit_price': 'REAL DEFAULT 0',
             'update_time': 'TEXT',
@@ -365,6 +368,43 @@ def auto_fix_database():
             'create_time': 'TEXT',
             'last_login_time': 'TEXT',
         },
+        'petty_cash_loans': {
+            'id': 'INTEGER PRIMARY KEY AUTOINCREMENT',
+            'loan_no': 'TEXT UNIQUE NOT NULL',
+            'project_id': 'INTEGER NOT NULL',
+            'loan_date': 'TEXT NOT NULL',
+            'total_amount': 'REAL DEFAULT 0',
+            'payment_file_path': 'TEXT',
+            'payment_file_name': 'TEXT',
+            'creator_id': 'INTEGER',
+            'remark': 'TEXT',
+            'create_time': 'TEXT',
+        },
+        'petty_cash_usages': {
+            'id': 'INTEGER PRIMARY KEY AUTOINCREMENT',
+            'usage_no': 'TEXT UNIQUE NOT NULL',
+            'loan_id': 'INTEGER NOT NULL',
+            'use_date': 'TEXT NOT NULL',
+            'expense_type': 'TEXT NOT NULL',
+            'amount': 'REAL DEFAULT 0',
+            'handler': 'TEXT',
+            'supplier_name': 'TEXT',
+            'material_name': 'TEXT',
+            'invoice_amount': 'REAL DEFAULT 0',
+            'invoice_type': 'TEXT',
+            'description': 'TEXT',
+            'proof_file_path': 'TEXT',
+            'proof_file_name': 'TEXT',
+            'creator_id': 'INTEGER',
+            'create_time': 'TEXT',
+        },
+        'petty_cash_usage_files': {
+            'id': 'INTEGER PRIMARY KEY AUTOINCREMENT',
+            'usage_id': 'INTEGER NOT NULL',
+            'file_path': 'TEXT',
+            'file_name': 'TEXT NOT NULL',
+            'create_time': 'TEXT',
+        },
     }
 
     # 补充已有表的新列
@@ -380,6 +420,16 @@ def auto_fix_database():
             'supplier_remark': 'TEXT',
         },
     }
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS petty_cash_usage_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usage_id INTEGER NOT NULL,
+            file_path TEXT,
+            file_name TEXT NOT NULL,
+            create_time TEXT
+        )
+    """)
 
     fixed_count = 0
 

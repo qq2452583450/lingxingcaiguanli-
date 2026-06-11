@@ -708,103 +708,49 @@ class TestSupplierAccountManagement:
                     content_type='application/json')
 
 
-    def test_create_supplier_with_account(self, client, test_db):
-        """创建供应商时可选创建账号"""
+    def test_create_supplier_generates_default_user_account(self, client, test_db):
+        """创建供应商时自动创建系统账号"""
         self._login_admin(client, test_db)
 
         resp = client.post('/api/suppliers',
                            data=json.dumps({
-                               'supplier_name': '新供应商',
-                               'account_username': 'new_supplier',
-                               'account_password': 'abc123456'
+                               'supplier_name': '新供应商'
                            }),
                            content_type='application/json')
         data = json.loads(resp.data)
         assert data['success'] is True
+        assert data['username'] == f"supplier_{data['id']:05d}"
 
         cursor = test_db.cursor()
-        cursor.execute("SELECT * FROM supplier_accounts WHERE username = 'new_supplier'")
-        acc = dict(cursor.fetchone())
-        assert acc['status'] == 'active'
-        assert acc['is_active'] == 1
+        cursor.execute("SELECT user_id FROM suppliers WHERE id = ?", (data['id'],))
+        supplier = dict(cursor.fetchone())
+        cursor.execute("SELECT username, password, must_change_password FROM users WHERE id = ?", (supplier['user_id'],))
+        account = dict(cursor.fetchone())
+        assert account['username'] == data['username']
+        assert verify_password('888888', account['password'])
+        assert account['must_change_password'] == 1
 
-    def test_get_suppliers_includes_account_info(self, client, test_db):
-        """获取供应商列表包含账号信息"""
+    def test_get_suppliers_includes_account_username_without_status(self, client, test_db):
+        """获取供应商列表只包含默认账号名"""
         self._login_admin(client, test_db)
 
         cursor = test_db.cursor()
-        cursor.execute("INSERT INTO suppliers (supplier_name, create_time) VALUES (?, ?)",
-                       ('有账号供应商', '2026-01-01 00:00:00'))
-        sup_id = cursor.lastrowid
+        cursor.execute("INSERT INTO roles (role_name, permissions) VALUES (?, ?)", ('供应商', ''))
+        role_id = cursor.lastrowid
         cursor.execute("""
-            INSERT INTO supplier_accounts (supplier_id, username, password, status, is_active, create_time)
-            VALUES (?, ?, ?, 'active', 1, ?)
-        """, (sup_id, 'has_account', hash_password('abc123456'), '2026-01-01 00:00:00'))
+            INSERT INTO users (username, password, real_name, role_id, is_active, create_time, must_change_password)
+            VALUES (?, ?, ?, ?, 1, ?, 1)
+        """, ('supplier_00077', hash_password('888888'), '有账号供应商', role_id, '2026-01-01 00:00:00'))
+        supplier_user_id = cursor.lastrowid
+        cursor.execute("INSERT INTO suppliers (supplier_name, user_id, create_time) VALUES (?, ?, ?)",
+                       ('有账号供应商', supplier_user_id, '2026-01-01 00:00:00'))
+        supplier_id = cursor.lastrowid
         test_db.commit()
         test_db.close()
 
         resp = client.get('/api/suppliers')
         data = json.loads(resp.data)
         assert data['success'] is True
-        sup = next(s for s in data['data'] if s['id'] == sup_id)
-        assert len(sup['accounts']) == 1
-        assert sup['accounts'][0]['username'] == 'has_account'
-        # 不应返回密码
-        assert 'password' not in sup['accounts'][0]
-
-    def test_reset_supplier_password(self, client, test_db):
-        """重置供应商密码"""
-        self._login_admin(client, test_db)
-
-        cursor = test_db.cursor()
-        cursor.execute("INSERT INTO suppliers (supplier_name, create_time) VALUES (?, ?)",
-                       ('重置供应商', '2026-01-01 00:00:00'))
-        sup_id = cursor.lastrowid
-        cursor.execute("""
-            INSERT INTO supplier_accounts (supplier_id, username, password, status, is_active, create_time)
-            VALUES (?, ?, ?, 'active', 1, ?)
-        """, (sup_id, 'reset_user', hash_password('old_password'), '2026-01-01 00:00:00'))
-        test_db.commit()
-        test_db.close()
-
-        resp = client.post(f'/api/suppliers/{sup_id}/account/reset-password',
-                           data=json.dumps({'password': 'new_password_123'}),
-                           content_type='application/json')
-        data = json.loads(resp.data)
-        assert data['success'] is True
-
-        # 验证新密码可以登录
-        resp = client.post('/api/supplier/login',
-                           data=json.dumps({'username': 'reset_user', 'password': 'new_password_123'}),
-                           content_type='application/json')
-        data = json.loads(resp.data)
-        assert data['success'] is True
-
-    def test_toggle_supplier_account(self, client, test_db):
-        """启用/禁用供应商账号"""
-        self._login_admin(client, test_db)
-
-        cursor = test_db.cursor()
-        cursor.execute("INSERT INTO suppliers (supplier_name, create_time) VALUES (?, ?)",
-                       ('切换供应商', '2026-01-01 00:00:00'))
-        sup_id = cursor.lastrowid
-        cursor.execute("""
-            INSERT INTO supplier_accounts (supplier_id, username, password, status, is_active, create_time)
-            VALUES (?, ?, ?, 'active', 1, ?)
-        """, (sup_id, 'toggle_user', hash_password('abc123456'), '2026-01-01 00:00:00'))
-        test_db.commit()
-        test_db.close()
-
-        # 禁用
-        resp = client.put(f'/api/suppliers/{sup_id}/account',
-                          data=json.dumps({'status': 'disabled', 'is_active': 0}),
-                          content_type='application/json')
-        data = json.loads(resp.data)
-        assert data['success'] is True
-
-        # 验证不能登录
-        resp = client.post('/api/supplier/login',
-                           data=json.dumps({'username': 'toggle_user', 'password': 'abc123456'}),
-                           content_type='application/json')
-        data = json.loads(resp.data)
-        assert data['success'] is False
+        sup = next(s for s in data['data'] if s['id'] == supplier_id)
+        assert sup['account_username'] == 'supplier_00077'
+        assert 'accounts' not in sup

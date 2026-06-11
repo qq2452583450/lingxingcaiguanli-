@@ -1,4 +1,8 @@
 import json
+import builtins
+from io import BytesIO
+
+from openpyxl import load_workbook
 
 
 def create_inquiry_delete_tables(cursor):
@@ -7,7 +11,14 @@ def create_inquiry_delete_tables(cursor):
         CREATE TABLE IF NOT EXISTS purchase_inquiry_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             inquiry_id INTEGER,
-            material_id INTEGER
+            material_id INTEGER,
+            quantity REAL DEFAULT 1,
+            tax_rate REAL DEFAULT 0.01,
+            is_national_standard INTEGER DEFAULT 0,
+            is_cash_price INTEGER DEFAULT 0,
+            detail_spec TEXT,
+            brand TEXT,
+            create_time TEXT
         )
         """
     )
@@ -16,7 +27,14 @@ def create_inquiry_delete_tables(cursor):
         CREATE TABLE IF NOT EXISTS purchase_inquiry_quotes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             item_id INTEGER,
-            supplier_id INTEGER
+            supplier_id INTEGER,
+            tax_price REAL DEFAULT 0,
+            tax_exempt_price REAL DEFAULT 0,
+            tax_rate REAL DEFAULT 0.13,
+            total_amount REAL DEFAULT 0,
+            is_lowest INTEGER DEFAULT 0,
+            is_selected INTEGER DEFAULT 0,
+            create_time TEXT
         )
         """
     )
@@ -134,6 +152,106 @@ def test_purchase_inquiries_support_list_filters(client, test_db):
     data = json.loads(response.data)
     assert data["success"] is True
     assert [row["inquiry_no"] for row in data["data"]] == ["XJ-202606-001"]
+
+
+def test_purchase_inquiries_include_project_city_code_and_name(client, test_db):
+    cursor = test_db.cursor()
+    create_inquiry_delete_tables(cursor)
+    ensure_project_id_column(cursor)
+    admin_id = seed_role_user(cursor, "系统管理员", "admin", "管理员")
+    cursor.execute(
+        "INSERT INTO projects (project_code, project_name, create_time) VALUES (?, ?, ?)",
+        ("GX-QUOTE", "广西报价项目", "2026-01-01 09:00:00"),
+    )
+    project_id = cursor.lastrowid
+    inquiry_id = seed_inquiry(cursor, "XJ-GX-PROJECT", admin_id, project_id=project_id)
+    test_db.commit()
+    set_session_user(client, admin_id, "admin", "管理员", "系统管理员")
+
+    list_response = client.get("/api/purchase-inquiries")
+    list_data = list_response.get_json()
+    listed = next(row for row in list_data["data"] if row["id"] == inquiry_id)
+    assert listed["project_city"] == "广西"
+    assert listed["project_code"] == "GX-QUOTE"
+    assert listed["project_name"] == "广西报价项目"
+
+    detail_response = client.get(f"/api/purchase-inquiries/{inquiry_id}")
+    detail_data = detail_response.get_json()
+    assert detail_data["data"]["project_city"] == "广西"
+    assert detail_data["data"]["project_code"] == "GX-QUOTE"
+    assert detail_data["data"]["project_name"] == "广西报价项目"
+
+
+def test_supplier_can_see_inquiries_where_selected_without_project_binding(client, test_db):
+    cursor = test_db.cursor()
+    create_inquiry_delete_tables(cursor)
+    ensure_project_id_column(cursor)
+    clerk_id = seed_role_user(cursor, "材料员", "clerk", "材料员")
+    supplier_user_id = seed_role_user(cursor, "供应商", "supplier_00001", "报价供应商")
+    other_supplier_user_id = seed_role_user(cursor, "供应商", "supplier_00002", "其他供应商")
+    cursor.execute(
+        "INSERT INTO suppliers (supplier_name, user_id, create_time) VALUES (?, ?, ?)",
+        ("报价供应商", supplier_user_id, "2026-01-01 09:00:00"),
+    )
+    supplier_id = cursor.lastrowid
+    cursor.execute(
+        "INSERT INTO suppliers (supplier_name, user_id, create_time) VALUES (?, ?, ?)",
+        ("其他供应商", other_supplier_user_id, "2026-01-01 09:00:00"),
+    )
+    other_supplier_id = cursor.lastrowid
+    cursor.execute(
+        "INSERT INTO projects (project_code, project_name, create_time) VALUES (?, ?, ?)",
+        ("GX-SUPPLIER", "广西供应商报价项目", "2026-01-01 09:00:00"),
+    )
+    project_id = cursor.lastrowid
+    cursor.execute("INSERT INTO units (unit_name, unit_code) VALUES (?, ?)", ("个", "PCS"))
+    unit_id = cursor.lastrowid
+    cursor.execute(
+        "INSERT INTO materials (material_code, material_name, unit_id, create_time) VALUES (?, ?, ?, ?)",
+        ("GXLX00001", "测试材料", unit_id, "2026-01-01 09:00:00"),
+    )
+    material_id = cursor.lastrowid
+    visible_inquiry_id = seed_inquiry(cursor, "XJ-SUPPLIER-VISIBLE", clerk_id, project_id=project_id)
+    hidden_inquiry_id = seed_inquiry(cursor, "XJ-SUPPLIER-HIDDEN", clerk_id, project_id=project_id)
+    cursor.execute(
+        "INSERT INTO purchase_inquiry_items (inquiry_id, material_id, quantity, create_time) VALUES (?, ?, ?, ?)",
+        (visible_inquiry_id, material_id, 3, "2026-06-06 10:00:00"),
+    )
+    visible_item_id = cursor.lastrowid
+    cursor.execute(
+        "INSERT INTO purchase_inquiry_quotes (item_id, supplier_id, tax_price, total_amount, create_time) VALUES (?, ?, ?, ?, ?)",
+        (visible_item_id, supplier_id, 12, 36, "2026-06-06 10:00:00"),
+    )
+    cursor.execute(
+        "INSERT INTO purchase_inquiry_quotes (item_id, supplier_id, tax_price, total_amount, create_time) VALUES (?, ?, ?, ?, ?)",
+        (visible_item_id, other_supplier_id, 14, 42, "2026-06-06 10:00:00"),
+    )
+    cursor.execute(
+        "INSERT INTO purchase_inquiry_items (inquiry_id, material_id, quantity, create_time) VALUES (?, ?, ?, ?)",
+        (hidden_inquiry_id, material_id, 3, "2026-06-06 10:00:00"),
+    )
+    hidden_item_id = cursor.lastrowid
+    cursor.execute(
+        "INSERT INTO purchase_inquiry_quotes (item_id, supplier_id, tax_price, total_amount, create_time) VALUES (?, ?, ?, ?, ?)",
+        (hidden_item_id, other_supplier_id, 14, 42, "2026-06-06 10:00:00"),
+    )
+    test_db.commit()
+    set_session_user(client, supplier_user_id, "supplier_00001", "报价供应商", "供应商")
+
+    list_response = client.get("/api/purchase-inquiries")
+    list_data = list_response.get_json()
+    assert list_response.status_code == 200
+    assert [row["inquiry_no"] for row in list_data["data"]] == ["XJ-SUPPLIER-VISIBLE"]
+    assert list_data["data"][0]["project_display_name"] == "广西 / GX-SUPPLIER / 广西供应商报价项目"
+
+    detail_response = client.get(f"/api/purchase-inquiries/{visible_inquiry_id}")
+    assert detail_response.status_code == 200
+    detail_data = detail_response.get_json()
+    assert detail_data["data"]["inquiry_no"] == "XJ-SUPPLIER-VISIBLE"
+    assert [quote["supplier_id"] for quote in detail_data["items"][0]["quotes"]] == [supplier_id]
+
+    forbidden_response = client.get(f"/api/purchase-inquiries/{hidden_inquiry_id}")
+    assert forbidden_response.status_code == 403
 
 
 def test_material_clerk_can_delete_draft_inquiry(client, test_db):
@@ -303,6 +421,44 @@ def test_material_approval_owner_can_approve_inquiry(client, test_db):
     assert data["success"] is True
 
 
+def test_admin_and_material_approval_owner_can_approve_unpublished_quote_inquiry(client, test_db):
+    cursor = test_db.cursor()
+    create_inquiry_delete_tables(cursor)
+    ensure_project_id_column(cursor)
+    ensure_stock_in_project_id_column(cursor)
+    admin_id = seed_role_user(cursor, "系统管理员", "admin_quote", "系统管理员")
+    approver_id = seed_role_user(cursor, "材料审批负责人", "quote_approver", "审批负责人")
+
+    admin_inquiry_id = seed_inquiry(cursor, "XJ-QUOTE-DRAFT-ADMIN", approver_id, status="报价未发布")
+    approver_inquiry_id = seed_inquiry(cursor, "XJ-QUOTE-DRAFT-APPROVER", admin_id, status="报价未发布")
+    test_db.commit()
+
+    set_session_user(client, admin_id, "admin_quote", "系统管理员", "系统管理员")
+    admin_response = client.post(
+        f"/api/purchase-inquiries/{admin_inquiry_id}/approve",
+        json={"action": "manager", "remark": "报价未发布管理员审批"},
+    )
+
+    assert admin_response.status_code == 200
+    assert json.loads(admin_response.data)["success"] is True
+
+    set_session_user(client, approver_id, "quote_approver", "审批负责人", "材料审批负责人")
+    approver_response = client.post(
+        f"/api/purchase-inquiries/{approver_inquiry_id}/approve",
+        json={"action": "manager", "remark": "报价未发布负责人审批"},
+    )
+
+    assert approver_response.status_code == 200
+    assert json.loads(approver_response.data)["success"] is True
+
+    cursor.execute(
+        "SELECT inquiry_no, approval_status FROM purchase_inquiries WHERE id IN (?, ?) ORDER BY inquiry_no",
+        (admin_inquiry_id, approver_inquiry_id),
+    )
+    rows = cursor.fetchall()
+    assert [row["approval_status"] for row in rows] == ["已同意", "已同意"]
+
+
 def test_admin_cannot_approve_gx_project_inquiry(client, test_db):
     cursor = test_db.cursor()
     create_inquiry_delete_tables(cursor)
@@ -434,3 +590,286 @@ def test_special_inquiry_rejects_duplicate_or_other_approver(client, test_db):
     other_data = json.loads(other.data)
     assert other_data["success"] is False
     assert "雷克峰和谭香" in other_data["message"]
+
+
+def test_gx_inquiry_creates_gx_material_for_cross_region_item(client, test_db):
+    cursor = test_db.cursor()
+    create_inquiry_delete_tables(cursor)
+    ensure_project_id_column(cursor)
+    ensure_stock_in_project_id_column(cursor)
+    _admin_id, lei_id, tan_id, _wang_id = seed_special_approval_users(cursor)
+    cursor.execute(
+        "INSERT INTO projects (project_code, project_name, create_time) VALUES (?, ?, ?)",
+        ("GX-004", "广西项目", "2026-01-01 09:00:00"),
+    )
+    project_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO materials (
+            material_code, material_name, specification, detail_spec, unit_id,
+            tax_price, tax_exempt_price, freight, remark, inventory_min,
+            inventory_max, create_time, tax_rate, project_id, weight,
+            brand, is_national_standard, is_cash_price, cash_price, cash_tax_price
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "CDLX00001", "跨区材料", "DN20", "原详细规格", None,
+            10, 9.9, 0, "", 0,
+            0, "2026-01-01 09:00:00", 0.01, None, 0,
+            "原品牌", 0, 0, 0, 0,
+        ),
+    )
+    material_id = cursor.lastrowid
+    inquiry_id = seed_inquiry(cursor, "XJ-GX-MAT", lei_id, project_id=project_id)
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiry_items (
+            inquiry_id, material_id, quantity, tax_rate, detail_spec, brand, create_time
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (inquiry_id, material_id, 2, 0.01, "广西详细规格", "广西品牌", "2026-06-06 10:00:00"),
+    )
+    item_id = cursor.lastrowid
+    cursor.execute("INSERT INTO suppliers (supplier_name) VALUES (?)", ("广西报价供应商",))
+    supplier_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiry_quotes (
+            item_id, supplier_id, tax_price, tax_exempt_price, tax_rate,
+            total_amount, is_lowest, is_selected, create_time
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (item_id, supplier_id, 12, 11.88, 0.01, 24, 1, 1, "2026-06-06 10:00:00"),
+    )
+    test_db.commit()
+
+    set_session_user(client, lei_id, "leikefeng", "雷克峰", "材料审批负责人")
+    first = client.post(
+        f"/api/purchase-inquiries/{inquiry_id}/approve",
+        json={"action": "manager", "remark": "雷克峰审批"},
+    )
+    assert json.loads(first.data)["success"] is True
+
+    set_session_user(client, tan_id, "tanxiang", "谭香", "材料审批负责人")
+    second = client.post(
+        f"/api/purchase-inquiries/{inquiry_id}/approve",
+        json={"action": "manager", "remark": "谭香审批"},
+    )
+    assert json.loads(second.data)["success"] is True
+
+    item_row = test_db.execute(
+        "SELECT material_id FROM purchase_inquiry_items WHERE id = ?",
+        (item_id,),
+    ).fetchone()
+    new_material = test_db.execute(
+        "SELECT material_code, project_id, detail_spec, brand, tax_price FROM materials WHERE id = ?",
+        (item_row["material_id"],),
+    ).fetchone()
+    assert item_row["material_id"] != material_id
+    assert new_material["material_code"] == "GXLX00001"
+    assert new_material["project_id"] == project_id
+    assert new_material["detail_spec"] == "广西详细规格"
+    assert new_material["brand"] == "广西品牌"
+    assert new_material["tax_price"] == 12
+
+
+def test_export_supplier_orders_shows_city_code_and_project_name(client, test_db):
+    cursor = test_db.cursor()
+    create_inquiry_delete_tables(cursor)
+    ensure_project_id_column(cursor)
+    admin_id = seed_role_user(cursor, "系统管理员", "admin", "管理员")
+    cursor.execute(
+        "INSERT INTO projects (project_code, project_name, create_time) VALUES (?, ?, ?)",
+        ("CD-QUOTE", "成都报价项目", "2026-01-01 09:00:00"),
+    )
+    project_id = cursor.lastrowid
+    cursor.execute("INSERT INTO suppliers (supplier_name) VALUES (?)", ("测试供应商",))
+    supplier_id = cursor.lastrowid
+    cursor.execute("INSERT INTO units (unit_name) VALUES (?)", ("个",))
+    unit_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO materials (material_code, material_name, specification, unit_id)
+        VALUES (?, ?, ?, ?)
+        """,
+        ("CDLX00001", "测试材料", "DN20", unit_id),
+    )
+    material_id = cursor.lastrowid
+    inquiry_id = seed_inquiry(cursor, "XJ-CD-EXPORT", admin_id, status="已同意", project_id=project_id)
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiry_items (inquiry_id, material_id, quantity, create_time)
+        VALUES (?, ?, ?, ?)
+        """,
+        (inquiry_id, material_id, 3, "2026-06-06 10:00:00"),
+    )
+    item_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiry_quotes (
+            item_id, supplier_id, tax_price, tax_exempt_price, tax_rate,
+            total_amount, is_lowest, is_selected, create_time
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (item_id, supplier_id, 12, 10.62, 0.13, 36, 1, 1, "2026-06-06 10:00:00"),
+    )
+    test_db.commit()
+    set_session_user(client, admin_id, "admin", "管理员", "系统管理员")
+
+    response = client.get(f"/api/purchase-inquiries/{inquiry_id}/export-supplier-orders")
+    assert response.status_code == 200
+    workbook = load_workbook(BytesIO(response.data))
+    sheet = workbook["测试供应商"]
+
+    assert sheet["A4"].value == "项目：成都 / CD-QUOTE / 成都报价项目"
+
+
+def test_export_draft_inquiry_xlsx_matches_quote_template(client, test_db):
+    cursor = test_db.cursor()
+    create_inquiry_delete_tables(cursor)
+    ensure_project_id_column(cursor)
+    clerk_id = seed_role_user(cursor, "材料员", "clerk_export", "材料员")
+    cursor.execute(
+        "INSERT INTO projects (project_code, project_name, create_time) VALUES (?, ?, ?)",
+        ("CD-DRAFT", "成都草稿项目", "2026-01-01 09:00:00"),
+    )
+    project_id = cursor.lastrowid
+    cursor.execute("INSERT INTO suppliers (supplier_name) VALUES (?)", ("测试供应商",))
+    supplier_id = cursor.lastrowid
+    cursor.execute("INSERT INTO units (unit_name) VALUES (?)", ("个",))
+    unit_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO materials (material_code, material_name, specification, unit_id)
+        VALUES (?, ?, ?, ?)
+        """,
+        ("CDLX00002", "测试材料", "DN25", unit_id),
+    )
+    material_id = cursor.lastrowid
+    inquiry_id = seed_inquiry(cursor, "XJ-DRAFT-EXPORT", clerk_id, status="草稿", project_id=project_id)
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiry_items (
+            inquiry_id, material_id, quantity, tax_rate, is_national_standard,
+            detail_spec, brand, create_time
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (inquiry_id, material_id, 5, 0.01, 1, "加厚", "测试品牌", "2026-06-06 10:00:00"),
+    )
+    item_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiry_quotes (
+            item_id, supplier_id, tax_price, tax_exempt_price, tax_rate,
+            total_amount, is_lowest, is_selected, create_time
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (item_id, supplier_id, 0, 0, 0.01, 0, 0, 0, "2026-06-06 10:00:00"),
+    )
+    test_db.commit()
+    set_session_user(client, clerk_id, "clerk_export", "材料员", "材料员")
+
+    response = client.get(f"/api/purchase-inquiries/draft/{inquiry_id}/export-quote-sheet")
+
+    assert response.status_code == 200
+    assert response.headers["Content-Type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert "filename*=UTF-8''" in response.headers["Content-Disposition"]
+    workbook = load_workbook(BytesIO(response.data), data_only=False)
+    sheet = workbook.active
+
+    assert sheet.title == "询价表"
+    assert sheet["A1"].value == "零星材采购比价表"
+    assert sheet["A2"].value == "项目名称：成都 / CD-DRAFT / 成都草稿项目"
+    assert sheet["H2"].value == "时间：2026-06-06"
+    assert [sheet.cell(3, col).value for col in range(1, 10)] == [
+        "序号", "材料名称", "规格型号", "品牌", "是否国标", "单位", "数量", "测试供应商单价1%专票", "测试供应商总价"
+    ]
+    assert [sheet.cell(4, col).value for col in range(1, 8)] == [
+        1, "测试材料", "加厚", "测试品牌", "是", "个", 5
+    ]
+    assert sheet["I4"].value == '=IF(H4="","",H4*$G4)'
+
+
+def test_export_draft_inquiry_xlsx_tolerates_legacy_optional_columns(client, test_db):
+    cursor = test_db.cursor()
+    create_inquiry_delete_tables(cursor)
+    ensure_project_id_column(cursor)
+    for table, column in [
+        ("purchase_inquiry_items", "brand"),
+        ("purchase_inquiry_items", "detail_spec"),
+        ("purchase_inquiry_items", "is_national_standard"),
+        ("materials", "brand"),
+        ("materials", "detail_spec"),
+        ("materials", "is_national_standard"),
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+        except Exception:
+            pass
+
+    clerk_id = seed_role_user(cursor, "材料员", "legacy_clerk", "材料员")
+    cursor.execute(
+        "INSERT INTO projects (project_code, project_name, create_time) VALUES (?, ?, ?)",
+        ("CD-LEGACY", "成都旧库项目", "2026-01-01 09:00:00"),
+    )
+    project_id = cursor.lastrowid
+    cursor.execute("INSERT INTO suppliers (supplier_name) VALUES (?)", ("旧库供应商",))
+    supplier_id = cursor.lastrowid
+    cursor.execute("INSERT INTO units (unit_name) VALUES (?)", ("米",))
+    unit_id = cursor.lastrowid
+    cursor.execute(
+        "INSERT INTO materials (material_code, material_name, specification, unit_id) VALUES (?, ?, ?, ?)",
+        ("CDLX00003", "旧库材料", "DN32", unit_id),
+    )
+    material_id = cursor.lastrowid
+    inquiry_id = seed_inquiry(cursor, "XJ-DRAFT-LEGACY", clerk_id, status="草稿", project_id=project_id)
+    cursor.execute(
+        "INSERT INTO purchase_inquiry_items (inquiry_id, material_id, quantity, create_time) VALUES (?, ?, ?, ?)",
+        (inquiry_id, material_id, 8, "2026-06-06 10:00:00"),
+    )
+    item_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiry_quotes (
+            item_id, supplier_id, tax_price, tax_exempt_price, tax_rate,
+            total_amount, is_lowest, is_selected, create_time
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (item_id, supplier_id, 0, 0, 0.01, 0, 0, 0, "2026-06-06 10:00:00"),
+    )
+    test_db.commit()
+    set_session_user(client, clerk_id, "legacy_clerk", "材料员", "材料员")
+
+    response = client.get(f"/api/purchase-inquiries/draft/{inquiry_id}/export-quote-sheet")
+
+    assert response.status_code == 200
+    workbook = load_workbook(BytesIO(response.data), data_only=False)
+    sheet = workbook.active
+    assert sheet["B4"].value == "旧库材料"
+    assert sheet["C4"].value == "DN32"
+    assert sheet["E4"].value == "否"
+
+
+def test_export_draft_inquiry_does_not_require_openpyxl_before_auth(client, monkeypatch):
+    original_import = builtins.__import__
+
+    def reject_openpyxl(name, *args, **kwargs):
+        if name.startswith("openpyxl"):
+            raise ModuleNotFoundError("No module named 'openpyxl'")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", reject_openpyxl)
+
+    response = client.get("/api/purchase-inquiries/draft/1/export-quote-sheet")
+
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data["success"] is False
+    assert "登录" in data["message"]

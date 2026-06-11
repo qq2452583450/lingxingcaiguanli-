@@ -29,9 +29,14 @@ def init_database():
             role_id INTEGER,
             is_active INTEGER DEFAULT 1,
             create_time TEXT,
+            must_change_password INTEGER DEFAULT 0,
             FOREIGN KEY (role_id) REFERENCES roles(id)
         )
     """)
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0")
+    except Exception:
+        pass
 
     # 角色表
     cursor.execute("""
@@ -67,10 +72,20 @@ def init_database():
             contact TEXT,
             phone TEXT,
             address TEXT,
+            user_id INTEGER,
+            tax_rate REAL,
             remark TEXT,
             create_time TEXT
         )
     """)
+    try:
+        cursor.execute("ALTER TABLE suppliers ADD COLUMN user_id INTEGER")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE suppliers ADD COLUMN tax_rate REAL")
+    except Exception:
+        pass
 
     # 供应商经营范围字段
     try:
@@ -230,48 +245,79 @@ def init_database():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS base_inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            material_id INTEGER UNIQUE,
+            material_id INTEGER,
             material_name TEXT,
             specification TEXT,
             detail_spec TEXT,
             unit_name TEXT,
+            region TEXT DEFAULT '成都',
             quantity REAL DEFAULT 0,
             unit_price REAL DEFAULT 0,
             update_time TEXT,
             remark TEXT,
+            UNIQUE(material_id, region),
             FOREIGN KEY (material_id) REFERENCES materials(id)
         )
     """)
     # 兼容已创建的旧版基地库存表：允许基地自有材料不依赖项目材料库。
     cursor.execute("PRAGMA table_info(base_inventory)")
     base_inventory_columns = {row['name']: row for row in cursor.fetchall()}
-    if base_inventory_columns.get('material_id') and base_inventory_columns['material_id']['notnull']:
+    text_columns = {
+        'material_name': 'TEXT',
+        'specification': 'TEXT',
+        'detail_spec': 'TEXT',
+        'unit_name': 'TEXT',
+        'region': "TEXT DEFAULT '成都'",
+        'remark': 'TEXT',
+    }
+    for column_name, column_type in text_columns.items():
+        if column_name not in base_inventory_columns:
+            cursor.execute(f"ALTER TABLE base_inventory ADD COLUMN {column_name} {column_type}")
+    cursor.execute("UPDATE base_inventory SET region = '成都' WHERE region IS NULL OR region = ''")
+
+    cursor.execute("PRAGMA table_info(base_inventory)")
+    base_inventory_columns = {row['name']: row for row in cursor.fetchall()}
+    cursor.execute("PRAGMA index_list(base_inventory)")
+    unique_material_only_index = False
+    for index_row in cursor.fetchall():
+        if not index_row['unique']:
+            continue
+        cursor.execute(f"PRAGMA index_info({index_row['name']})")
+        index_columns = [info['name'] for info in cursor.fetchall()]
+        if index_columns == ['material_id']:
+            unique_material_only_index = True
+            break
+    if base_inventory_columns.get('material_id') and (
+        base_inventory_columns['material_id']['notnull'] or unique_material_only_index
+    ):
         cursor.execute("""
             CREATE TABLE base_inventory_new (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                material_id INTEGER UNIQUE,
+                material_id INTEGER,
                 material_name TEXT,
                 specification TEXT,
                 detail_spec TEXT,
                 unit_name TEXT,
+                region TEXT DEFAULT '成都',
                 quantity REAL DEFAULT 0,
                 unit_price REAL DEFAULT 0,
                 update_time TEXT,
                 remark TEXT,
+                UNIQUE(material_id, region),
                 FOREIGN KEY (material_id) REFERENCES materials(id)
             )
         """)
         cursor.execute("""
-            INSERT INTO base_inventory_new (id, material_id, quantity, unit_price, update_time, remark)
-            SELECT id, material_id, quantity, unit_price, update_time, NULL
+            INSERT INTO base_inventory_new (
+                id, material_id, material_name, specification, detail_spec, unit_name,
+                region, quantity, unit_price, update_time, remark
+            )
+            SELECT id, material_id, material_name, specification, detail_spec, unit_name,
+                   COALESCE(NULLIF(region, ''), '成都'), quantity, unit_price, update_time, remark
             FROM base_inventory
         """)
         cursor.execute("DROP TABLE base_inventory")
         cursor.execute("ALTER TABLE base_inventory_new RENAME TO base_inventory")
-    else:
-        for column_name in ('material_name', 'specification', 'detail_spec', 'unit_name', 'remark'):
-            if column_name not in base_inventory_columns:
-                cursor.execute(f"ALTER TABLE base_inventory ADD COLUMN {column_name} TEXT")
 
     # 基地到项目调拨台账，保留材料快照、折旧价格和运费。
     cursor.execute("""
@@ -812,6 +858,57 @@ def init_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_supplier_accounts_supplier ON supplier_accounts(supplier_id)")
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_supplier_accounts_username ON supplier_accounts(username)")
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS petty_cash_loans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            loan_no TEXT UNIQUE NOT NULL,
+            project_id INTEGER NOT NULL,
+            loan_date TEXT NOT NULL,
+            total_amount REAL DEFAULT 0,
+            payment_file_path TEXT,
+            payment_file_name TEXT,
+            creator_id INTEGER,
+            remark TEXT,
+            create_time TEXT,
+            FOREIGN KEY (project_id) REFERENCES projects(id),
+            FOREIGN KEY (creator_id) REFERENCES users(id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS petty_cash_usages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usage_no TEXT UNIQUE NOT NULL,
+            loan_id INTEGER NOT NULL,
+            use_date TEXT NOT NULL,
+            expense_type TEXT NOT NULL,
+            amount REAL DEFAULT 0,
+            handler TEXT,
+            supplier_name TEXT,
+            material_name TEXT,
+            invoice_amount REAL DEFAULT 0,
+            invoice_type TEXT,
+            description TEXT,
+            proof_file_path TEXT,
+            proof_file_name TEXT,
+            creator_id INTEGER,
+            create_time TEXT,
+            FOREIGN KEY (loan_id) REFERENCES petty_cash_loans(id),
+            FOREIGN KEY (creator_id) REFERENCES users(id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS petty_cash_usage_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usage_id INTEGER NOT NULL,
+            file_path TEXT,
+            file_name TEXT NOT NULL,
+            create_time TEXT,
+            FOREIGN KEY (usage_id) REFERENCES petty_cash_usages(id)
+        )
+    """)
+
     conn.commit()
     return conn
 
@@ -832,7 +929,8 @@ def create_indexes(conn=None):
 
     # 库存表复合索引
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_material_warehouse ON inventory(material_id, warehouse_id)")
-    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_base_inventory_material ON base_inventory(material_id)")
+    cursor.execute("DROP INDEX IF EXISTS idx_base_inventory_material")
+    cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_base_inventory_material_region ON base_inventory(material_id, region)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_base_inventory_transfers_project ON base_inventory_transfers(project_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_base_inventory_transfers_time ON base_inventory_transfers(transfer_time)")
 
@@ -879,6 +977,9 @@ def create_indexes(conn=None):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_owner_demands_project_month ON owner_monthly_demands(project_id, plan_month)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_owner_transactions_project_date ON owner_material_transactions(project_id, business_date)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_owner_issues_project_status ON owner_warning_issues(project_id, closure_status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_petty_cash_loans_project ON petty_cash_loans(project_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_petty_cash_usages_loan ON petty_cash_usages(loan_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_petty_cash_usage_files_usage ON petty_cash_usage_files(usage_id)")
 
     conn.commit()
 

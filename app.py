@@ -84,7 +84,8 @@ from blueprints import (
     dashboard_bp,
     owner_supplied_bp,
     transfer_bp,
-    supplier_bp
+    supplier_bp,
+    petty_cash_bp
 )
 
 app.register_blueprint(auth_bp)
@@ -98,6 +99,7 @@ app.register_blueprint(dashboard_bp)
 app.register_blueprint(owner_supplied_bp)
 app.register_blueprint(transfer_bp)
 app.register_blueprint(supplier_bp)
+app.register_blueprint(petty_cash_bp)
 
 # ==================== 静态文件 ====================
 

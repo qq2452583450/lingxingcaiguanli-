@@ -9,6 +9,51 @@ $ErrorActionPreference = "Stop"
 
 Set-Location -LiteralPath $AppDir
 
+function Invoke-NativeCommandWithRetry {
+    param(
+        [string]$Description,
+        [scriptblock]$Command,
+        [string]$FailureMessage,
+        [int]$Attempts = 5,
+        [int]$DelaySeconds = 15
+    )
+
+    for ($Attempt = 1; $Attempt -le $Attempts; $Attempt++) {
+        Write-Host "$Description (attempt $Attempt/$Attempts)"
+        & $Command
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+        if ($Attempt -lt $Attempts) {
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+    throw $FailureMessage
+}
+
+function Stop-PythonListenerOnPort {
+    param([int]$TargetPort)
+
+    Write-Host "Clearing Python listener on port $TargetPort before service start."
+    $Listeners = Get-NetTCPConnection -LocalPort $TargetPort -State Listen -ErrorAction SilentlyContinue
+    foreach ($Listener in $Listeners) {
+        $Process = Get-Process -Id $Listener.OwningProcess -ErrorAction SilentlyContinue
+        if ($Process -and $Process.ProcessName -match "python") {
+            Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Stop-AppPythonProcesses {
+    Write-Host "Clearing Python processes launched from $AppDir before service start."
+    $EscapedAppDir = $AppDir.Replace('\', '\\')
+    $Processes = Get-CimInstance Win32_Process -Filter "Name LIKE 'python%.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like "*$AppDir*" -or $_.CommandLine -match $EscapedAppDir }
+    foreach ($ProcessInfo in $Processes) {
+        Stop-Process -Id $ProcessInfo.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $LocalEnv = Join-Path $AppDir "deploy\server.env.ps1"
 if (Test-Path -LiteralPath $LocalEnv) {
     . $LocalEnv
@@ -34,12 +79,9 @@ if ($DbFiles) {
 }
 
 Write-Host "Pulling latest code from origin/$Branch"
-git fetch origin $Branch
-if ($LASTEXITCODE -ne 0) { throw "git fetch origin $Branch failed" }
-git checkout $Branch
-if ($LASTEXITCODE -ne 0) { throw "git checkout $Branch failed" }
-git pull --ff-only origin $Branch
-if ($LASTEXITCODE -ne 0) { throw "git pull origin $Branch failed" }
+Invoke-NativeCommandWithRetry "git fetch origin $Branch" { git fetch origin $Branch } "git fetch origin $Branch failed"
+Invoke-NativeCommandWithRetry "git checkout $Branch" { git checkout $Branch } "git checkout $Branch failed"
+Invoke-NativeCommandWithRetry "git pull --ff-only origin $Branch" { git pull --ff-only origin $Branch } "git pull origin $Branch failed"
 
 $VenvPython = Join-Path $AppDir ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $VenvPython)) {
@@ -54,17 +96,32 @@ if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 $Service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($Service) {
     Write-Host "Restarting Windows service: $ServiceName"
-    Restart-Service -Name $ServiceName -Force
+    Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+    $Stopped = $false
+    for ($i = 0; $i -lt 12; $i++) {
+        $Service.Refresh()
+        if ($Service.Status -eq "Stopped") {
+            $Stopped = $true
+            break
+        }
+        Start-Sleep -Seconds 5
+    }
+    if (-not $Stopped) {
+        Write-Host "Service did not stop in time."
+    }
+    Stop-AppPythonProcesses
+    Stop-PythonListenerOnPort -TargetPort $Port
+    Start-Service -Name $ServiceName
+    Start-Sleep -Seconds 3
+    $Service.Refresh()
+    if ($Service.Status -ne "Running") {
+        throw "Windows service $ServiceName failed to start"
+    }
 } elseif (Get-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue) {
     Write-Host "Restarting startup task: $ServiceName"
     Stop-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue
-    $Listeners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-    foreach ($Listener in $Listeners) {
-        $Process = Get-Process -Id $Listener.OwningProcess -ErrorAction SilentlyContinue
-        if ($Process -and $Process.ProcessName -match "python") {
-            Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
-        }
-    }
+    Stop-AppPythonProcesses
+    Stop-PythonListenerOnPort -TargetPort $Port
     Start-ScheduledTask -TaskName $ServiceName
 } else {
     throw "Auto-start '$ServiceName' is not installed. Run deploy\install-service.ps1 once on the server first."

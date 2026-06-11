@@ -30,6 +30,28 @@
         </div>
     </div>
 
+    <!-- 首次登录强制修改密码 -->
+    <div id="modal-force-password-change" class="modal">
+        <div class="modal-content" style="max-width:380px;">
+            <div class="modal-header">
+                <h2>修改初始密码</h2>
+            </div>
+            <form id="forcePasswordChangeForm" onsubmit="submitForcePasswordChange(event)">
+                <div class="form-group">
+                    <label>新密码 *</label>
+                    <input type="password" id="forceNewPassword" minlength="6" required>
+                </div>
+                <div class="form-group">
+                    <label>确认新密码 *</label>
+                    <input type="password" id="forceConfirmPassword" minlength="6" required>
+                </div>
+                <div style="text-align:right;margin-top:20px;">
+                    <button type="submit" class="btn btn-primary">确认修改</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- 主页面 -->
     <div id="mainPage" class="main-layout hidden">
         <!-- 左侧导航 -->
@@ -44,7 +66,8 @@
                 <div class="nav-item" data-module="stock_in" onclick="showModule('stock_in')"><i data-lucide="package-plus"></i> <span class="nav-label">入库管理</span></div>
                 <div class="nav-item" data-module="stock_out" onclick="showModule('stock_out')"><i data-lucide="package-minus"></i> <span class="nav-label">出库管理</span></div>
                 <div class="nav-item" data-module="stock_transfer" onclick="showModule('stock_transfer')"><i data-lucide="arrow-left-right"></i> <span class="nav-label">材料调拨</span></div>
-                <div class="nav-item" data-module="owner_supplied" onclick="showModule('owner_supplied')"><i data-lucide="clipboard-check"></i> <span class="nav-label">甲供材量控</span></div></div>
+                <div class="nav-item" data-module="owner_supplied" onclick="showModule('owner_supplied')"><i data-lucide="clipboard-check"></i> <span class="nav-label">甲供材量控</span></div>
+                <div class="nav-item" data-module="petty_cash" onclick="showModule('petty_cash')"><i data-lucide="wallet"></i> <span class="nav-label">备用金</span></div></div>
                 <div class="nav-group"><div class="nav-group-title">数据中心</div>
                 <div class="nav-item active" data-module="home" onclick="showModule('home')"><i data-lucide="home"></i> <span class="nav-label">首页</span></div>
                 <div class="nav-item" data-module="material" onclick="showModule('material')"><i data-lucide="package"></i> <span class="nav-label">材料信息</span></div>
@@ -189,6 +212,64 @@
                 </div>
             </div>
 
+            <!-- 备用金管理 -->
+            <div id="petty_cashModule" class="module hidden">
+                <div class="page-header">
+                    <div>
+                        <h1>备用金管理</h1>
+                        <p>按项目记录财务支付、当前余额和使用情况</p>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <button class="btn btn-primary" onclick="openPettyCashLoanModal()">新增备用金</button>
+                        <button class="btn btn-secondary" onclick="openPettyCashUsageModal()">登记使用情况</button>
+                    </div>
+                </div>
+                <div class="toolbar">
+                    <select id="pettyCashProjectFilter" onchange="loadPettyCash()" style="padding:6px 10px;border:1px solid var(--border-light);border-radius:4px;font-size:13px;min-width:160px;">
+                        <option value="">全部项目</option>
+                    </select>
+                    <select id="pettyCashTypeFilter" onchange="loadPettyCashUsages()" style="padding:6px 10px;border:1px solid var(--border-light);border-radius:4px;font-size:13px;min-width:160px;">
+                        <option value="">全部使用类型</option>
+                        <option value="维修费">维修费</option>
+                        <option value="加油费">加油费</option>
+                        <option value="运费">运费</option>
+                        <option value="宽带费">宽带费</option>
+                        <option value="零星材">零星材</option>
+                        <option value="生活类费用">生活类费用</option>
+                        <option value="其他">其他</option>
+                    </select>
+                    <button class="btn btn-secondary" onclick="loadPettyCash()">刷新</button>
+                </div>
+                <div class="owner-summary">
+                    <button class="owner-metric"><span>借款总额</span><strong id="pettyCashTotalAmount">0</strong></button>
+                    <button class="owner-metric owner-metric-focus"><span>现有金额</span><strong id="pettyCashBalanceAmount">0</strong></button>
+                    <button class="owner-metric owner-metric-yellow"><span>已使用金额</span><strong id="pettyCashUsedAmount">0</strong></button>
+                    <button class="owner-metric owner-metric-open"><span>使用笔数</span><strong id="pettyCashUsageCount">0</strong></button>
+                </div>
+                <div style="margin-top:16px;">
+                    <h3 style="margin-bottom:10px;">备用金借款记录</h3>
+                    <div class="table-container">
+                        <table>
+                            <thead><tr>
+                                <th>单号</th><th>项目</th><th>借款日期</th><th>借款总额</th><th>现有金额</th><th>已使用</th><th>创建人</th><th>财务支付截图</th><th>备注</th><th>操作</th>
+                            </tr></thead>
+                            <tbody id="pettyCashLoanTable"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div style="margin-top:20px;">
+                    <h3 style="margin-bottom:10px;">使用情况</h3>
+                    <div class="table-container">
+                        <table>
+                            <thead><tr>
+                                <th>项目</th><th>使用日期</th><th>类型</th><th>金额</th><th>供应商名称</th><th>材料名称</th><th>发票金额</th><th>发票类型</th><th>经办人</th><th>票据</th><th style="width:120px;">说明</th><th>操作</th>
+                            </tr></thead>
+                            <tbody id="pettyCashUsageTable"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
             <!-- 材料管理 -->
             <div id="materialModule" class="module hidden">
                 <div class="page-header">
@@ -208,6 +289,7 @@
                             <option value="DL">大理</option>
                             <option value="YX">玉溪</option>
                             <option value="CD">成都</option>
+                            <option value="GX">广西</option>
                         </select>
                         <input type="text" id="filterSpec" placeholder="规格" oninput="onMaterialFilterChange()" style="padding:6px 10px;border:1px solid var(--border-light);border-radius:4px;font-size:13px;width:120px;">
                         <input type="text" id="filterBrand" placeholder="品牌" oninput="onMaterialFilterChange()" style="padding:6px 10px;border:1px solid var(--border-light);border-radius:4px;font-size:13px;width:120px;">
@@ -321,6 +403,7 @@
                     <table>
                         <colgroup>
                             <col style="width:180px">
+                            <col style="width:180px">
                             <col style="width:100px">
                             <col style="width:80px">
                             <col style="width:100px">
@@ -332,6 +415,7 @@
                         <thead>
                             <tr>
                                 <th>单号</th>
+                                <th>项目</th>
                                 <th>日期</th>
                                 <th>申请人</th>
                                 <th>总金额</th>
@@ -436,6 +520,7 @@
                             <tr>
                                 <th style="width:30px;"><input type="checkbox" id="selectAllBaseInventory" onchange="toggleSelectAllBaseInventory()" title="全选/取消全选"></th>
                                 <th>材料编码</th>
+                                <th>地区</th>
                                 <th>材料名称</th>
                                 <th>规格</th>
                                 <th>详细规格</th>
@@ -524,7 +609,7 @@
                 <div class="page-header">
                     <h1>供应商管理</h1>
                     <div>
-                        <!-- 新供应商请通过供应商门户注册，管理员审核后启用 -->
+                        <button class="btn btn-primary supplier-create-btn" onclick="resetSupplierModal();openModal('modal-supplier')">新建供应商</button>
                     </div>
                 </div>
                 <div class="toolbar">
@@ -532,14 +617,24 @@
                 </div>
                 <div class="table-container">
                     <table>
+                        <colgroup>
+                            <col style="width:200px">
+                            <col style="width:160px">
+                            <col style="width:100px">
+                            <col style="width:120px">
+                            <col style="width:140px">
+                            <col style="width:120px">
+                            <col style="width:80px">
+                            <col style="width:80px">
+                        </colgroup>
                         <thead>
                             <tr>
                                 <th>名称</th>
                                 <th>经营范围</th>
                                 <th>联系人</th>
                                 <th>电话</th>
+                                <th>账号</th>
                                 <th>专票税率</th>
-                                <th>账号状态</th>
                                 <th>操作</th>
                                 <th class="admin-only">删除</th>
                             </tr>
@@ -797,6 +892,7 @@
                         <thead style="position:sticky;top:0;background:#fff;z-index:1;">
                             <tr style="background:#f0f2f5;">
                                 <th style="padding:6px;text-align:left;">材料名称</th>
+                                <th style="padding:6px;text-align:left;">地区</th>
                                 <th style="padding:6px;text-align:left;">规格</th>
                                 <th style="padding:6px;text-align:right;">可用数量</th>
                                 <th style="padding:6px;text-align:right;">调拨数量 *</th>
@@ -1058,8 +1154,12 @@
                         <input type="text" id="baseStockInMaterialName" required>
                     </div>
                     <div class="form-group">
-                        <label>单位</label>
-                        <input type="text" id="baseStockInUnitName">
+                        <label>地区 *</label>
+                        <select id="baseStockInRegion" required>
+                            <option value="成都">成都</option>
+                            <option value="云南">云南</option>
+                            <option value="广西">广西</option>
+                        </select>
                     </div>
                 </div>
                 <div class="form-row">
@@ -1074,9 +1174,15 @@
                 </div>
                 <div class="form-row">
                     <div class="form-group">
+                        <label>单位</label>
+                        <input type="text" id="baseStockInUnitName">
+                    </div>
+                    <div class="form-group">
                         <label>入库数量 *</label>
                         <input type="number" id="baseStockInQuantity" min="0.01" step="0.01" required value="1">
                     </div>
+                </div>
+                <div class="form-row">
                     <div class="form-group">
                         <label>单价</label>
                         <input type="number" id="baseStockInPrice" min="0" step="0.01" value="0">
@@ -1089,6 +1195,130 @@
                 <div style="text-align:right;margin-top:20px;">
                     <button type="button" class="btn btn-secondary" onclick="closeModal('modal-base-stock-in')">取消</button>
                     <button type="submit" class="btn btn-primary">确认入库基地</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 备用金借款模态框 -->
+    <div id="modal-petty-cash-loan" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="pettyCashLoanModalTitle">新增备用金</h2>
+                <button class="modal-close" onclick="closeModal('modal-petty-cash-loan')">&times;</button>
+            </div>
+            <form id="pettyCashLoanForm">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>所属项目 *</label>
+                        <select id="pettyCashLoanProject" name="project_id" required></select>
+                    </div>
+                    <div class="form-group">
+                        <label>借款日期 *</label>
+                        <input type="date" id="pettyCashLoanDate" name="loan_date" required>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>备用金借款总额 *</label>
+                        <input type="number" id="pettyCashLoanAmount" name="total_amount" min="0.01" step="0.01" required>
+                    </div>
+                    <div class="form-group">
+                        <label>财务支付截图</label>
+                        <input type="file" id="pettyCashPaymentFile" name="payment_file" accept=".png,.jpg,.jpeg,.webp,.gif,.pdf">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>备注</label>
+                    <textarea id="pettyCashLoanRemark" name="remark" rows="2"></textarea>
+                </div>
+                <div style="text-align:right;margin-top:20px;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-petty-cash-loan')">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 备用金使用情况模态框 -->
+    <div id="modal-petty-cash-usage" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="pettyCashUsageModalTitle">登记使用情况</h2>
+                <button class="modal-close" onclick="closeModal('modal-petty-cash-usage')">&times;</button>
+            </div>
+            <form id="pettyCashUsageForm">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>备用金单号 *</label>
+                        <select id="pettyCashUsageLoan" name="loan_id" required></select>
+                    </div>
+                    <div class="form-group">
+                        <label>使用日期 *</label>
+                        <input type="date" id="pettyCashUsageDate" name="use_date" required>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>使用类型 *</label>
+                        <select id="pettyCashExpenseType" name="expense_type" required>
+                            <option value="维修费">维修费</option>
+                            <option value="加油费">加油费</option>
+                            <option value="运费">运费</option>
+                            <option value="宽带费">宽带费</option>
+                            <option value="零星材">零星材</option>
+                            <option value="生活类费用">生活类费用</option>
+                            <option value="其他">其他</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>使用金额 *</label>
+                        <input type="number" id="pettyCashUsageAmount" name="amount" min="0.01" step="0.01" required>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>经办人</label>
+                        <input type="text" id="pettyCashHandler" name="handler">
+                    </div>
+                    <div class="form-group">
+                        <label>供应商名称</label>
+                        <input type="text" id="pettyCashSupplierName" name="supplier_name">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>材料名称</label>
+                        <input type="text" id="pettyCashMaterialName" name="material_name">
+                    </div>
+                    <div class="form-group">
+                        <label>发票金额</label>
+                        <input type="number" id="pettyCashInvoiceAmount" name="invoice_amount" min="0" step="0.01">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>发票类型</label>
+                        <select id="pettyCashInvoiceType" name="invoice_type">
+                            <option value="">-- 请选择 --</option>
+                            <option value="专票">专票</option>
+                            <option value="普票">普票</option>
+                            <option value="收据">收据</option>
+                            <option value="其他">其他</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>票据</label>
+                        <input type="file" id="pettyCashProofFile" name="proof_files" accept=".png,.jpg,.jpeg,.webp,.gif,.pdf" multiple>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>使用说明</label>
+                    <textarea id="pettyCashUsageDescription" name="description" rows="2"></textarea>
+                </div>
+                <div style="text-align:right;margin-top:20px;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('modal-petty-cash-usage')">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
                 </div>
             </form>
         </div>
@@ -1135,27 +1365,6 @@
                 <div class="form-group">
                     <label>备注</label>
                     <input type="text" id="supplierRemark">
-                </div>
-                <div class="admin-only">
-                    <hr style="margin:16px 0;border:none;border-top:1px solid #e2e8f0;">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>登录账号</label>
-                            <input type="text" id="supplierAccountUsername" placeholder="供应商登录用">
-                        </div>
-                        <div class="form-group">
-                            <label>初始密码</label>
-                            <input type="password" id="supplierAccountPassword" placeholder="至少6位">
-                        </div>
-                    </div>
-                    <div id="supplierAccountStatusRow" class="form-group hidden">
-                        <label>账号状态</label>
-                        <div style="display:flex;gap:12px;align-items:center;">
-                            <span id="supplierAccountStatusText" class="status-badge">-</span>
-                            <button type="button" class="btn btn-sm" id="supplierAccountToggle" onclick="toggleSupplierAccount()">启用</button>
-                            <button type="button" class="btn btn-sm btn-secondary" id="supplierAccountResetPwd" onclick="resetSupplierPassword()">重置密码</button>
-                        </div>
-                    </div>
                 </div>
                 <div style="text-align:right;margin-top:20px;">
                     <button type="button" class="btn btn-secondary" onclick="closeModal('modal-supplier')">取消</button>

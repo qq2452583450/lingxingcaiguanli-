@@ -37,7 +37,8 @@ def test_db():
             real_name TEXT,
             role_id INTEGER,
             is_active INTEGER DEFAULT 1,
-            create_time TEXT
+            create_time TEXT,
+            must_change_password INTEGER DEFAULT 0
         )
     """)
 
@@ -71,10 +72,10 @@ def test_db():
             default_supplier_id INTEGER,
             inventory_min REAL DEFAULT 0,
             inventory_max REAL DEFAULT 0,
+            create_time TEXT,
             tax_rate REAL DEFAULT 0.01,
             project_id INTEGER,
-            weight REAL DEFAULT 0,
-            create_time TEXT
+            weight REAL DEFAULT 0
         )
     """)
 
@@ -87,6 +88,8 @@ def test_db():
             phone TEXT,
             address TEXT,
             business_scope TEXT,
+            user_id INTEGER,
+            tax_rate REAL,
             remark TEXT,
             create_time TEXT
         )
@@ -129,15 +132,17 @@ def test_db():
     cursor.execute("""
         CREATE TABLE base_inventory (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            material_id INTEGER UNIQUE,
+            material_id INTEGER,
             material_name TEXT,
             specification TEXT,
             detail_spec TEXT,
             unit_name TEXT,
+            region TEXT DEFAULT '成都',
             quantity REAL DEFAULT 0,
             unit_price REAL DEFAULT 0,
             update_time TEXT,
-            remark TEXT
+            remark TEXT,
+            UNIQUE(material_id, region)
         )
     """)
 
@@ -288,7 +293,9 @@ def test_db():
             material_id INTEGER,
             quantity REAL DEFAULT 0,
             unit_price REAL DEFAULT 0,
-            amount REAL DEFAULT 0
+            amount REAL DEFAULT 0,
+            supplier_id INTEGER,
+            warehouse_id INTEGER DEFAULT 1
         )
     """)
 
@@ -455,6 +462,42 @@ def test_db():
 
     # 采购询价材料项表
     cursor.execute("""
+        CREATE TABLE petty_cash_loans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            loan_no TEXT UNIQUE NOT NULL,
+            project_id INTEGER NOT NULL,
+            loan_date TEXT NOT NULL,
+            total_amount REAL DEFAULT 0,
+            payment_file_path TEXT,
+            payment_file_name TEXT,
+            creator_id INTEGER,
+            remark TEXT,
+            create_time TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE petty_cash_usages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usage_no TEXT UNIQUE NOT NULL,
+            loan_id INTEGER NOT NULL,
+            use_date TEXT NOT NULL,
+            expense_type TEXT NOT NULL,
+            amount REAL DEFAULT 0,
+            handler TEXT,
+            supplier_name TEXT,
+            material_name TEXT,
+            invoice_amount REAL DEFAULT 0,
+            invoice_type TEXT,
+            description TEXT,
+            proof_file_path TEXT,
+            proof_file_name TEXT,
+            creator_id INTEGER,
+            create_time TEXT
+        )
+    """)
+
+    cursor.execute("""
         CREATE TABLE purchase_inquiry_items (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             inquiry_id INTEGER NOT NULL,
@@ -463,6 +506,8 @@ def test_db():
             library_price REAL DEFAULT 0,
             selected_quote_id INTEGER,
             tax_rate REAL DEFAULT 0.01,
+            is_national_standard INTEGER DEFAULT 0,
+            is_cash_price INTEGER DEFAULT 0,
             detail_spec TEXT,
             brand TEXT,
             create_time TEXT,
@@ -500,6 +545,16 @@ def test_db():
             user_id INTEGER NOT NULL,
             project_id INTEGER NOT NULL,
             UNIQUE(user_id, project_id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE petty_cash_usage_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usage_id INTEGER NOT NULL,
+            file_path TEXT,
+            file_name TEXT NOT NULL,
+            create_time TEXT
         )
     """)
 
@@ -560,7 +615,7 @@ def app(test_db):
     from blueprints import (
         auth_bp, material_bp, inquiry_bp, stock_bp,
         sales_bp, reconciliation_bp, system_bp, dashboard_bp, transfer_bp,
-        supplier_bp
+        supplier_bp, petty_cash_bp
     )
     app.register_blueprint(auth_bp)
     app.register_blueprint(material_bp)
@@ -572,6 +627,7 @@ def app(test_db):
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(transfer_bp)
     app.register_blueprint(supplier_bp)
+    app.register_blueprint(petty_cash_bp)
 
     return app
 

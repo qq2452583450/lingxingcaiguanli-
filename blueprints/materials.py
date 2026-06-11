@@ -5,6 +5,7 @@ from flask import Blueprint, request, jsonify, session
 from datetime import datetime
 from helpers import get_db
 from helpers.auth_decorators import login_required, require_role, require_admin
+from helpers.material_regions import generate_material_code
 
 material_bp = Blueprint('materials', __name__, url_prefix='/api')
 
@@ -111,29 +112,7 @@ def get_next_material_code():
         conn.close()
         return jsonify({'success': False, 'message': '项目不存在'})
 
-    project_code = proj_row[0]
-    prefix = project_code[:2].upper() + 'LX'
-
-    cursor.execute("SELECT material_code FROM materials WHERE material_code LIKE ? ORDER BY material_code DESC LIMIT 1",
-                   (prefix + '%',))
-    last_row = cursor.fetchone()
-
-    if last_row:
-        last_code = last_row[0]
-        try:
-            next_num = int(last_code[len(prefix):]) + 1
-        except ValueError:
-            next_num = 1
-    else:
-        next_num = 1
-
-    material_code = prefix + str(next_num).zfill(5)
-    while True:
-        cursor.execute("SELECT 1 FROM materials WHERE material_code = ?", (material_code,))
-        if not cursor.fetchone():
-            break
-        next_num += 1
-        material_code = prefix + str(next_num).zfill(5)
+    material_code = generate_material_code(cursor, proj_row[0], session.get('user'))
     conn.close()
 
     return jsonify({'success': True, 'material_code': material_code})
@@ -157,28 +136,7 @@ def create_material():
     if not proj_row:
         conn.close()
         return jsonify({'success': False, 'message': '项目不存在'})
-    project_code = proj_row[0]
-
-    prefix = project_code[:2].upper() + 'LX'
-
-    cursor.execute("SELECT material_code FROM materials WHERE material_code LIKE ? ORDER BY material_code DESC LIMIT 1",
-                   (prefix + '%',))
-    last_row = cursor.fetchone()
-    if last_row:
-        last_code = last_row[0]
-        try:
-            next_num = int(last_code[len(prefix):]) + 1
-        except ValueError:
-            next_num = 1
-    else:
-        next_num = 1
-    material_code = prefix + str(next_num).zfill(5)
-    while True:
-        cursor.execute("SELECT 1 FROM materials WHERE material_code = ?", (material_code,))
-        if not cursor.fetchone():
-            break
-        next_num += 1
-        material_code = prefix + str(next_num).zfill(5)
+    material_code = generate_material_code(cursor, proj_row[0], session.get('user'))
 
     tax_price = data.get('tax_price', 0)
     tax_rate = data.get('tax_rate', 0.01)
@@ -246,26 +204,7 @@ def create_materials_batch():
         proj_row = cursor.fetchone()
         if not proj_row:
             continue
-        project_code = proj_row[0]
-        prefix = project_code[:2].upper() + 'LX'
-
-        # 生成不重复编号
-        cursor.execute("SELECT material_code FROM materials WHERE material_code LIKE ? ORDER BY material_code DESC LIMIT 1", (prefix + '%',))
-        last_row = cursor.fetchone()
-        if last_row:
-            try:
-                next_num = int(last_row[0][len(prefix):]) + 1
-            except ValueError:
-                next_num = 1
-        else:
-            next_num = 1
-        material_code = prefix + str(next_num).zfill(5)
-        while True:
-            cursor.execute("SELECT 1 FROM materials WHERE material_code = ?", (material_code,))
-            if not cursor.fetchone():
-                break
-            next_num += 1
-            material_code = prefix + str(next_num).zfill(5)
+        material_code = generate_material_code(cursor, proj_row[0], session.get('user'))
 
         tax_price = item.get('tax_price', 0)
         tax_rate = item.get('tax_rate', 0.01)

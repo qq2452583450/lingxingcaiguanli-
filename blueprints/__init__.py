@@ -12,6 +12,7 @@ from .dashboard import dashboard_bp
 from .owner_supplied import owner_supplied_bp
 from .transfers import transfer_bp
 from .supplier_portal import supplier_bp
+from .petty_cash import petty_cash_bp
 
 __all__ = [
     'auth_bp',
@@ -25,4 +26,5 @@ __all__ = [
     'owner_supplied_bp',
     'transfer_bp',
     'supplier_bp',
+    'petty_cash_bp',
 ]
