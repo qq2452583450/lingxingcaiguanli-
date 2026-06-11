@@ -1059,10 +1059,15 @@ function updateSelectionUI() {
     }
 }
 
-function generateInquiryFromSelection() {
+async function generateInquiryFromSelection() {
     if (selectedMaterialIds.size === 0) {
         showToast('请先勾选材料', 'info');
         return;
+    }
+
+    // 确保全量材料缓存已加载，避免跨页勾选丢失
+    if (allMaterialsCache.length === 0) {
+        await loadAllMaterialsForSelect();
     }
 
     // 从 allMaterialsCache（全量缓存）或当前页 materials 中收集选中材料

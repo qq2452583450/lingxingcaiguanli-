@@ -2653,6 +2653,29 @@ def import_draft_quote_sheet(draft_id):
             return value.strip()
         return str(value).strip()
 
+    def find_supplier(name):
+        """精确匹配 → 去括号匹配 → LIKE 模糊匹配"""
+        cursor.execute("SELECT id, supplier_name FROM suppliers WHERE supplier_name = ? LIMIT 1", (name,))
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        stripped = name.rstrip('（(').rstrip()
+        if stripped and stripped != name:
+            cursor.execute("SELECT id, supplier_name FROM suppliers WHERE supplier_name = ? LIMIT 1", (stripped,))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+        cursor.execute("SELECT id, supplier_name FROM suppliers WHERE supplier_name LIKE ? LIMIT 1", (f'%{name}%',))
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+        if stripped and stripped != name:
+            cursor.execute("SELECT id, supplier_name FROM suppliers WHERE supplier_name LIKE ? LIMIT 1", (f'%{stripped}%',))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+        return None
+
     def to_number(value, default=0):
         if value is None or value == '':
             return default
@@ -2672,7 +2695,7 @@ def import_draft_quote_sheet(draft_id):
         match = re.match(r'^(.*?)单价(?:(\d+(?:\.\d+)?)%)?', text)
         if not match:
             return None
-        name = match.group(1).strip()
+        name = match.group(1).strip().rstrip('（(')
         if not name:
             return None
         rate_text = match.group(2)
@@ -2724,15 +2747,13 @@ def import_draft_quote_sheet(draft_id):
         quotes = []
         for supplier in supplier_columns:
             supplier_name = supplier['name']
-            cursor.execute("SELECT id, supplier_name FROM suppliers WHERE supplier_name = ? LIMIT 1", (supplier_name,))
-            supplier_row = cursor.fetchone()
+            supplier_data = find_supplier(supplier_name)
             tax_price = to_number(sheet.cell(row_idx, supplier['price_col']).value, 0)
-            if not supplier_row:
+            if not supplier_data:
                 message = f'第{row_idx}行供应商未匹配：{supplier_name}'
                 item_warnings.append(message)
                 warnings.append(message)
                 continue
-            supplier_data = dict(supplier_row)
             tax_rate = supplier['tax_rate']
             tax_exempt_price = round(tax_price / (1 + tax_rate), 2) if tax_price > 0 and tax_rate > -1 else 0
             quotes.append({
