@@ -57,3 +57,14 @@ def test_frontend_import_quote_sheet_uploads_and_applies_items():
     assert "/api/purchase-inquiries/draft/${id}/import-quote-sheet" in source
     assert "function applyImportedQuoteItems" in source
     assert "renderInquiryItems();" in source
+
+
+def test_frontend_import_quote_sheet_keeps_lowest_quote_selected_for_submit():
+    source = Path("static/js/app.js").read_text(encoding="utf-8")
+    apply_start = source.index("function applyImportedQuoteItems")
+    apply_end = source.index("async function deleteInquiryDraft")
+    apply_body = source[apply_start:apply_end]
+
+    assert "quotes[lowestIdx].is_selected = 1;" in apply_body
+    assert "selected_quote_id: quotes[lowestIdx] && quotes[lowestIdx].is_selected ? quotes[lowestIdx].supplier_id : null" in apply_body
+    assert "selected_quote_id: null" not in apply_body

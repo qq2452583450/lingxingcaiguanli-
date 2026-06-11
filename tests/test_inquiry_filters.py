@@ -215,6 +215,64 @@ def test_submit_draft_regenerates_generic_inquiry_no_for_final_project(client, t
     assert row["inquiry_no"] == "KMJJYC-20260611-001"
 
 
+def test_submit_draft_persists_selected_quote_and_total_amount(client, test_db):
+    cursor = test_db.cursor()
+    clerk_id = seed_role_user(cursor, "材料员", "quote_clerk", "材料员")
+    project_id = seed_project(cursor, "CD-QUOTE", "成都询价项目")
+    cursor.execute("INSERT INTO units (unit_name, unit_code) VALUES (?, ?)", ("个", "GE"))
+    unit_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO materials (material_code, material_name, unit_id, tax_price, create_time)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("CDLX00011", "报价材料", unit_id, 20, "2026-06-11 10:00:00"),
+    )
+    material_id = cursor.lastrowid
+    cursor.execute("INSERT INTO suppliers (supplier_name, create_time) VALUES (?, ?)", ("高价供应商", "2026-06-11 10:00:00"))
+    high_supplier_id = cursor.lastrowid
+    cursor.execute("INSERT INTO suppliers (supplier_name, create_time) VALUES (?, ?)", ("低价供应商", "2026-06-11 10:00:00"))
+    low_supplier_id = cursor.lastrowid
+    draft_id = seed_inquiry(cursor, "XJ-DRAFT-SELECTED", clerk_id, status="草稿", project_id=project_id)
+    test_db.commit()
+    set_session_user(client, clerk_id, "quote_clerk", "材料员", "材料员")
+
+    response = client.post(
+        f"/api/purchase-inquiries/draft/{draft_id}/submit",
+        json={
+            "project_id": project_id,
+            "inquiry_date": "2026-06-11",
+            "items": [
+                {
+                    "material_id": material_id,
+                    "quantity": 3,
+                    "library_price": 20,
+                    "selected_quote_id": low_supplier_id,
+                    "quotes": [
+                        {"supplier_id": high_supplier_id, "tax_price": 18, "tax_rate": 0.13},
+                        {"supplier_id": low_supplier_id, "tax_price": 12, "tax_rate": 0.13},
+                    ],
+                }
+            ],
+        },
+    )
+
+    data = response.get_json()
+    assert data["success"] is True
+    inquiry = test_db.execute("SELECT total_amount FROM purchase_inquiries WHERE id = ?", (draft_id,)).fetchone()
+    assert inquiry["total_amount"] == 36
+    selected = test_db.execute(
+        """
+        SELECT q.supplier_id, q.is_selected
+        FROM purchase_inquiry_quotes q
+        JOIN purchase_inquiry_items i ON i.id = q.item_id
+        WHERE i.inquiry_id = ? AND q.supplier_id = ?
+        """,
+        (draft_id, low_supplier_id),
+    ).fetchone()
+    assert selected["is_selected"] == 1
+
+
 def test_purchase_inquiries_include_project_city_code_and_name(client, test_db):
     cursor = test_db.cursor()
     create_inquiry_delete_tables(cursor)

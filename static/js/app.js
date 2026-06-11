@@ -5058,7 +5058,7 @@ function applyImportedQuoteItems(items) {
             library_price: Number(item.library_price || 0),
             tax_price: Number(item.tax_price || 0),
             cash_price: Number(item.cash_price || 0),
-            selected_quote_id: null,
+            selected_quote_id: quotes[lowestIdx] && quotes[lowestIdx].is_selected ? quotes[lowestIdx].supplier_id : null,
             is_national_standard: item.is_national_standard,
             is_cash_price: item.is_cash_price || 0,
             import_warnings: item.warnings || [],
