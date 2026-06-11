@@ -376,13 +376,34 @@ def auto_fix_database():
             'expense_type': 'TEXT NOT NULL',
             'amount': 'REAL DEFAULT 0',
             'handler': 'TEXT',
+            'supplier_name': 'TEXT',
+            'material_name': 'TEXT',
+            'invoice_amount': 'REAL DEFAULT 0',
+            'invoice_type': 'TEXT',
             'description': 'TEXT',
             'proof_file_path': 'TEXT',
             'proof_file_name': 'TEXT',
             'creator_id': 'INTEGER',
             'create_time': 'TEXT',
         },
+        'petty_cash_usage_files': {
+            'id': 'INTEGER PRIMARY KEY AUTOINCREMENT',
+            'usage_id': 'INTEGER NOT NULL',
+            'file_path': 'TEXT',
+            'file_name': 'TEXT NOT NULL',
+            'create_time': 'TEXT',
+        },
     }
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS petty_cash_usage_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usage_id INTEGER NOT NULL,
+            file_path TEXT,
+            file_name TEXT NOT NULL,
+            create_time TEXT
+        )
+    """)
 
     fixed_count = 0
 

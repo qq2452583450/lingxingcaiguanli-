@@ -21,6 +21,8 @@ let csrfToken = '';
 let pettyCashLoans = [];
 let pettyCashUsages = [];
 let pettyCashProjects = [];
+let editingPettyCashLoanId = null;
+let editingPettyCashUsageId = null;
 
 // ==================== CSRF Token 管理 ====================
 async function fetchCsrfToken() {
@@ -427,6 +429,22 @@ function pettyCashFileLink(filename) {
     return `<a href="${url}" target="_blank" rel="noopener">查看</a>`;
 }
 
+function canManagePettyCash() {
+    return isAdmin() || isMaterialApprovalOwner();
+}
+
+function pettyCashAttachmentLinks(item) {
+    const files = Array.isArray(item?.proof_files) ? item.proof_files : [];
+    const normalized = files.length ? files : (item?.proof_file_name ? [item.proof_file_name] : []);
+    if (!normalized.length) return '-';
+    const count = Number(item?.proof_file_count || normalized.length);
+    return normalized.map((filename, index) => {
+        const url = `/api/petty-cash/files/${encodeURIComponent(filename)}`;
+        const text = index === 0 ? `显示附件（${count}）` : `附件${index + 1}`;
+        return `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
+    }).join(' ');
+}
+
 function pettyCashSelectedProjectId() {
     const el = document.getElementById('pettyCashProjectFilter');
     return el?.value || '';
@@ -522,6 +540,7 @@ async function loadPettyCashUsages() {
 function renderPettyCashLoans() {
     const tbody = document.getElementById('pettyCashLoanTable');
     if (!tbody) return;
+    const canManage = canManagePettyCash();
     tbody.innerHTML = pettyCashLoans.length ? pettyCashLoans.map(item => `
         <tr>
             <td>${escapeHtml(item.loan_no || '-')}</td>
@@ -533,7 +552,10 @@ function renderPettyCashLoans() {
             <td>${escapeHtml(item.creator_name || '-')}</td>
             <td>${pettyCashFileLink(item.payment_file_name)}</td>
             <td class="owner-long-text">${escapeHtml(item.remark || '-')}</td>
-            <td><button class="btn btn-danger" onclick="deletePettyCashLoan(${item.id})">删除</button></td>
+            <td>${canManage ? `
+                <button class="btn btn-secondary" onclick="openPettyCashLoanModal(${item.id})">编辑</button>
+                <button class="btn btn-danger" onclick="deletePettyCashLoan(${item.id})">删除</button>
+            ` : '-'}</td>
         </tr>
     `).join('') : '<tr><td colspan="10" class="empty-message">暂无备用金记录</td></tr>';
 }
@@ -541,45 +563,84 @@ function renderPettyCashLoans() {
 function renderPettyCashUsages() {
     const tbody = document.getElementById('pettyCashUsageTable');
     if (!tbody) return;
+    const canManage = canManagePettyCash();
     tbody.innerHTML = pettyCashUsages.length ? pettyCashUsages.map(item => `
         <tr>
-            <td>${escapeHtml(item.usage_no || '-')}</td>
-            <td>${escapeHtml(item.loan_no || '-')}</td>
             <td>${escapeHtml(item.project_name || '-')}</td>
             <td>${pettyCashDate(item.use_date)}</td>
             <td>${escapeHtml(item.expense_type || '-')}</td>
             <td>${pettyCashMoney(item.amount)}</td>
+            <td>${escapeHtml(item.supplier_name || '-')}</td>
+            <td>${escapeHtml(item.material_name || '-')}</td>
+            <td>${pettyCashMoney(item.invoice_amount)}</td>
+            <td>${escapeHtml(item.invoice_type || '-')}</td>
             <td>${escapeHtml(item.handler || '-')}</td>
-            <td>${pettyCashFileLink(item.proof_file_name)}</td>
-            <td class="owner-long-text">${escapeHtml(item.description || '-')}</td>
-            <td><button class="btn btn-danger" onclick="deletePettyCashUsage(${item.id})">删除</button></td>
+            <td>${pettyCashAttachmentLinks(item)}</td>
+            <td class="owner-long-text" style="max-width:120px;">${escapeHtml(item.description || '-')}</td>
+            <td>${canManage ? `
+                <button class="btn btn-secondary" onclick="openPettyCashUsageModal(${item.id})">编辑</button>
+                <button class="btn btn-danger" onclick="deletePettyCashUsage(${item.id})">删除</button>
+            ` : '-'}</td>
         </tr>
-    `).join('') : '<tr><td colspan="10" class="empty-message">暂无使用情况</td></tr>';
+    `).join('') : '<tr><td colspan="12" class="empty-message">暂无使用情况</td></tr>';
 }
 
 function renderPettyCashUsageLoanOptions() {
     const select = document.getElementById('pettyCashUsageLoan');
     if (!select) return;
     select.innerHTML = '<option value="">-- 选择备用金单号 --</option>' + pettyCashLoans
-        .filter(item => Number(item.balance_amount || 0) > 0)
         .map(item => `<option value="${item.id}">${escapeHtml(item.loan_no || '')} - ${escapeHtml(item.project_name || '')}（余额 ${pettyCashMoney(item.balance_amount)}）</option>`)
         .join('');
 }
 
-function openPettyCashLoanModal() {
+function openPettyCashLoanModal(id = null) {
     renderPettyCashProjectOptions();
-    document.getElementById('pettyCashLoanForm').reset();
-    document.getElementById('pettyCashLoanDate').value = new Date().toISOString().slice(0, 10);
-    const selectedProject = pettyCashSelectedProjectId() || (currentProjectId ? String(currentProjectId) : '');
-    if (selectedProject) document.getElementById('pettyCashLoanProject').value = selectedProject;
+    const form = document.getElementById('pettyCashLoanForm');
+    form.reset();
+    editingPettyCashLoanId = id;
+    const title = document.getElementById('pettyCashLoanModalTitle');
+    if (title) title.textContent = id ? '编辑备用金' : '新增备用金';
+    if (id) {
+        const item = pettyCashLoans.find(row => Number(row.id) === Number(id));
+        if (item) {
+            document.getElementById('pettyCashLoanProject').value = item.project_id || '';
+            document.getElementById('pettyCashLoanDate').value = pettyCashDate(item.loan_date);
+            document.getElementById('pettyCashLoanAmount').value = item.total_amount || '';
+            document.getElementById('pettyCashLoanRemark').value = item.remark || '';
+        }
+    } else {
+        document.getElementById('pettyCashLoanDate').value = new Date().toISOString().slice(0, 10);
+        const selectedProject = pettyCashSelectedProjectId() || (currentProjectId ? String(currentProjectId) : '');
+        if (selectedProject) document.getElementById('pettyCashLoanProject').value = selectedProject;
+    }
     openModal('modal-petty-cash-loan');
 }
 
-function openPettyCashUsageModal() {
+function openPettyCashUsageModal(id = null) {
     renderPettyCashUsageLoanOptions();
-    document.getElementById('pettyCashUsageForm').reset();
-    document.getElementById('pettyCashUsageDate').value = new Date().toISOString().slice(0, 10);
-    document.getElementById('pettyCashHandler').value = currentUser?.real_name || '';
+    const form = document.getElementById('pettyCashUsageForm');
+    form.reset();
+    editingPettyCashUsageId = id;
+    const title = document.getElementById('pettyCashUsageModalTitle');
+    if (title) title.textContent = id ? '编辑使用情况' : '登记使用情况';
+    if (id) {
+        const item = pettyCashUsages.find(row => Number(row.id) === Number(id));
+        if (item) {
+            document.getElementById('pettyCashUsageLoan').value = item.loan_id || '';
+            document.getElementById('pettyCashUsageDate').value = pettyCashDate(item.use_date);
+            document.getElementById('pettyCashExpenseType').value = item.expense_type || '其他';
+            document.getElementById('pettyCashUsageAmount').value = item.amount || '';
+            document.getElementById('pettyCashHandler').value = item.handler || '';
+            document.getElementById('pettyCashSupplierName').value = item.supplier_name || '';
+            document.getElementById('pettyCashMaterialName').value = item.material_name || '';
+            document.getElementById('pettyCashInvoiceAmount').value = item.invoice_amount || '';
+            document.getElementById('pettyCashInvoiceType').value = item.invoice_type || '';
+            document.getElementById('pettyCashUsageDescription').value = item.description || '';
+        }
+    } else {
+        document.getElementById('pettyCashUsageDate').value = new Date().toISOString().slice(0, 10);
+        document.getElementById('pettyCashHandler').value = currentUser?.real_name || '';
+    }
     openModal('modal-petty-cash-usage');
 }
 
@@ -611,29 +672,40 @@ document.getElementById('pettyCashLoanForm')?.addEventListener('submit', async (
     e.preventDefault();
     const form = e.target;
     const formData = new FormData(form);
-    const res = await api('/api/petty-cash/loans', { method: 'POST', body: formData });
+    const url = editingPettyCashLoanId ? `/api/petty-cash/loans/${editingPettyCashLoanId}` : '/api/petty-cash/loans';
+    const method = editingPettyCashLoanId ? 'PUT' : 'POST';
+    const res = await api(url, { method, body: formData });
     const data = await res.json();
     if (!data.success) {
         showToast(data.message || '保存失败', 'error');
         return;
     }
     closeModal('modal-petty-cash-loan');
-    showToast(`保存成功，单号：${data.loan_no}`, 'success');
+    showToast(editingPettyCashLoanId ? '修改成功' : `保存成功，单号：${data.loan_no}`, 'success');
+    editingPettyCashLoanId = null;
     await loadPettyCash();
 });
 
 document.getElementById('pettyCashUsageForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const form = e.target;
+    const proofInput = document.getElementById('pettyCashProofFile');
+    if (proofInput?.files?.length > 9) {
+        showToast('票据附件最多上传9张', 'error');
+        return;
+    }
     const formData = new FormData(form);
-    const res = await api('/api/petty-cash/usages', { method: 'POST', body: formData });
+    const url = editingPettyCashUsageId ? `/api/petty-cash/usages/${editingPettyCashUsageId}` : '/api/petty-cash/usages';
+    const method = editingPettyCashUsageId ? 'PUT' : 'POST';
+    const res = await api(url, { method, body: formData });
     const data = await res.json();
     if (!data.success) {
         showToast(data.message || '保存失败', 'error');
         return;
     }
     closeModal('modal-petty-cash-usage');
-    showToast(`保存成功，明细单号：${data.usage_no}`, 'success');
+    showToast(editingPettyCashUsageId ? '修改成功' : `保存成功，明细单号：${data.usage_no}`, 'success');
+    editingPettyCashUsageId = null;
     await loadPettyCash();
 });
 
