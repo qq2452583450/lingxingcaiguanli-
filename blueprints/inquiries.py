@@ -1565,7 +1565,7 @@ def print_inquiry_approval(inquiry_id):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT pi.*, u.real_name as applicant_name, p.project_name
+        SELECT pi.*, u.real_name as applicant_name, p.project_code, p.project_name
         FROM purchase_inquiries pi
         LEFT JOIN users u ON pi.applicant_id = u.id
         LEFT JOIN projects p ON pi.project_id = p.id
@@ -1627,6 +1627,244 @@ def print_inquiry_approval(inquiry_id):
     conn.close()
 
     amount_chinese = amount_to_chinese(inquiry['total_amount'])
+
+    def money(value):
+        try:
+            return f"¥{float(value or 0):,.2f}"
+        except (TypeError, ValueError):
+            return "¥0.00"
+
+    def text(value, default='-'):
+        value = '' if value is None else str(value).strip()
+        return escape(value if value else default)
+
+    project_display = format_project_display(
+        inquiry.get('project_code'),
+        inquiry.get('project_name'),
+    )
+
+    supplier_order = []
+    supplier_by_id = {}
+    if items:
+        for item in items:
+            for quote in item.get('quotes', []):
+                supplier_id = quote.get('supplier_id')
+                if supplier_id not in supplier_by_id:
+                    supplier_by_id[supplier_id] = quote.get('supplier_name') or '未知供应商'
+                    supplier_order.append(supplier_id)
+
+    supplier_headers = ''.join(
+        f'<th class="supplier-col">{text(supplier_by_id[supplier_id])}<br>单价 / 总价</th>'
+        for supplier_id in supplier_order
+    )
+
+    supplier_totals = {}
+    if items:
+        for item in items:
+            quantity = float(item.get('quantity', 1) or 1)
+            for quote in item.get('quotes', []):
+                if quote.get('is_selected') == 1:
+                    supplier_name = quote.get('supplier_name') or '未知供应商'
+                    total_amount = quote.get('total_amount')
+                    if total_amount is None:
+                        total_amount = float(quote.get('tax_price', 0) or 0) * quantity
+                    supplier_totals[supplier_name] = supplier_totals.get(supplier_name, 0) + float(total_amount or 0)
+
+    supplier_totals_html = '　|　'.join(
+        f'{text(name)}: <strong>{money(amount)}</strong>'
+        for name, amount in supplier_totals.items()
+    ) or '-'
+
+    rows_html = ''
+    if items:
+        for idx, item in enumerate(items, 1):
+            quotes = item.get('quotes', [])
+            quote_by_supplier = {quote.get('supplier_id'): quote for quote in quotes}
+            selected_quote = next((quote for quote in quotes if quote.get('is_selected') == 1), None)
+            selected_supplier = selected_quote.get('supplier_name') if selected_quote else ''
+            quote_cells = ''
+            for supplier_id in supplier_order:
+                quote = quote_by_supplier.get(supplier_id)
+                if not quote:
+                    quote_cells += '<td class="num">-</td>'
+                    continue
+                tax_price = float(quote.get('tax_price', 0) or 0)
+                total_amount = quote.get('total_amount')
+                if total_amount is None:
+                    total_amount = tax_price * float(item.get('quantity', 1) or 1)
+                marker = ' ★' if quote.get('is_lowest') == 1 else ''
+                cls = ' class="num lowest-cell"' if quote.get('is_lowest') == 1 else ' class="num"'
+                quote_cells += f'<td{cls}>{tax_price:.2f} / {float(total_amount or 0):.2f}{marker}</td>'
+            rows_html += f"""
+                    <tr>
+                        <td class="center">{idx}</td>
+                        <td>{text(item.get('material_name'))}</td>
+                        <td>{text(item.get('specification'))}</td>
+                        <td>{text(item.get('detail_spec') or '常规')}</td>
+                        <td>{text(item.get('brand') or '无')}</td>
+                        <td class="center">{'是' if item.get('is_national_standard') == 1 else '否'}</td>
+                        <td class="center">{text(item.get('unit_name'))}</td>
+                        <td class="center">{item.get('quantity', 1)}</td>
+                        {quote_cells}
+                        <td>{text(selected_supplier, '')}</td>
+                    </tr>
+"""
+    else:
+        supplier_headers = '<th class="supplier-col">供应商 / 报价</th>'
+        for idx, detail in enumerate(details or [], 1):
+            rows_html += f"""
+                    <tr>
+                        <td class="center">{idx}</td>
+                        <td>{text(detail.get('material_name'))}</td>
+                        <td>{text(detail.get('specification'))}</td>
+                        <td>{text(detail.get('detail_spec') or '常规')}</td>
+                        <td>无</td>
+                        <td class="center">-</td>
+                        <td class="center">{text(detail.get('unit_name'))}</td>
+                        <td class="center">{detail.get('quantity', 1)}</td>
+                        <td>{text(detail.get('supplier_name'))}<br>{money(detail.get('this_price'))}</td>
+                        <td>{text(detail.get('supplier_name'), '')}</td>
+                    </tr>
+"""
+
+    approval_rows = ''
+    found_approval = next(
+        (record for record in approval_records if any(mark in (record.get('result') or '') for mark in ('主管同意', '主管已审', '同意'))),
+        None,
+    )
+    if found_approval:
+        approval_rows = f"""
+                    <tr>
+                        <td>项目管理处</td>
+                        <td>{text(found_approval.get('approver_name'))}</td>
+                        <td>{text(found_approval.get('result'))}</td>
+                        <td>{text(found_approval.get('approval_time'))}</td>
+                        <td>{text(found_approval.get('remark'))}</td>
+                    </tr>
+"""
+    else:
+        approval_rows = """
+                    <tr>
+                        <td>项目管理处</td>
+                        <td colspan="4" class="pending">待审批</td>
+                    </tr>
+"""
+
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>采购询比价审批签字单 - {text(inquiry.get('inquiry_no'), '')}</title>
+        <style>
+            @page {{ size: A4 landscape; margin: 6mm; }}
+            * {{ box-sizing: border-box; }}
+            body {{ font-family: "Microsoft YaHei", Arial, sans-serif; margin: 0; padding: 10px; color: #111; background: #fff; }}
+            .no-print {{ text-align: right; margin: 0 0 10px; }}
+            .print-btn {{ padding: 8px 22px; background: #2563eb; color: #fff; border: 0; border-radius: 4px; cursor: pointer; }}
+            .print-page {{ width: 100%; max-width: 287mm; margin: 0 auto; }}
+            .sheet-title {{ border: 1px solid #222; text-align: center; font-size: 22px; font-weight: 700; padding: 10px 0; letter-spacing: 1px; }}
+            .meta-grid {{ display: grid; grid-template-columns: 2fr 1fr; border-left: 1px solid #222; border-right: 1px solid #222; border-bottom: 1px solid #222; font-size: 12px; }}
+            .meta-grid div {{ padding: 7px 8px; min-height: 28px; }}
+            .meta-grid div:first-child {{ border-right: 1px solid #222; }}
+            table {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
+            th, td {{ border: 1px solid #222; padding: 5px 6px; font-size: 10px; line-height: 1.25; word-break: break-word; overflow-wrap: anywhere; vertical-align: middle; }}
+            th {{ background: #f2f2f2; font-weight: 700; text-align: center; }}
+            .col-seq {{ width: 4%; }}
+            .col-name {{ width: 12%; }}
+            .col-spec {{ width: 9%; }}
+            .col-detail {{ width: 12%; }}
+            .col-brand {{ width: 7%; }}
+            .col-standard {{ width: 5%; }}
+            .col-unit {{ width: 5%; }}
+            .col-qty {{ width: 5%; }}
+            .supplier-col {{ min-width: 88px; }}
+            .col-selected {{ width: 8%; }}
+            .center {{ text-align: center; }}
+            .num {{ text-align: right; white-space: nowrap; }}
+            .lowest-cell {{ background: #eaf7ee; font-weight: 700; }}
+            .summary-grid {{ display: grid; grid-template-columns: 1.45fr 1fr; border-left: 1px solid #222; border-right: 1px solid #222; border-bottom: 1px solid #222; font-size: 12px; }}
+            .summary-grid div {{ padding: 8px; }}
+            .summary-grid div:first-child {{ border-right: 1px solid #222; }}
+            .summary-total {{ text-align: right; }}
+            .signature-table td {{ height: 46px; font-size: 12px; width: 33.33%; }}
+            .approval-title {{ margin-top: 10px; font-size: 12px; font-weight: 700; }}
+            .approval-table th, .approval-table td {{ font-size: 11px; }}
+            .pending {{ color: #b45309; font-style: italic; text-align: center; }}
+            .remark {{ margin-top: 8px; font-size: 11px; color: #444; }}
+            .print-time {{ margin-top: 8px; font-size: 10px; color: #777; text-align: right; }}
+            @media print {{
+                body {{ padding: 0; }}
+                .no-print {{ display: none !important; }}
+                .print-page {{ max-width: none; }}
+                th, td {{ padding: 4px 5px; font-size: 9px; }}
+                .sheet-title {{ font-size: 20px; padding: 8px 0; }}
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="no-print"><button class="print-btn" onclick="window.print()">打印签字单</button></div>
+        <div class="print-page">
+            <div class="sheet-title">零星材采购比价审批签字单</div>
+            <div class="meta-grid">
+                <div>项目名称：{text(project_display)}</div>
+                <div>时间：{text(inquiry.get('inquiry_date'))}　单号：{text(inquiry.get('inquiry_no'))}</div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th class="col-seq">序号</th>
+                        <th class="col-name">材料名称</th>
+                        <th class="col-spec">规格型号</th>
+                        <th class="col-detail">详细规格</th>
+                        <th class="col-brand">品牌</th>
+                        <th class="col-standard">是否国标</th>
+                        <th class="col-unit">单位</th>
+                        <th class="col-qty">数量</th>
+                        {supplier_headers}
+                        <th class="col-selected">拟定供应商</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows_html}
+                </tbody>
+            </table>
+            <div class="summary-grid">
+                <div><strong>各供应商拟定合计：</strong>{supplier_totals_html}</div>
+                <div class="summary-total"><strong>拟定合计：{money(inquiry.get('total_amount'))}</strong>　大写：{amount_chinese}</div>
+            </div>
+            <table class="signature-table">
+                <tr>
+                    <td>申请人签字：</td>
+                    <td>材料员签字：</td>
+                    <td>项目负责人签字：</td>
+                </tr>
+            </table>
+            <div class="approval-title">项目管理处审批记录</div>
+            <table class="approval-table">
+                <thead>
+                    <tr>
+                        <th style="width: 18%;">审批级别</th>
+                        <th style="width: 18%;">审批人</th>
+                        <th style="width: 16%;">结果</th>
+                        <th style="width: 24%;">审批时间</th>
+                        <th>备注</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {approval_rows}
+                </tbody>
+            </table>
+            <div class="remark"><strong>备注：</strong>{text(inquiry.get('remark') or '无')}</div>
+            <div class="print-time">打印时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</div>
+        </div>
+    </body>
+    </html>
+    """
+
+    response = make_response(html)
+    response.headers['Content-Type'] = 'text/html; charset=utf-8'
+    return response
 
     html = f"""
     <!DOCTYPE html>

@@ -492,9 +492,116 @@ def test_approval_print_uses_project_management_and_project_manager_labels(clien
     assert response.status_code == 200
     html = response.data.decode("utf-8")
     assert "项目管理处" in html
-    assert "项目经理（执行经理、生产经理）" in html
+    assert "项目负责人签字" in html
     assert "部门主管" not in html
     assert "主管签字" not in html
+    assert "总经理签字" not in html
+
+
+def test_approval_print_uses_excel_like_supplier_columns_and_selected_totals(client, test_db):
+    cursor = test_db.cursor()
+    create_inquiry_delete_tables(cursor)
+    ensure_project_id_column(cursor)
+    applicant_id = seed_role_user(cursor, "材料员", "buyer_print", "郑荣杰")
+    approver_id = seed_role_user(cursor, "材料审批负责人", "pm_approver", "雷克峰")
+    project_id = seed_project(cursor, "KMJJYC", "京江隐翠")
+    cursor.execute("INSERT INTO units (unit_name, unit_code) VALUES (?, ?)", ("个", "GE"))
+    unit_id = cursor.lastrowid
+    cursor.execute("INSERT INTO suppliers (supplier_name) VALUES (?)", ("佩文筛网",))
+    supplier_a = cursor.lastrowid
+    cursor.execute("INSERT INTO suppliers (supplier_name) VALUES (?)", ("捷阳五金",))
+    supplier_b = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO materials (material_code, material_name, specification, detail_spec, brand, unit_id, tax_price)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("KMLX00021", "钢丝网", "DN25", "加厚", "国标", unit_id, 13),
+    )
+    material_a = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO materials (material_code, material_name, specification, detail_spec, brand, unit_id, tax_price)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("KMLX00022", "膨胀螺丝", "M8", "常规", "无", unit_id, 9),
+    )
+    material_b = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiries (
+            inquiry_no, inquiry_date, applicant_id, project_id, total_amount,
+            is_below_library_price, approval_status, create_time
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("CGXJ-260611-001", "2026-06-11", applicant_id, project_id, 61, 1, "已同意", "2026-06-11 10:00:00"),
+    )
+    inquiry_id = cursor.lastrowid
+    for material_id, quantity, selected_supplier in [
+        (material_a, 2, supplier_b),
+        (material_b, 5, supplier_a),
+    ]:
+        cursor.execute(
+            """
+            INSERT INTO purchase_inquiry_items (
+                inquiry_id, material_id, quantity, library_price, selected_quote_id,
+                tax_rate, is_national_standard, detail_spec, brand, create_time
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (inquiry_id, material_id, quantity, 10, selected_supplier, 0.01, 1, "", "", "2026-06-11 10:00:00"),
+        )
+        item_id = cursor.lastrowid
+        if material_id == material_a:
+            quotes = [
+                (supplier_a, 12, 24, 0, 0),
+                (supplier_b, 10.5, 21, 1, 1),
+            ]
+        else:
+            quotes = [
+                (supplier_a, 8, 40, 1, 1),
+                (supplier_b, 8.5, 42.5, 0, 0),
+            ]
+        for supplier_id, tax_price, total_amount, is_lowest, is_selected in quotes:
+            cursor.execute(
+                """
+                INSERT INTO purchase_inquiry_quotes (
+                    item_id, supplier_id, tax_price, tax_exempt_price, tax_rate,
+                    total_amount, is_lowest, is_selected, create_time
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (item_id, supplier_id, tax_price, round(tax_price / 1.01, 2), 0.01, total_amount, is_lowest, is_selected, "2026-06-11 10:00:00"),
+            )
+    cursor.execute(
+        """
+        INSERT INTO approval_records (order_type, order_id, approver_id, approver_name, result, remark, approval_time)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("purchase_inquiry", inquiry_id, approver_id, "雷克峰", "主管同意", "同意采购", "2026-06-11 15:20:00"),
+    )
+    test_db.commit()
+
+    response = client.get(f"/api/purchase-inquiries/{inquiry_id}/approval-print")
+
+    assert response.status_code == 200
+    html = response.data.decode("utf-8")
+    assert "零星材采购比价审批签字单" in html
+    assert "项目名称：昆明 / KMJJYC / 京江隐翠" in html
+    assert "时间：2026-06-11" in html
+    assert "单号：CGXJ-260611-001" in html
+    assert "佩文筛网<br>单价 / 总价" in html
+    assert "捷阳五金<br>单价 / 总价" in html
+    assert "各供应商拟定合计" in html
+    assert "佩文筛网: <strong>¥40.00</strong>" in html
+    assert "捷阳五金: <strong>¥21.00</strong>" in html
+    assert "拟定合计：¥61.00" in html
+    assert "申请人签字" in html
+    assert "材料员签字" in html
+    assert "项目负责人签字" in html
+    assert "项目管理处" in html
+    assert "总经理签字" not in html
 
 
 def test_material_approval_owner_can_approve_inquiry(client, test_db):
