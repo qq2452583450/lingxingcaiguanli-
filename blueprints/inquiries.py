@@ -1692,9 +1692,15 @@ def print_inquiry_approval(inquiry_id):
                 total_amount = quote.get('total_amount')
                 if total_amount is None:
                     total_amount = tax_price * float(item.get('quantity', 1) or 1)
-                marker = ' ★' if quote.get('is_lowest') == 1 else ''
-                cls = ' class="num lowest-cell"' if quote.get('is_lowest') == 1 else ' class="num"'
-                quote_cells += f'<td{cls}>{tax_price:.2f} / {float(total_amount or 0):.2f}{marker}</td>'
+                marker = '<span class="quote-lowest-mark">★</span>' if quote.get('is_lowest') == 1 else ''
+                cls = 'quote-cell lowest-cell' if quote.get('is_lowest') == 1 else 'quote-cell'
+                quote_cells += (
+                    f'<td class="{cls}">'
+                    f'<span class="quote-unit-price">{tax_price:.2f}</span>'
+                    f'<span class="quote-separator">/</span>'
+                    f'<span class="quote-total-amount">{float(total_amount or 0):.2f}</span>'
+                    f'{marker}</td>'
+                )
             rows_html += f"""
                     <tr>
                         <td class="center">{idx}</td>
@@ -1781,7 +1787,13 @@ def print_inquiry_approval(inquiry_id):
             .supplier-col {{ min-width: 88px; }}
             .col-selected {{ width: 8%; }}
             .center {{ text-align: center; }}
-            .num {{ text-align: right; white-space: nowrap; }}
+            .num {{ text-align: right; }}
+            .quote-cell {{ text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; word-break: break-word; }}
+            .quote-cell span {{ display: block; max-width: 100%; }}
+            .quote-unit-price {{ font-weight: 700; }}
+            .quote-separator {{ color: #666; line-height: 1; }}
+            .quote-total-amount {{ font-size: 9px; }}
+            .quote-lowest-mark {{ color: #111; font-weight: 700; line-height: 1; }}
             .lowest-cell {{ background: #eaf7ee; font-weight: 700; }}
             .summary-grid {{ display: grid; grid-template-columns: 1.45fr 1fr; border-left: 1px solid #222; border-right: 1px solid #222; border-bottom: 1px solid #222; font-size: 12px; }}
             .summary-grid div {{ padding: 8px; }}

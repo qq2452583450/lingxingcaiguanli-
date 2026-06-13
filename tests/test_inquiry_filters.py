@@ -593,6 +593,10 @@ def test_approval_print_uses_excel_like_supplier_columns_and_selected_totals(cli
     assert "单号：CGXJ-260611-001" in html
     assert "佩文筛网<br>单价 / 总价" in html
     assert "捷阳五金<br>单价 / 总价" in html
+    assert 'class="quote-cell lowest-cell"' in html
+    assert 'class="quote-unit-price">10.50</span>' in html
+    assert 'class="quote-total-amount">21.00</span>' in html
+    assert "10.50 / 21.00" not in html
     assert "各供应商拟定合计" in html
     assert "佩文筛网: <strong>¥40.00</strong>" in html
     assert "捷阳五金: <strong>¥21.00</strong>" in html
