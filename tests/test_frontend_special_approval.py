@@ -68,3 +68,10 @@ def test_frontend_import_quote_sheet_keeps_lowest_quote_selected_for_submit():
     assert "quotes[lowestIdx].is_selected = 1;" in apply_body
     assert "selected_quote_id: quotes[lowestIdx] && quotes[lowestIdx].is_selected ? quotes[lowestIdx].supplier_id : null" in apply_body
     assert "selected_quote_id: null" not in apply_body
+
+
+def test_frontend_selected_quote_row_uses_yellow_background():
+    source = Path("static/css/style.css").read_text(encoding="utf-8")
+
+    assert ".quote-row.selected" in source
+    assert "background: #fff3cd" in source

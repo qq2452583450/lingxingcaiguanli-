@@ -13,6 +13,8 @@ def create_inquiry_delete_tables(cursor):
             inquiry_id INTEGER,
             material_id INTEGER,
             quantity REAL DEFAULT 1,
+            library_price REAL DEFAULT 0,
+            selected_quote_id INTEGER,
             tax_rate REAL DEFAULT 0.01,
             is_national_standard INTEGER DEFAULT 0,
             is_cash_price INTEGER DEFAULT 0,
@@ -593,7 +595,8 @@ def test_approval_print_uses_excel_like_supplier_columns_and_selected_totals(cli
     assert "单号：CGXJ-260611-001" in html
     assert "佩文筛网<br>单价 / 总价" in html
     assert "捷阳五金<br>单价 / 总价" in html
-    assert 'class="quote-cell lowest-cell"' in html
+    assert "lowest-cell" in html
+    assert "selected-cell" in html
     assert 'class="quote-unit-price">10.50</span>' in html
     assert 'class="quote-total-amount">21.00</span>' in html
     assert "10.50 / 21.00" not in html
@@ -606,6 +609,53 @@ def test_approval_print_uses_excel_like_supplier_columns_and_selected_totals(cli
     assert "项目负责人签字" in html
     assert "项目管理处" in html
     assert "总经理签字" not in html
+
+
+def test_approval_print_highlights_selected_quote_with_yellow_background(client, test_db):
+    cursor = test_db.cursor()
+    create_inquiry_delete_tables(cursor)
+    ensure_project_id_column(cursor)
+    buyer_id = seed_role_user(cursor, "材料员", "buyer_selected", "申请人")
+    cursor.execute("INSERT INTO suppliers (supplier_name) VALUES (?)", ("黄色供应商",))
+    supplier_id = cursor.lastrowid
+    cursor.execute("INSERT INTO units (unit_name) VALUES (?)", ("个",))
+    unit_id = cursor.lastrowid
+    cursor.execute(
+        "INSERT INTO materials (material_code, material_name, specification, unit_id) VALUES (?, ?, ?, ?)",
+        ("CDLX00004", "签字单材料", "DN40", unit_id),
+    )
+    material_id = cursor.lastrowid
+    inquiry_id = seed_inquiry(cursor, "XJ-PRINT-YELLOW", buyer_id, status="已同意")
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiry_items (
+            inquiry_id, material_id, quantity, library_price, detail_spec, create_time
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (inquiry_id, material_id, 6, 8.5, "", "2026-06-06 10:00:00"),
+    )
+    item_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiry_quotes (
+            item_id, supplier_id, tax_price, tax_exempt_price, tax_rate,
+            total_amount, is_lowest, is_selected, create_time
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (item_id, supplier_id, 8, 7.08, 0.13, 48, 1, 1, "2026-06-06 10:00:00"),
+    )
+    test_db.commit()
+
+    response = client.get(f"/api/purchase-inquiries/{inquiry_id}/approval-print")
+
+    assert response.status_code == 200
+    html = response.data.decode("utf-8")
+    assert ".selected-cell { background: #fff3cd;" in html
+    assert 'class="quote-cell lowest-cell selected-cell"' in html
+    assert "<th class=\"col-qty\">数量</th>" in html
+    assert "<th class=\"col-lib\">库内价</th>" in html
 
 
 def test_material_approval_owner_can_approve_inquiry(client, test_db):
@@ -985,11 +1035,11 @@ def test_export_draft_inquiry_xlsx_matches_quote_template(client, test_db):
         """
         INSERT INTO purchase_inquiry_items (
             inquiry_id, material_id, quantity, tax_rate, is_national_standard,
-            detail_spec, brand, create_time
+            detail_spec, brand, library_price, create_time
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (inquiry_id, material_id, 5, 0.01, 1, "加厚", "测试品牌", "2026-06-06 10:00:00"),
+        (inquiry_id, material_id, 5, 0.01, 1, "加厚", "测试品牌", 12.34, "2026-06-06 10:00:00"),
     )
     item_id = cursor.lastrowid
     cursor.execute(
@@ -1016,14 +1066,14 @@ def test_export_draft_inquiry_xlsx_matches_quote_template(client, test_db):
     assert sheet.title == "询价表"
     assert sheet["A1"].value == "零星材采购比价表"
     assert sheet["A2"].value == "项目名称：成都 / CD-DRAFT / 成都草稿项目"
-    assert sheet["I2"].value == "时间：2026-06-06"
-    assert [sheet.cell(3, col).value for col in range(1, 11)] == [
-        "序号", "材料名称", "规格型号", "详细规格", "品牌", "是否国标", "单位", "数量", "测试供应商单价1%专票", "测试供应商总价"
+    assert sheet["J2"].value == "时间：2026-06-06"
+    assert [sheet.cell(3, col).value for col in range(1, 12)] == [
+        "序号", "材料名称", "规格型号", "详细规格", "品牌", "是否国标", "单位", "数量", "库内价", "测试供应商单价1%专票", "测试供应商总价"
     ]
-    assert [sheet.cell(4, col).value for col in range(1, 9)] == [
-        1, "测试材料", "DN25", "加厚", "测试品牌", "是", "个", 5
+    assert [sheet.cell(4, col).value for col in range(1, 10)] == [
+        1, "测试材料", "DN25", "加厚", "测试品牌", "是", "个", 5, 12.34
     ]
-    assert sheet["J4"].value == '=IF(I4="","",I4*$H4)'
+    assert sheet["K4"].value == '=IF(J4="","",J4*$H4)'
 
 
 def test_import_draft_quote_sheet_parses_exported_template(client, test_db):
@@ -1080,7 +1130,7 @@ def test_import_draft_quote_sheet_parses_exported_template(client, test_db):
     workbook = load_workbook(BytesIO(export_response.data), data_only=False)
     sheet = workbook.active
     sheet["H4"] = 7
-    sheet["I4"] = 12.5
+    sheet["J4"] = 12.5
     uploaded = BytesIO()
     workbook.save(uploaded)
     uploaded.seek(0)
