@@ -1647,7 +1647,8 @@ def print_inquiry_approval(inquiry_id):
             .item-header {{ background: #f5f5f5; padding: 8px 10px; border-bottom: 1px solid #ddd; font-weight: bold; }}
             .quote-row {{ display: flex; padding: 6px 10px; border-bottom: 1px solid #eee; }}
             .quote-row:last-child {{ border-bottom: none; }}
-            .quote-row.lowest {{ background: #f0fff4; }}
+            .quote-row.lowest {{ background: #fff3cd; }}
+            .quote-selected-row {{ background: #fff3cd; }}
             .quote-supplier {{ width: 150px; }}
             .quote-price {{ width: 100px; text-align: right; }}
             .quote-amount {{ width: 100px; text-align: right; font-weight: bold; }}
@@ -1748,7 +1749,8 @@ def print_inquiry_approval(inquiry_id):
                 rowspan = f' rowspan="{len(quotes)}"' if len(quotes) > 1 else ''
                 for qi, quote in enumerate(quotes):
                     tax_rate = float(quote.get('tax_rate', 0.01) or 0.01)
-                    html += "<tr>"
+                    row_class = ' class="quote-selected-row"' if quote.get('is_selected') == 1 else ''
+                    html += f"<tr{row_class}>"
                     if qi == 0:
                         html += f'<td{rowspan} style="vertical-align:middle;">{idx + 1}</td>'
                         html += f'<td{rowspan} style="font-weight:500;vertical-align:middle;">{escape(material_name)}</td>'
@@ -1782,6 +1784,7 @@ def print_inquiry_approval(inquiry_id):
                         <th class="col-spec">规格</th>
                         <th class="col-detail">详细规格</th>
                         <th class="col-unit">单位</th>
+                        <th class="col-qty">数量</th>
                         <th class="col-lib">库内价</th>
                         <th class="col-supplier">供应商</th>
                         <th class="col-price">本次报价</th>
@@ -1806,6 +1809,7 @@ def print_inquiry_approval(inquiry_id):
                     html += f'<td{rowspan} style="vertical-align:middle;">{escape(key[1])}</td>'
                     html += f'<td{rowspan} style="vertical-align:middle;">{escape(key[2])}</td>'
                     html += f'<td{rowspan} style="vertical-align:middle;">{escape(d.get("unit_name", "-"))}</td>'
+                    html += f'<td{rowspan} style="vertical-align:middle;">{d.get("quantity", 1) or 1}</td>'
                     html += f'<td{rowspan} style="vertical-align:middle;">¥{d.get("library_price", 0):.2f}</td>'
                 html += f'<td>{escape(d.get("supplier_name", "-"))}</td>'
                 html += f'<td>¥{d.get("this_price", 0):.2f}</td>'
@@ -2382,6 +2386,7 @@ def export_draft_quote_sheet(draft_id):
     material_detail_expr = 'm.detail_spec' if 'detail_spec' in material_columns else 'NULL'
     item_brand_expr = 'i.brand' if 'brand' in item_columns else 'NULL'
     material_brand_expr = 'm.brand' if 'brand' in material_columns else 'NULL'
+    item_library_price_expr = 'i.library_price' if 'library_price' in item_columns else '0'
     if 'is_national_standard' in item_columns:
         national_standard_expr = 'i.is_national_standard'
     elif 'is_national_standard' in material_columns:
@@ -2390,7 +2395,8 @@ def export_draft_quote_sheet(draft_id):
         national_standard_expr = '0'
 
     cursor.execute(f"""
-        SELECT i.id AS item_id, i.quantity, {national_standard_expr} AS is_national_standard,
+        SELECT i.id AS item_id, i.quantity, {item_library_price_expr} AS library_price,
+               {national_standard_expr} AS is_national_standard,
                COALESCE({item_detail_expr}, {material_detail_expr}, m.specification, '') AS export_spec,
                COALESCE({item_brand_expr}, {material_brand_expr}, '') AS export_brand,
                m.material_name, m.specification, u.unit_name
@@ -2438,7 +2444,7 @@ def export_draft_quote_sheet(draft_id):
         except (TypeError, ValueError):
             return '专票'
 
-    base_cols = 7
+    base_cols = 8
     total_cols = base_cols + len(suppliers) * 2
 
     def col_name(index):
@@ -2465,7 +2471,7 @@ def export_draft_quote_sheet(draft_id):
 
     last_col = col_name(total_cols)
     project_display = format_project_display(draft.get('project_code'), draft.get('project_name'))
-    headers = ['序号', '材料名称', '规格型号', '品牌', '是否国标', '单位', '数量']
+    headers = ['序号', '材料名称', '规格型号', '品牌', '是否国标', '单位', '数量', '库内价']
     for supplier in suppliers:
         headers.extend([f'{supplier["name"]}单价{tax_label(supplier.get("tax_rate"))}', f'{supplier["name"]}总价'])
 
@@ -2498,6 +2504,7 @@ def export_draft_quote_sheet(draft_id):
             '是' if item.get('is_national_standard') else '否',
             item.get('unit_name') or '',
             item.get('quantity') or 0,
+            item.get('library_price') or 0,
         ]
         cells = [cell_xml(row_idx, col, value, style=1) for col, value in enumerate(row_values, 1)]
         for supplier_idx, _supplier in enumerate(suppliers):
@@ -2509,7 +2516,7 @@ def export_draft_quote_sheet(draft_id):
         data_rows.append(f'<row r="{row_idx}" ht="25" customHeight="1">{"".join(cells)}</row>')
     rows_xml.extend(data_rows)
 
-    col_widths = {1: 4, 2: 24, 3: 36, 4: 10, 5: 10, 6: 10, 7: 9}
+    col_widths = {1: 4, 2: 24, 3: 36, 4: 10, 5: 10, 6: 10, 7: 9, 8: 10}
     cols_xml = ''.join(
         f'<col min="{idx}" max="{idx}" width="{col_widths.get(idx, 16 if idx % 2 else 12)}" customWidth="1"/>'
         for idx in range(1, total_cols + 1)

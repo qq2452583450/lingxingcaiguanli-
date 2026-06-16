@@ -32,3 +32,10 @@ def test_frontend_main_inquiry_draft_rows_include_export_quote_sheet_action():
 
     assert "i.approval_status === '草稿'" in source
     assert "exportDraftQuoteSheet(${i.id})" in source
+
+
+def test_frontend_selected_quote_row_uses_yellow_background():
+    source = Path("static/css/style.css").read_text(encoding="utf-8")
+
+    assert ".quote-row.selected" in source
+    assert "background: #fff3cd" in source

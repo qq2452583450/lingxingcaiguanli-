@@ -395,7 +395,7 @@ tbody tr:hover { background: #eff6ff; }
 .quote-row { display: flex; align-items: stretch; gap: 16px; padding: 12px; border: 1px solid var(--bdr); border-radius: var(--radius); margin-bottom: 10px; position: relative; background: #fff; transition: border-color .2s; }
 .quote-row:hover { border-color: var(--pri); }
 .quote-row.lowest { border-color: var(--scs); background: #f0fdf4; }
-.quote-row.selected { border-color: var(--pri); background: #eff6ff; }
+.quote-row.selected { border-color: #f59e0b; background: #fff3cd; }
 .lowest-badge { position: absolute; top: -8px; right: 10px; background: var(--scs); color: #fff; padding: 2px 10px; border-radius: var(--radius); font-size: 11px; font-weight: 700; }
 .quote-supplier { min-width: 160px; display: flex; flex-direction: column; gap: 4px; justify-content: flex-start; }
 .quote-supplier label { font-size: 11px; color: var(--txt3); }
