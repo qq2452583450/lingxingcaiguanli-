@@ -600,7 +600,10 @@ def test_approval_print_uses_excel_like_supplier_columns_and_selected_totals(cli
     assert 'class="quote-cell selected-cell lowest-cell"' in html
     assert 'class="selected-material-row"' in html
     assert 'class="selected-supplier-cell"' in html
-    assert ".selected-cell { background: #fff3bf;" in html
+    assert ".selected-cell { background-color: #fff3bf !important;" in html
+    assert "box-shadow: inset 0 0 0 9999px #fff3bf;" in html
+    assert ".selected-material-row td { background-color: #fffbe6 !important;" in html
+    assert "box-shadow: inset 0 0 0 9999px #fffbe6;" in html
     assert "print-color-adjust: exact" in html
     assert "各供应商拟定合计" in html
     assert "佩文筛网: <strong>¥40.00</strong>" in html

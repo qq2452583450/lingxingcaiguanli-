@@ -1801,10 +1801,11 @@ def print_inquiry_approval(inquiry_id):
             .quote-separator {{ color: #666; line-height: 1; }}
             .quote-total-amount {{ font-size: 9px; }}
             .quote-lowest-mark {{ color: #111; font-weight: 700; line-height: 1; }}
-            .selected-material-row td {{ background: #fffbe6; }}
-            .lowest-cell {{ background: #eaf7ee; font-weight: 700; }}
-            .selected-cell {{ background: #fff3bf; font-weight: 700; }}
-            .selected-supplier-cell {{ background: #fff3bf; font-weight: 700; text-align: center; }}
+            .selected-material-row td {{ background-color: #fffbe6 !important; box-shadow: inset 0 0 0 9999px #fffbe6; }}
+            .lowest-cell {{ background-color: #eaf7ee !important; box-shadow: inset 0 0 0 9999px #eaf7ee; font-weight: 700; }}
+            .selected-cell {{ background-color: #fff3bf !important; box-shadow: inset 0 0 0 9999px #fff3bf; font-weight: 700; }}
+            .selected-material-row td.selected-cell {{ background-color: #fff3bf !important; box-shadow: inset 0 0 0 9999px #fff3bf; }}
+            .selected-supplier-cell {{ background-color: #fff3bf !important; box-shadow: inset 0 0 0 9999px #fff3bf; font-weight: 700; text-align: center; }}
             .summary-grid {{ display: grid; grid-template-columns: 1.45fr 1fr; border-left: 1px solid #222; border-right: 1px solid #222; border-bottom: 1px solid #222; font-size: 12px; }}
             .summary-grid div {{ padding: 8px; }}
             .summary-grid div:first-child {{ border-right: 1px solid #222; }}
