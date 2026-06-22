@@ -1682,7 +1682,6 @@ def print_inquiry_approval(inquiry_id):
             quote_by_supplier = {quote.get('supplier_id'): quote for quote in quotes}
             selected_quote = next((quote for quote in quotes if quote.get('is_selected') == 1), None)
             selected_supplier = selected_quote.get('supplier_name') if selected_quote else ''
-            row_class = ' class="selected-material-row"' if selected_quote else ''
             quote_cells = ''
             for supplier_id in supplier_order:
                 quote = quote_by_supplier.get(supplier_id)
@@ -1708,7 +1707,7 @@ def print_inquiry_approval(inquiry_id):
                     f'{marker}</td>'
                 )
             rows_html += f"""
-                    <tr{row_class}>
+                    <tr>
                         <td class="center">{idx}</td>
                         <td>{text(item.get('material_name'))}</td>
                         <td>{text(item.get('specification'))}</td>
@@ -1719,7 +1718,7 @@ def print_inquiry_approval(inquiry_id):
                         <td class="center">{item.get('quantity', 1)}</td>
                         <td class="num">{money(item.get('library_price'))}</td>
                         {quote_cells}
-                        <td class="selected-supplier-cell">{text(selected_supplier, '')}</td>
+                        <td>{text(selected_supplier, '')}</td>
                     </tr>
 """
     else:
@@ -1804,11 +1803,8 @@ def print_inquiry_approval(inquiry_id):
             .quote-separator {{ color: #666; line-height: 1; }}
             .quote-total-amount {{ font-size: 9px; }}
             .quote-lowest-mark {{ color: #111; font-weight: 700; line-height: 1; }}
-            .selected-material-row td {{ background-color: #fffbe6 !important; box-shadow: inset 0 0 0 9999px #fffbe6; }}
             .lowest-cell {{ background-color: #eaf7ee !important; box-shadow: inset 0 0 0 9999px #eaf7ee; font-weight: 700; }}
             .selected-cell {{ background-color: #fff3bf !important; box-shadow: inset 0 0 0 9999px #fff3bf; font-weight: 700; }}
-            .selected-material-row td.selected-cell {{ background-color: #fff3bf !important; box-shadow: inset 0 0 0 9999px #fff3bf; }}
-            .selected-supplier-cell {{ background-color: #fff3bf !important; box-shadow: inset 0 0 0 9999px #fff3bf; font-weight: 700; text-align: center; }}
             .summary-grid {{ display: grid; grid-template-columns: 1.45fr 1fr; border-left: 1px solid #222; border-right: 1px solid #222; border-bottom: 1px solid #222; font-size: 12px; }}
             .summary-grid div {{ padding: 8px; }}
             .summary-grid div:first-child {{ border-right: 1px solid #222; }}

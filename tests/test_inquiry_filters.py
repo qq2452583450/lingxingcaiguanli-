@@ -601,12 +601,12 @@ def test_approval_print_uses_excel_like_supplier_columns_and_selected_totals(cli
     assert 'class="quote-total-amount">21.00</span>' in html
     assert "10.50 / 21.00" not in html
     assert 'class="quote-cell selected-cell lowest-cell"' in html
-    assert 'class="selected-material-row"' in html
-    assert 'class="selected-supplier-cell"' in html
+    assert 'class="selected-material-row"' not in html
+    assert 'class="selected-supplier-cell"' not in html
     assert ".selected-cell { background-color: #fff3bf !important;" in html
     assert "box-shadow: inset 0 0 0 9999px #fff3bf;" in html
-    assert ".selected-material-row td { background-color: #fffbe6 !important;" in html
-    assert "box-shadow: inset 0 0 0 9999px #fffbe6;" in html
+    assert ".selected-material-row td" not in html
+    assert "#fffbe6" not in html
     assert "print-color-adjust: exact" in html
     assert "各供应商拟定合计" in html
     assert "佩文筛网: <strong>¥40.00</strong>" in html
@@ -663,6 +663,9 @@ def test_approval_print_highlights_selected_quote_with_yellow_background(client,
     assert ".selected-cell { background-color: #fff3bf !important;" in html
     assert "box-shadow: inset 0 0 0 9999px #fff3bf;" in html
     assert 'class="quote-cell selected-cell lowest-cell"' in html
+    assert 'class="selected-material-row"' not in html
+    assert 'class="selected-supplier-cell"' not in html
+    assert "#fffbe6" not in html
     assert "<th class=\"col-qty\">数量</th>" in html
     assert "<th class=\"col-lib\">库内价</th>" in html
 
