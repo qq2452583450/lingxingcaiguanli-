@@ -23,6 +23,9 @@ let pettyCashUsages = [];
 let pettyCashProjects = [];
 let editingPettyCashLoanId = null;
 let editingPettyCashUsageId = null;
+const PETTY_CASH_MAX_PROOF_FILES = 9;
+let pettyCashSelectedProofFiles = [];
+let pettyCashExistingProofFileCount = 0;
 
 // ==================== CSRF Token 管理 ====================
 async function fetchCsrfToken() {
@@ -593,6 +596,65 @@ function renderPettyCashUsageLoanOptions() {
         .join('');
 }
 
+function pettyCashProofFileKey(file) {
+    return `${file.name}|${file.size}|${file.lastModified}`;
+}
+
+function renderPettyCashProofFileList() {
+    const el = document.getElementById('pettyCashProofFileList');
+    if (!el) return;
+    const usedCount = pettyCashExistingProofFileCount + pettyCashSelectedProofFiles.length;
+    const remaining = Math.max(0, PETTY_CASH_MAX_PROOF_FILES - usedCount);
+    const existingText = pettyCashExistingProofFileCount ? `已存在${pettyCashExistingProofFileCount}张，` : '';
+    if (!pettyCashSelectedProofFiles.length) {
+        el.innerHTML = `${existingText}可继续选择${remaining}张，最多${PETTY_CASH_MAX_PROOF_FILES}张。`;
+        return;
+    }
+    const items = pettyCashSelectedProofFiles.map((file, index) => (
+        `<span style="display:inline-block;margin:2px 6px 2px 0;padding:2px 6px;background:#f1f5f9;border-radius:4px;">${escapeHtml(file.name)} <button type="button" style="border:0;background:transparent;color:#ef4444;cursor:pointer;" onclick="removePettyCashProofFile(${index})">×</button></span>`
+    )).join('');
+    el.innerHTML = `${existingText}待上传${pettyCashSelectedProofFiles.length}张，可继续选择${remaining}张：${items}`;
+}
+
+function resetPettyCashProofFiles(existingCount = 0) {
+    pettyCashSelectedProofFiles = [];
+    pettyCashExistingProofFileCount = Number(existingCount || 0);
+    const input = document.getElementById('pettyCashProofFile');
+    if (input) input.value = '';
+    renderPettyCashProofFileList();
+}
+
+function appendPettyCashProofFiles(fileList) {
+    const input = document.getElementById('pettyCashProofFile');
+    const incoming = Array.from(fileList || []);
+    if (!incoming.length) {
+        if (input) input.value = '';
+        return;
+    }
+    const seen = new Set(pettyCashSelectedProofFiles.map(pettyCashProofFileKey));
+    let skipped = 0;
+    for (const file of incoming) {
+        if (pettyCashExistingProofFileCount + pettyCashSelectedProofFiles.length >= PETTY_CASH_MAX_PROOF_FILES) {
+            skipped += 1;
+            continue;
+        }
+        const key = pettyCashProofFileKey(file);
+        if (seen.has(key)) continue;
+        pettyCashSelectedProofFiles.push(file);
+        seen.add(key);
+    }
+    if (skipped > 0) {
+        showToast(`票据附件最多上传${PETTY_CASH_MAX_PROOF_FILES}张`, 'error');
+    }
+    if (input) input.value = '';
+    renderPettyCashProofFileList();
+}
+
+function removePettyCashProofFile(index) {
+    pettyCashSelectedProofFiles.splice(index, 1);
+    renderPettyCashProofFileList();
+}
+
 function openPettyCashLoanModal(id = null) {
     renderPettyCashProjectOptions();
     const form = document.getElementById('pettyCashLoanForm');
@@ -623,6 +685,7 @@ function openPettyCashUsageModal(id = null) {
     editingPettyCashUsageId = id;
     const title = document.getElementById('pettyCashUsageModalTitle');
     if (title) title.textContent = id ? '编辑使用情况' : '登记使用情况';
+    let existingProofCount = 0;
     if (id) {
         const item = pettyCashUsages.find(row => Number(row.id) === Number(id));
         if (item) {
@@ -636,11 +699,13 @@ function openPettyCashUsageModal(id = null) {
             document.getElementById('pettyCashInvoiceAmount').value = item.invoice_amount || '';
             document.getElementById('pettyCashInvoiceType').value = item.invoice_type || '';
             document.getElementById('pettyCashUsageDescription').value = item.description || '';
+            existingProofCount = Number(item.proof_file_count || (Array.isArray(item.proof_files) ? item.proof_files.length : 0) || (item.proof_file_name ? 1 : 0));
         }
     } else {
         document.getElementById('pettyCashUsageDate').value = new Date().toISOString().slice(0, 10);
         document.getElementById('pettyCashHandler').value = currentUser?.real_name || '';
     }
+    resetPettyCashProofFiles(existingProofCount);
     openModal('modal-petty-cash-usage');
 }
 
@@ -686,15 +751,22 @@ document.getElementById('pettyCashLoanForm')?.addEventListener('submit', async (
     await loadPettyCash();
 });
 
+document.getElementById('pettyCashProofFile')?.addEventListener('change', (e) => {
+    appendPettyCashProofFiles(e.target.files);
+});
+
 document.getElementById('pettyCashUsageForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const form = e.target;
-    const proofInput = document.getElementById('pettyCashProofFile');
-    if (proofInput?.files?.length > 9) {
+    if (pettyCashExistingProofFileCount + pettyCashSelectedProofFiles.length > PETTY_CASH_MAX_PROOF_FILES) {
         showToast('票据附件最多上传9张', 'error');
         return;
     }
     const formData = new FormData(form);
+    formData.delete('proof_files');
+    pettyCashSelectedProofFiles.forEach(file => {
+        formData.append('proof_files', file);
+    });
     const url = editingPettyCashUsageId ? `/api/petty-cash/usages/${editingPettyCashUsageId}` : '/api/petty-cash/usages';
     const method = editingPettyCashUsageId ? 'PUT' : 'POST';
     const res = await api(url, { method, body: formData });
