@@ -687,14 +687,7 @@ def import_exam_papers_from_docx(path: Path) -> dict:
         existing_ids = [row["id"] for row in existing_rows]
         removed = len(existing_ids)
 
-        for paper_id in existing_ids:
-            cursor.execute(
-                "DELETE FROM exam_question_options WHERE question_id IN "
-                "(SELECT id FROM exam_questions WHERE paper_id = ?)",
-                (paper_id,),
-            )
-            cursor.execute("DELETE FROM exam_questions WHERE paper_id = ?", (paper_id,))
-            cursor.execute("DELETE FROM exam_papers WHERE id = ?", (paper_id,))
+        _delete_existing_exam_papers(cursor, existing_ids)
 
         inserted_ids = [insert_paper(cursor, paper, source_type="exam") for paper in papers]
         if inserted_ids:
@@ -711,6 +704,55 @@ def import_exam_papers_from_docx(path: Path) -> dict:
     finally:
         if should_close:
             conn.close()
+
+
+def _delete_existing_exam_papers(cursor, paper_ids: list[int]) -> None:
+    if not paper_ids:
+        return
+
+    placeholders = ",".join("?" for _ in paper_ids)
+    question_subquery = (
+        f"SELECT id FROM exam_questions WHERE paper_id IN ({placeholders})"
+    )
+    answer_subquery = (
+        f"""
+        SELECT a.id
+        FROM exam_answers a
+        LEFT JOIN exam_attempts t ON t.id = a.attempt_id
+        WHERE t.paper_id IN ({placeholders})
+           OR a.question_id IN ({question_subquery})
+        """
+    )
+    answer_params = [*paper_ids, *paper_ids]
+
+    cursor.execute(
+        f"DELETE FROM exam_subjective_reviews WHERE answer_id IN ({answer_subquery})",
+        answer_params,
+    )
+    cursor.execute(
+        f"DELETE FROM exam_answers WHERE id IN ({answer_subquery})",
+        answer_params,
+    )
+    cursor.execute(
+        f"DELETE FROM exam_practice_attempts WHERE question_id IN ({question_subquery})",
+        paper_ids,
+    )
+    cursor.execute(
+        f"DELETE FROM exam_attempts WHERE paper_id IN ({placeholders})",
+        paper_ids,
+    )
+    cursor.execute(
+        f"DELETE FROM exam_question_options WHERE question_id IN ({question_subquery})",
+        paper_ids,
+    )
+    cursor.execute(
+        f"DELETE FROM exam_questions WHERE paper_id IN ({placeholders})",
+        paper_ids,
+    )
+    cursor.execute(
+        f"DELETE FROM exam_papers WHERE id IN ({placeholders})",
+        paper_ids,
+    )
 
 
 def insert_paper(cursor, paper: dict, source_type: str = "exam") -> int:
