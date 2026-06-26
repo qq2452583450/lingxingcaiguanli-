@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from services.exam_import_service import import_exam_papers_from_docx
 from services.exam_service import get_paper_questions
 
@@ -8,6 +10,22 @@ ROLE_CLERK = "\u6750\u6599\u5458"
 ROLE_APPROVAL_OWNER = "\u6750\u6599\u5ba1\u6279\u8d1f\u8d23\u4eba"
 ROLE_MANAGER = "\u7cfb\u7edf\u7ba1\u7406\u5458"
 ROLE_SUPPLIER = "\u4f9b\u5e94\u5546"
+CSRF_TOKEN = "test-token"
+
+
+@pytest.fixture(autouse=True)
+def install_csrf_guard(app):
+    from flask import jsonify, request, session
+
+    @app.before_request
+    def csrf_protect():
+        if request.method in ("GET", "HEAD", "OPTIONS"):
+            return
+        if request.path in ("/api/login", "/api/supplier/login", "/api/supplier/register"):
+            return
+        token = request.headers.get("X-CSRF-Token", "")
+        if not token or token != session.get("csrf_token", ""):
+            return jsonify({"success": False, "message": "CSRF validation failed"}), 403
 
 
 def source_docx():
@@ -46,10 +64,13 @@ def login(client, user_id, username, real_name, role_name):
             "real_name": real_name,
             "role_name": role_name,
         }
+        session["csrf_token"] = CSRF_TOKEN
 
 
-# The test Flask app registers blueprints directly, so production app.py CSRF
-# before_request behavior is covered outside this focused API blueprint suite.
+def csrf_headers():
+    return {"X-CSRF-Token": CSRF_TOKEN}
+
+
 def seed_exam():
     import_exam_papers_from_docx(source_docx())
 
@@ -129,6 +150,7 @@ def test_manager_can_change_current_paper_and_summary_reflects_it(client, test_d
     change = client.post(
         "/api/exam/admin/current-paper",
         json={"paper_id": target_paper["id"]},
+        headers=csrf_headers(),
     ).get_json()
     summary = client.get("/api/exam/summary").get_json()
 
@@ -146,7 +168,7 @@ def test_clerk_can_start_submit_and_see_own_results(client, test_db):
     objective = next(q for q in questions if q["question_type"] in {"single_choice", "multiple_choice", "true_false"})
     subjective = next(q for q in questions if q["question_type"] in {"short_answer", "case_analysis"})
 
-    start = client.post("/api/exam/attempts", json={}).get_json()
+    start = client.post("/api/exam/attempts", json={}, headers=csrf_headers()).get_json()
     attempt_id = start["attempt_id"]
     attempt = client.get(f"/api/exam/attempts/{attempt_id}").get_json()
     submit = client.post(
@@ -157,6 +179,7 @@ def test_clerk_can_start_submit_and_see_own_results(client, test_db):
                 str(subjective["id"]): subjective["keywords"].split(",")[0],
             }
         },
+        headers=csrf_headers(),
     ).get_json()
     results = client.get("/api/exam/results").get_json()
 
@@ -181,6 +204,7 @@ def test_clerk_cannot_start_attempt_for_non_current_paper(client, test_db):
     response = client.post(
         "/api/exam/attempts",
         json={"paper_id": non_current_paper["id"]},
+        headers=csrf_headers(),
     )
     data = response.get_json()
     attempts_for_paper = test_db.execute(
@@ -193,6 +217,18 @@ def test_clerk_cannot_start_attempt_for_non_current_paper(client, test_db):
     assert attempts_for_paper == 0
 
 
+def test_exam_attempt_post_without_csrf_token_is_rejected(client, test_db):
+    seed_exam()
+    clerk_id = seed_user(test_db, "clerk", "\u5f20\u6750\u6599", ROLE_CLERK)
+    login(client, clerk_id, "clerk", "\u5f20\u6750\u6599", ROLE_CLERK)
+
+    response = client.post("/api/exam/attempts", json={})
+    data = response.get_json()
+
+    assert response.status_code == 403
+    assert data["success"] is False
+
+
 def test_duplicate_submission_returns_non_success_response(client, test_db):
     seed_exam()
     clerk_id = seed_user(test_db, "clerk", "\u5f20\u6750\u6599", ROLE_CLERK)
@@ -203,12 +239,20 @@ def test_duplicate_submission_returns_non_success_response(client, test_db):
         for q in get_paper_questions(current_paper["id"])
         if q["question_type"] in {"single_choice", "multiple_choice", "true_false"}
     )
-    start = client.post("/api/exam/attempts", json={}).get_json()
+    start = client.post("/api/exam/attempts", json={}, headers=csrf_headers()).get_json()
     attempt_id = start["attempt_id"]
     answer_payload = {"answers": {str(objective["id"]): objective["correct_answer"]}}
 
-    first = client.post(f"/api/exam/attempts/{attempt_id}/submit", json=answer_payload).get_json()
-    duplicate_response = client.post(f"/api/exam/attempts/{attempt_id}/submit", json=answer_payload)
+    first = client.post(
+        f"/api/exam/attempts/{attempt_id}/submit",
+        json=answer_payload,
+        headers=csrf_headers(),
+    ).get_json()
+    duplicate_response = client.post(
+        f"/api/exam/attempts/{attempt_id}/submit",
+        json=answer_payload,
+        headers=csrf_headers(),
+    )
     duplicate = duplicate_response.get_json()
 
     assert first["success"] is True
