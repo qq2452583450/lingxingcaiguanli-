@@ -83,6 +83,7 @@ def test_submit_attempt_scores_objective_and_leaves_subjective_pending_review(te
     paper, objective, subjective = load_exam(test_db)
     user_id = seed_user(test_db, "clerk", "\u6750\u6599\u5458", "\u6750\u6599\u5458")
     attempt_id = start_attempt(user_id, paper["id"])
+    objective_only_attempt_id = start_attempt(user_id, paper["id"])
 
     submit_attempt(
         attempt_id,
@@ -111,6 +112,22 @@ def test_submit_attempt_scores_objective_and_leaves_subjective_pending_review(te
     assert subjective_answer["suggested_score"] > 0
     assert subjective_answer["final_score"] is None
 
+    submit_attempt(
+        objective_only_attempt_id,
+        {str(objective["id"]): objective["correct_answer"]},
+    )
+    objective_only_attempt = get_attempt(objective_only_attempt_id)
+    missing_subjective_answer = test_db.execute(
+        "SELECT answer_text, suggested_score, final_score FROM exam_answers WHERE attempt_id = ? AND question_id = ?",
+        (objective_only_attempt_id, subjective["id"]),
+    ).fetchone()
+
+    assert objective_only_attempt["status"] == "pending_review"
+    assert objective_only_attempt["final_score"] is None
+    assert missing_subjective_answer["answer_text"] == ""
+    assert missing_subjective_answer["suggested_score"] == 0
+    assert missing_subjective_answer["final_score"] is None
+
 
 def test_review_answer_completes_attempt_and_results_scope_by_viewer(test_db):
     paper, objective, subjective = load_exam(test_db)
@@ -128,13 +145,15 @@ def test_review_answer_completes_attempt_and_results_scope_by_viewer(test_db):
     )
     submit_attempt(other_attempt_id, {str(objective["id"]): objective["correct_answer"]})
     pending = list_pending_reviews()
+    pending_for_attempt = [row for row in pending if row["attempt_id"] == attempt_id]
 
-    review_answer(
-        pending[0]["answer_id"],
-        reviewer_id,
-        final_score=subjective["score"],
-        comment="\u901a\u8fc7",
-    )
+    for row in pending_for_attempt:
+        review_answer(
+            row["answer_id"],
+            reviewer_id,
+            final_score=subjective["score"] if row["question_id"] == subjective["id"] else 0,
+            comment="\u901a\u8fc7",
+        )
 
     attempt = get_attempt(attempt_id)
     user_attempts = list_user_attempts(clerk_id)

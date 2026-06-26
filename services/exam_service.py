@@ -245,23 +245,22 @@ def submit_attempt(attempt_id, answers) -> None:
         objective_score = 0.0
         suggested_subjective_score = 0.0
         has_subjective = False
-        questions_by_id = {
-            str(row["id"]): dict(row)
+        answer_map = {str(key): value for key, value in (answers or {}).items()}
+        questions = [
+            dict(row)
             for row in conn.execute(
                 """
                 SELECT id, question_type, correct_answer, keywords, score
                 FROM exam_questions
                 WHERE paper_id = ?
+                ORDER BY order_no
                 """,
                 (attempt["paper_id"],),
             ).fetchall()
-        }
+        ]
 
-        for question_id, raw_answer in (answers or {}).items():
-            question = questions_by_id.get(str(question_id))
-            if not question:
-                continue
-            answer_text = _answer_to_text(raw_answer)
+        for question in questions:
+            answer_text = _answer_to_text(answer_map.get(str(question["id"]), ""))
             auto_score = 0.0
             suggested_score = 0.0
             final_score = None
