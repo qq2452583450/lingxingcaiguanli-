@@ -236,11 +236,11 @@ def submit_attempt(attempt_id, answers) -> None:
     conn, should_close = _connection()
     try:
         attempt = conn.execute(
-            "SELECT id, paper_id FROM exam_attempts WHERE id = ?",
+            "SELECT id, paper_id, status FROM exam_attempts WHERE id = ?",
             (attempt_id,),
         ).fetchone()
-        if not attempt:
-            return
+        if not attempt or attempt["status"] != "in_progress":
+            raise ValueError("考试已提交，不能重复交卷")
 
         objective_score = 0.0
         suggested_subjective_score = 0.0

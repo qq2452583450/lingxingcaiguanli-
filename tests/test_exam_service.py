@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from services.exam_import_service import import_exam_papers_from_docx
 from services.exam_service import (
     can_manage_exam,
@@ -171,3 +173,55 @@ def test_review_answer_completes_attempt_and_results_scope_by_viewer(test_db):
     assert manager_results[0]["username"]
     assert manager_results[0]["role_name"]
     assert manager_results[0]["paper_title"] == paper["title"]
+
+
+def test_submit_attempt_rejects_duplicate_submission_without_resetting_scores(test_db):
+    paper, objective, subjective = load_exam(test_db)
+    clerk_id = seed_user(test_db, "clerk", "\u5f20\u6750\u6599", "\u6750\u6599\u5458")
+    reviewer_id = seed_user(test_db, "reviewer", "\u5ba1\u6279\u4eba", "\u6750\u6599\u5ba1\u6279\u8d1f\u8d23\u4eba")
+    pending_attempt_id = start_attempt(clerk_id, paper["id"])
+    completed_attempt_id = start_attempt(clerk_id, paper["id"])
+
+    submit_attempt(
+        pending_attempt_id,
+        {
+            str(objective["id"]): objective["correct_answer"],
+            str(subjective["id"]): subjective["keywords"].split(",")[0],
+        },
+    )
+    with pytest.raises(ValueError, match="\u4e0d\u80fd\u91cd\u590d\u4ea4\u5377"):
+        submit_attempt(pending_attempt_id, {str(objective["id"]): ""})
+    assert get_attempt(pending_attempt_id)["status"] == "pending_review"
+
+    submit_attempt(
+        completed_attempt_id,
+        {
+            str(objective["id"]): objective["correct_answer"],
+            str(subjective["id"]): subjective["keywords"].split(",")[0],
+        },
+    )
+    for row in [row for row in list_pending_reviews() if row["attempt_id"] == completed_attempt_id]:
+        review_answer(
+            row["answer_id"],
+            reviewer_id,
+            final_score=subjective["score"] if row["question_id"] == subjective["id"] else 0,
+            comment="\u901a\u8fc7",
+        )
+    completed_attempt = get_attempt(completed_attempt_id)
+    reviewed_subjective_answer = test_db.execute(
+        "SELECT final_score FROM exam_answers WHERE attempt_id = ? AND question_id = ?",
+        (completed_attempt_id, subjective["id"]),
+    ).fetchone()
+
+    with pytest.raises(ValueError, match="\u4e0d\u80fd\u91cd\u590d\u4ea4\u5377"):
+        submit_attempt(completed_attempt_id, {str(objective["id"]): ""})
+
+    preserved_attempt = get_attempt(completed_attempt_id)
+    preserved_subjective_answer = test_db.execute(
+        "SELECT final_score FROM exam_answers WHERE attempt_id = ? AND question_id = ?",
+        (completed_attempt_id, subjective["id"]),
+    ).fetchone()
+    assert completed_attempt["status"] == "completed"
+    assert preserved_attempt["status"] == "completed"
+    assert preserved_attempt["final_score"] == completed_attempt["final_score"]
+    assert preserved_subjective_answer["final_score"] == reviewed_subjective_answer["final_score"]
