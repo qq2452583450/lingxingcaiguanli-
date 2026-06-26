@@ -48,6 +48,8 @@ def login(client, user_id, username, real_name, role_name):
         }
 
 
+# The test Flask app registers blueprints directly, so production app.py CSRF
+# before_request behavior is covered outside this focused API blueprint suite.
 def seed_exam():
     import_exam_papers_from_docx(source_docx())
 
@@ -59,6 +61,21 @@ def papers(test_db):
             "SELECT id, title FROM exam_papers ORDER BY id"
         ).fetchall()
     ]
+
+
+def assert_question_is_sanitized(question):
+    assert "correct_answer" not in question
+    assert "reference_answer" not in question
+    assert "keywords" not in question
+    assert {
+        "id",
+        "paper_id",
+        "question_type",
+        "order_no",
+        "stem",
+        "score",
+        "options",
+    }.issubset(question.keys())
 
 
 def test_supplier_cannot_access_exam_summary(client, test_db):
@@ -85,6 +102,9 @@ def test_material_clerk_can_access_summary_and_random_practice(client, test_db):
     assert summary["data"]["current_paper"]["id"] == papers(test_db)[0]["id"]
     assert practice["success"] is True
     assert len(practice["data"]) == 5
+    for question in practice["data"]:
+        assert_question_is_sanitized(question)
+        assert "paper_title" in question
 
 
 def test_material_approval_owner_can_access_admin_papers(client, test_db):
@@ -141,11 +161,36 @@ def test_clerk_can_start_submit_and_see_own_results(client, test_db):
     results = client.get("/api/exam/results").get_json()
 
     assert start["success"] is True
+    assert start["data"]["attempt_id"] == attempt_id
     assert attempt["success"] is True
     assert attempt["data"]["id"] == attempt_id
+    for question in attempt["data"]["questions"]:
+        assert_question_is_sanitized(question)
+        assert "paper_title" not in question
     assert submit["success"] is True
     assert results["success"] is True
     assert [row["attempt_id"] for row in results["data"]] == [attempt_id]
+
+
+def test_clerk_cannot_start_attempt_for_non_current_paper(client, test_db):
+    seed_exam()
+    clerk_id = seed_user(test_db, "clerk", "\u5f20\u6750\u6599", ROLE_CLERK)
+    login(client, clerk_id, "clerk", "\u5f20\u6750\u6599", ROLE_CLERK)
+    non_current_paper = papers(test_db)[1]
+
+    response = client.post(
+        "/api/exam/attempts",
+        json={"paper_id": non_current_paper["id"]},
+    )
+    data = response.get_json()
+    attempts_for_paper = test_db.execute(
+        "SELECT COUNT(*) AS count FROM exam_attempts WHERE paper_id = ?",
+        (non_current_paper["id"],),
+    ).fetchone()["count"]
+
+    assert response.status_code == 400
+    assert data["success"] is False
+    assert attempts_for_paper == 0
 
 
 def test_duplicate_submission_returns_non_success_response(client, test_db):

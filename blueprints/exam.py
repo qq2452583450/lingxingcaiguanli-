@@ -13,7 +13,6 @@ from services.exam_service import (
     list_papers,
     list_pending_reviews,
     list_results,
-    list_user_attempts,
     review_answer,
     start_attempt,
     submit_attempt,
@@ -35,18 +34,38 @@ def _require_exam_user():
     user = _current_user()
     if user and (can_take_exam(user) or can_manage_exam(user)):
         return user, None
-    return None, _json_error("权限不足", 403)
+    return None, _json_error("Permission denied", 403)
 
 
 def _require_exam_manager():
     user = _current_user()
     if user and can_manage_exam(user):
         return user, None
-    return None, _json_error("权限不足", 403)
+    return None, _json_error("Permission denied", 403)
 
 
 def _paper_exists(paper_id):
     return any(paper["id"] == paper_id for paper in list_papers())
+
+
+def _sanitize_question(question):
+    allowed_keys = {
+        "id",
+        "paper_id",
+        "paper_title",
+        "question_type",
+        "order_no",
+        "stem",
+        "score",
+        "options",
+    }
+    return {key: value for key, value in question.items() if key in allowed_keys}
+
+
+def _questions_for_user(questions, user):
+    if can_manage_exam(user):
+        return questions
+    return [_sanitize_question(question) for question in questions]
 
 
 def _filters_from_request():
@@ -85,19 +104,15 @@ def summary():
 
 @exam_bp.route("/practice/random", methods=["GET"])
 def random_practice():
-    _, denied = _require_exam_user()
+    user, denied = _require_exam_user()
     if denied:
         return denied
 
     limit = request.args.get("limit", default=10, type=int)
     limit = max(1, min(limit or 10, 100))
     paper_id = request.args.get("paper_id", type=int)
-    return jsonify(
-        {
-            "success": True,
-            "data": get_random_practice_questions(limit=limit, paper_id=paper_id),
-        }
-    )
+    questions = get_random_practice_questions(limit=limit, paper_id=paper_id)
+    return jsonify({"success": True, "data": _questions_for_user(questions, user)})
 
 
 @exam_bp.route("/papers", methods=["GET"])
@@ -115,24 +130,29 @@ def create_attempt():
     if denied:
         return denied
     if not can_take_exam(user):
-        return _json_error("权限不足", 403)
+        return _json_error("Permission denied", 403)
+
+    current_paper = get_current_exam_paper()
+    if not current_paper:
+        return _json_error("No current exam paper is set")
 
     data = request.get_json(silent=True) or {}
     paper_id = data.get("paper_id")
     if paper_id is None:
-        current_paper = get_current_exam_paper()
-        if not current_paper:
-            return _json_error("当前考试卷不存在")
         paper_id = current_paper["id"]
     try:
         paper_id = int(paper_id)
     except (TypeError, ValueError):
-        return _json_error("试卷ID无效")
+        return _json_error("Invalid paper_id")
+    if paper_id != current_paper["id"]:
+        return _json_error("Only the current exam paper can be attempted")
     if not _paper_exists(paper_id):
-        return _json_error("试卷不存在", 404)
+        return _json_error("Paper not found", 404)
 
     attempt_id = start_attempt(user["id"], paper_id)
-    return jsonify({"success": True, "attempt_id": attempt_id, "data": get_attempt(attempt_id)})
+    attempt = get_attempt(attempt_id)
+    attempt["attempt_id"] = attempt_id
+    return jsonify({"success": True, "attempt_id": attempt_id, "data": attempt})
 
 
 @exam_bp.route("/attempts/<int:attempt_id>", methods=["GET"])
@@ -143,11 +163,12 @@ def attempt_detail(attempt_id):
 
     attempt = get_attempt(attempt_id)
     if not attempt:
-        return _json_error("考试记录不存在", 404)
+        return _json_error("Attempt not found", 404)
     if attempt["user_id"] != user.get("id") and not can_manage_exam(user):
-        return _json_error("权限不足", 403)
+        return _json_error("Permission denied", 403)
 
-    attempt["questions"] = get_paper_questions(attempt["paper_id"])
+    questions = get_paper_questions(attempt["paper_id"])
+    attempt["questions"] = _questions_for_user(questions, user)
     return jsonify({"success": True, "data": attempt})
 
 
@@ -157,13 +178,13 @@ def submit_attempt_route(attempt_id):
     if denied:
         return denied
     if not can_take_exam(user):
-        return _json_error("权限不足", 403)
+        return _json_error("Permission denied", 403)
 
     attempt = get_attempt(attempt_id)
     if not attempt:
-        return _json_error("考试记录不存在", 404)
+        return _json_error("Attempt not found", 404)
     if attempt["user_id"] != user.get("id"):
-        return _json_error("权限不足", 403)
+        return _json_error("Permission denied", 403)
 
     data = request.get_json(silent=True) or {}
     try:
@@ -204,9 +225,9 @@ def set_current_paper():
     try:
         paper_id = int(data.get("paper_id"))
     except (TypeError, ValueError):
-        return _json_error("试卷ID无效")
+        return _json_error("Invalid paper_id")
     if not _paper_exists(paper_id):
-        return _json_error("试卷不存在", 404)
+        return _json_error("Paper not found", 404)
 
     conn = get_db()
     conn.execute(
@@ -245,7 +266,7 @@ def admin_review_answer(answer_id):
     try:
         final_score = float(data.get("final_score"))
     except (TypeError, ValueError):
-        return _json_error("分数无效")
+        return _json_error("Invalid final_score")
 
     review_answer(answer_id, user["id"], final_score, data.get("comment") or "")
     return jsonify({"success": True})
