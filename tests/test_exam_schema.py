@@ -29,3 +29,26 @@ def test_exam_attempts_reference_existing_users(test_db):
     assert columns["user_id"][2].upper() == "INTEGER"
     assert columns["paper_id"][2].upper() == "INTEGER"
     assert columns["status"][2].upper() == "TEXT"
+
+
+def test_exam_schema_preserves_caller_transaction_rollback():
+    from database.exam_schema import init_exam_schema
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT
+        )
+        """
+    )
+    conn.commit()
+
+    conn.execute("BEGIN")
+    conn.execute("CREATE TABLE rollback_marker (id INTEGER PRIMARY KEY)")
+    init_exam_schema(conn)
+    conn.rollback()
+
+    names = table_names(conn)
+    assert "rollback_marker" not in names
+    assert "exam_papers" not in names
