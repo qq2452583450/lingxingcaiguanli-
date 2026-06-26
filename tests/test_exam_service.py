@@ -165,8 +165,8 @@ def test_review_answer_completes_attempt_and_results_scope_by_viewer(test_db):
     assert attempt["final_score"] == objective["score"] + subjective["score"]
     assert [row["id"] for row in user_attempts] == [attempt_id]
     assert user_attempts[0]["paper_title"] == paper["title"]
-    assert {row["id"] for row in manager_results} == {attempt_id, other_attempt_id}
-    assert {row["id"] for row in clerk_results} == {attempt_id}
+    assert {row["attempt_id"] for row in manager_results} == {attempt_id, other_attempt_id}
+    assert {row["attempt_id"] for row in clerk_results} == {attempt_id}
     assert manager_results[0]["user_name"]
     assert manager_results[0]["username"]
     assert manager_results[0]["role_name"]

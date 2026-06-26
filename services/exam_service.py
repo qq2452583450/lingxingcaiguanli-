@@ -490,7 +490,7 @@ def list_results(filters=None) -> list[dict]:
     try:
         rows = conn.execute(
             f"""
-            SELECT att.id, att.user_id, u.real_name AS user_name, u.username,
+            SELECT att.id, att.id AS attempt_id, att.user_id, u.real_name AS user_name, u.username,
                    r.role_name, att.paper_id, p.title AS paper_title,
                    att.status, att.objective_score,
                    att.suggested_subjective_score,
