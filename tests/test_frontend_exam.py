@@ -27,9 +27,17 @@ def test_exam_frontend_script_is_loaded_and_routed():
 def test_exam_role_helpers_are_present():
     exam_js = read_text("static/js/exam.js")
 
+    assert "function canTakeExam" in exam_js
     assert "function canUseExamCenter" in exam_js
-    for role in ("材料员", "材料审批负责人", "基地负责人", "系统管理员"):
+    assert "canTakeExam(user) || canManageExam(user)" in exam_js
+    assert "const EXAM_TAKER_ROLES" in exam_js
+    assert "const EXAM_MANAGER_ROLES" in exam_js
+    for role in ("材料员", "材料审批负责人", "基地负责人"):
         assert role in exam_js
+    assert "系统管理员" in exam_js
+    assert "EXAM_TAKER_ROLES = ['材料员', '材料审批负责人', '基地负责人']" in exam_js
+    assert "EXAM_MANAGER_ROLES = ['材料审批负责人', '系统管理员']" in exam_js
+    assert "当前账号仅可管理考试，不能参加正式考试。" in exam_js
 
 
 def test_exam_tabs_have_required_structure():

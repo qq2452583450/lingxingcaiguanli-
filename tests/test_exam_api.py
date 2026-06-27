@@ -141,6 +141,33 @@ def test_material_approval_owner_can_access_admin_papers(client, test_db):
     assert len(data["data"]) >= 5
 
 
+def test_material_approval_owner_practice_questions_are_sanitized(client, test_db):
+    seed_exam()
+    owner_id = seed_user(test_db, "owner", "\u5ba1\u6279\u4eba", ROLE_APPROVAL_OWNER)
+    login(client, owner_id, "owner", "\u5ba1\u6279\u4eba", ROLE_APPROVAL_OWNER)
+
+    practice = client.get("/api/exam/practice/random?limit=5").get_json()
+
+    assert practice["success"] is True
+    assert len(practice["data"]) == 5
+    for question in practice["data"]:
+        assert_question_is_sanitized(question)
+
+
+def test_material_approval_owner_attempt_detail_questions_are_sanitized(client, test_db):
+    seed_exam()
+    owner_id = seed_user(test_db, "owner", "\u5ba1\u6279\u4eba", ROLE_APPROVAL_OWNER)
+    login(client, owner_id, "owner", "\u5ba1\u6279\u4eba", ROLE_APPROVAL_OWNER)
+
+    start = client.post("/api/exam/attempts", json={}, headers=csrf_headers()).get_json()
+    attempt = client.get(f"/api/exam/attempts/{start['attempt_id']}").get_json()
+
+    assert start["success"] is True
+    assert attempt["success"] is True
+    for question in attempt["data"]["questions"]:
+        assert_question_is_sanitized(question)
+
+
 def test_manager_can_change_current_paper_and_summary_reflects_it(client, test_db):
     seed_exam()
     manager_id = seed_user(test_db, "manager", "\u7ba1\u7406\u5458", ROLE_MANAGER)

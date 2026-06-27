@@ -62,9 +62,7 @@ def _sanitize_question(question):
     return {key: value for key, value in question.items() if key in allowed_keys}
 
 
-def _questions_for_user(questions, user):
-    if can_manage_exam(user):
-        return questions
+def _questions_for_exam_flow(questions):
     return [_sanitize_question(question) for question in questions]
 
 
@@ -112,7 +110,7 @@ def random_practice():
     limit = max(1, min(limit or 10, 100))
     paper_id = request.args.get("paper_id", type=int)
     questions = get_random_practice_questions(limit=limit, paper_id=paper_id)
-    return jsonify({"success": True, "data": _questions_for_user(questions, user)})
+    return jsonify({"success": True, "data": _questions_for_exam_flow(questions)})
 
 
 @exam_bp.route("/papers", methods=["GET"])
@@ -168,7 +166,7 @@ def attempt_detail(attempt_id):
         return _json_error("Permission denied", 403)
 
     questions = get_paper_questions(attempt["paper_id"])
-    attempt["questions"] = _questions_for_user(questions, user)
+    attempt["questions"] = _questions_for_exam_flow(questions)
     return jsonify({"success": True, "data": attempt})
 
 

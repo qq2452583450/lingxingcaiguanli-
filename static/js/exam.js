@@ -2,7 +2,7 @@ let examSummary = null;
 let examCurrentTab = 'practice';
 let examActiveAttempt = null;
 
-const EXAM_ALLOWED_ROLES = ['材料员', '材料审批负责人', '基地负责人', '系统管理员'];
+const EXAM_TAKER_ROLES = ['材料员', '材料审批负责人', '基地负责人'];
 const EXAM_MANAGER_ROLES = ['材料审批负责人', '系统管理员'];
 const EXAM_OBJECTIVE_TYPES = ['single_choice', 'multiple_choice', 'true_false'];
 
@@ -10,8 +10,12 @@ function examUser(user) {
     return user || currentUser || JSON.parse(sessionStorage.getItem('currentUser') || '{}');
 }
 
+function canTakeExam(user = currentUser) {
+    return EXAM_TAKER_ROLES.includes(examUser(user).role_name);
+}
+
 function canUseExamCenter(user = currentUser) {
-    return EXAM_ALLOWED_ROLES.includes(examUser(user).role_name);
+    return canTakeExam(user) || canManageExam(user);
 }
 
 function canManageExam(user = currentUser) {
@@ -172,6 +176,14 @@ function renderExamStart() {
     const paper = examSummary?.current_paper;
     const content = examContent();
     if (!content) return;
+    const canStart = canTakeExam(currentUser);
+    const managerOnly = canManageExam(currentUser) && !canStart;
+    const startButton = paper && canStart
+        ? '<button class="btn btn-primary" type="button" onclick="startCurrentExam()"><i data-lucide="play"></i>开始考试</button>'
+        : '';
+    const managerOnlyNotice = managerOnly
+        ? '<div class="exam-muted">当前账号仅可管理考试，不能参加正式考试。</div>'
+        : '';
     content.innerHTML = `
         <div class="exam-panel">
             <div class="exam-toolbar">
@@ -179,8 +191,9 @@ function renderExamStart() {
                     <h2>正式考试</h2>
                     <p>${paper ? `当前试卷：${examEscape(paper.title)}，时长 ${examEscape(paper.duration_minutes || '-')} 分钟，总分 ${examScore(paper.total_score)}` : '管理员尚未设置当前试卷。'}</p>
                 </div>
-                ${paper ? '<button class="btn btn-primary" type="button" onclick="startCurrentExam()"><i data-lucide="play"></i>开始考试</button>' : ''}
+                ${startButton}
             </div>
+            ${managerOnlyNotice}
             <div id="examAttemptArea"></div>
         </div>`;
 }
@@ -188,6 +201,10 @@ function renderExamStart() {
 async function startCurrentExam() {
     const area = document.getElementById('examAttemptArea') || examContent();
     if (!area) return;
+    if (!canTakeExam(currentUser)) {
+        area.innerHTML = '<div class="error-message">当前账号仅可管理考试，不能参加正式考试。</div>';
+        return;
+    }
     if (!confirm('开始正式考试后请一次性提交，确认开始？')) return;
     area.innerHTML = '<div class="loading">正在创建考试...</div>';
     try {
