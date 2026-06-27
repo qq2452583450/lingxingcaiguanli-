@@ -86,6 +86,21 @@ def test_ensure_exam_sources_imported_repairs_non_exam_current_setting(test_db):
     assert get_current_exam_paper()["id"] == first_formal_paper["id"]
 
 
+def test_ensure_exam_sources_imported_repairs_stale_current_setting(test_db):
+    import_exam_papers_from_docx(source_docx())
+    first_formal_paper = list_papers()[0]
+    test_db.execute(
+        "INSERT OR REPLACE INTO exam_settings (key, value) VALUES (?, ?)",
+        ("current_exam_paper_id", "999999"),
+    )
+
+    result = ensure_exam_sources_imported()
+
+    assert result == {"created": False, "paper_count": 5}
+    assert get_current_exam_paper()["id"] == first_formal_paper["id"]
+    assert len([paper for paper in list_papers() if paper["source_type"] == "exam"]) == 5
+
+
 def test_startup_exam_source_hook_uses_import_helper(monkeypatch):
     calls = []
 
