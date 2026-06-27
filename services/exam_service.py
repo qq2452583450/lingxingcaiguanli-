@@ -66,6 +66,23 @@ def list_papers() -> list[dict]:
             conn.close()
 
 
+def get_exam_paper(paper_id: int) -> dict | None:
+    conn, should_close = _connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT id, title, duration_minutes, total_score, source_type, create_time
+            FROM exam_papers
+            WHERE id = ?
+            """,
+            (paper_id,),
+        ).fetchone()
+        return _dict_or_none(row)
+    finally:
+        if should_close:
+            conn.close()
+
+
 def get_current_exam_paper() -> dict | None:
     conn, should_close = _connection()
     try:
@@ -75,6 +92,7 @@ def get_current_exam_paper() -> dict | None:
             FROM exam_settings s
             JOIN exam_papers p ON p.id = CAST(s.value AS INTEGER)
             WHERE s.key = ?
+              AND p.source_type = 'exam'
             """,
             ("current_exam_paper_id",),
         ).fetchone()

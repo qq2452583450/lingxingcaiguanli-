@@ -189,6 +189,38 @@ def test_manager_can_change_current_paper_and_summary_reflects_it(client, test_d
     assert summary["data"]["current_paper"]["title"] == target_paper["title"]
 
 
+def test_manager_cannot_set_non_formal_paper_current(client, test_db):
+    seed_exam()
+    manager_id = seed_user(test_db, "manager", "\u7ba1\u7406\u5458", ROLE_MANAGER)
+    login(client, manager_id, "manager", "\u7ba1\u7406\u5458", ROLE_MANAGER)
+    formal_paper = papers(test_db)[0]
+    cursor = test_db.cursor()
+    cursor.execute(
+        """
+        INSERT INTO exam_papers (
+            title, duration_minutes, total_score, source_type, create_time
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        ("\u9898\u5e93\u53c2\u8003\u5377", 50, 100, "bank", "2026-06-27 00:00:00"),
+    )
+    bank_paper_id = cursor.lastrowid
+    test_db.commit()
+
+    response = client.post(
+        "/api/exam/admin/current-paper",
+        json={"paper_id": bank_paper_id},
+        headers=csrf_headers(),
+    )
+    data = response.get_json()
+    summary = client.get("/api/exam/summary").get_json()
+
+    assert response.status_code == 400
+    assert data["success"] is False
+    assert "\u6b63\u5f0f\u8003\u8bd5\u5377" in data["message"]
+    assert summary["success"] is True
+    assert summary["data"]["current_paper"]["id"] == formal_paper["id"]
+
+
 def test_clerk_can_start_submit_and_see_own_results(client, test_db):
     seed_exam()
     clerk_id = seed_user(test_db, "clerk", "\u5f20\u6750\u6599", ROLE_CLERK)

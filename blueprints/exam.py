@@ -8,6 +8,7 @@ from services.exam_service import (
     can_take_exam,
     get_attempt,
     get_current_exam_paper,
+    get_exam_paper,
     get_paper_questions,
     get_random_practice_questions,
     list_papers,
@@ -224,8 +225,11 @@ def set_current_paper():
         paper_id = int(data.get("paper_id"))
     except (TypeError, ValueError):
         return _json_error("Invalid paper_id")
-    if not _paper_exists(paper_id):
+    paper = get_exam_paper(paper_id)
+    if not paper:
         return _json_error("Paper not found", 404)
+    if paper["source_type"] != "exam":
+        return _json_error("只能设置正式考试卷为当前试卷")
 
     conn = get_db()
     conn.execute(
