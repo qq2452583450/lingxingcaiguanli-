@@ -1693,12 +1693,12 @@ def print_inquiry_approval(inquiry_id):
                 if total_amount is None:
                     total_amount = tax_price * float(item.get('quantity', 1) or 1)
                 marker = '<span class="quote-lowest-mark">★</span>' if quote.get('is_lowest') == 1 else ''
-                cls_parts = ['quote-cell']
-                if quote.get('is_lowest') == 1:
-                    cls_parts.append('lowest-cell')
+                cell_classes = ['quote-cell']
                 if quote.get('is_selected') == 1:
-                    cls_parts.append('selected-cell')
-                cls = ' '.join(cls_parts)
+                    cell_classes.append('selected-cell')
+                if quote.get('is_lowest') == 1:
+                    cell_classes.append('lowest-cell')
+                cls = ' '.join(cell_classes)
                 quote_cells += (
                     f'<td class="{cls}">'
                     f'<span class="quote-unit-price">{tax_price:.2f}</span>'
@@ -1772,6 +1772,7 @@ def print_inquiry_approval(inquiry_id):
         <style>
             @page {{ size: A4 landscape; margin: 6mm; }}
             * {{ box-sizing: border-box; }}
+            html, body, table, th, td {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
             body {{ font-family: "Microsoft YaHei", Arial, sans-serif; margin: 0; padding: 10px; color: #111; background: #fff; }}
             .no-print {{ text-align: right; margin: 0 0 10px; }}
             .print-btn {{ padding: 8px 22px; background: #2563eb; color: #fff; border: 0; border-radius: 4px; cursor: pointer; }}
@@ -1802,8 +1803,8 @@ def print_inquiry_approval(inquiry_id):
             .quote-separator {{ color: #666; line-height: 1; }}
             .quote-total-amount {{ font-size: 9px; }}
             .quote-lowest-mark {{ color: #111; font-weight: 700; line-height: 1; }}
-            .lowest-cell {{ background: #eaf7ee; font-weight: 700; }}
-            .selected-cell {{ background: #fff3cd; font-weight: 700; }}
+            .lowest-cell {{ background-color: #eaf7ee !important; box-shadow: inset 0 0 0 9999px #eaf7ee; font-weight: 700; }}
+            .selected-cell {{ background-color: #fff3bf !important; box-shadow: inset 0 0 0 9999px #fff3bf; font-weight: 700; }}
             .summary-grid {{ display: grid; grid-template-columns: 1.45fr 1fr; border-left: 1px solid #222; border-right: 1px solid #222; border-bottom: 1px solid #222; font-size: 12px; }}
             .summary-grid div {{ padding: 8px; }}
             .summary-grid div:first-child {{ border-right: 1px solid #222; }}

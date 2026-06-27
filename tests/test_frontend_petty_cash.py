@@ -25,11 +25,18 @@ def test_frontend_has_independent_petty_cash_module():
     assert "<th>备用金单号</th>" not in index_source
     assert 'name="proof_files"' in index_source
     assert "multiple" in index_source
+    assert 'id="pettyCashProofFileList"' in index_source
     assert "loadPettyCash" in app_source
     assert "/api/petty-cash/loans" in app_source
     assert "/api/petty-cash/usages" in app_source
     assert "显示附件" in app_source
     assert "proof_file_count" in app_source
+    assert "pettyCashSelectedProofFiles" in app_source
+    assert "appendPettyCashProofFiles" in app_source
+    assert "renderPettyCashProofFileList" in app_source
+    assert "formData.delete('proof_files')" in app_source
+    assert "formData.append('proof_files', file)" in app_source
+    assert "pettyCashExistingProofFileCount + pettyCashSelectedProofFiles.length" in app_source
     assert "canManagePettyCash" in app_source
     assert "supplier_name" in app_source
     assert "material_name" in app_source
