@@ -711,10 +711,14 @@ def ensure_exam_sources_imported() -> dict:
     """Import bundled formal exam papers only when the database has none."""
     conn, should_close = _connection()
     try:
-        existing_count = conn.execute(
-            "SELECT COUNT(*) FROM exam_papers WHERE source_type = ?",
+        formal_rows = conn.execute(
+            "SELECT id FROM exam_papers WHERE source_type = ? ORDER BY id",
             ("exam",),
-        ).fetchone()[0]
+        ).fetchall()
+        existing_count = len(formal_rows)
+        if existing_count:
+            _ensure_current_exam_setting(conn, formal_rows[0]["id"])
+            conn.commit()
     finally:
         if should_close:
             conn.close()
@@ -732,6 +736,26 @@ def ensure_exam_sources_imported() -> dict:
 
     result = import_exam_papers_from_docx(source_path)
     return {"created": True, "paper_count": result["inserted"]}
+
+
+def _ensure_current_exam_setting(conn, fallback_paper_id: int) -> None:
+    current = conn.execute(
+        """
+        SELECT p.id
+        FROM exam_settings s
+        JOIN exam_papers p ON p.id = CAST(s.value AS INTEGER)
+        WHERE s.key = ?
+          AND p.source_type = 'exam'
+        """,
+        ("current_exam_paper_id",),
+    ).fetchone()
+    if current:
+        return
+
+    conn.execute(
+        "INSERT OR REPLACE INTO exam_settings (key, value) VALUES (?, ?)",
+        ("current_exam_paper_id", str(fallback_paper_id)),
+    )
 
 
 def _delete_existing_exam_papers(cursor, paper_ids: list[int]) -> None:

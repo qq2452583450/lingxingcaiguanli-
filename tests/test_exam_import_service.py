@@ -47,6 +47,45 @@ def test_ensure_exam_sources_imported_is_idempotent(test_db):
     assert len([paper for paper in list_papers() if paper["source_type"] == "exam"]) == 5
 
 
+def test_ensure_exam_sources_imported_restores_missing_current_setting(test_db):
+    import_exam_papers_from_docx(source_docx())
+    first_formal_paper = list_papers()[0]
+    test_db.execute(
+        "DELETE FROM exam_settings WHERE key = ?",
+        ("current_exam_paper_id",),
+    )
+
+    result = ensure_exam_sources_imported()
+
+    assert result == {"created": False, "paper_count": 5}
+    assert get_current_exam_paper()["id"] == first_formal_paper["id"]
+
+
+def test_ensure_exam_sources_imported_repairs_non_exam_current_setting(test_db):
+    import_exam_papers_from_docx(source_docx())
+    first_formal_paper = list_papers()[0]
+    cursor = test_db.cursor()
+    cursor.execute(
+        """
+        INSERT INTO exam_papers (
+            title, duration_minutes, total_score, source_type, create_time
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        ("\u9898\u5e93\u53c2\u8003\u5377", 50, 100, "bank", "2026-06-27 00:00:00"),
+    )
+    bank_paper_id = cursor.lastrowid
+    cursor.execute(
+        "INSERT OR REPLACE INTO exam_settings (key, value) VALUES (?, ?)",
+        ("current_exam_paper_id", str(bank_paper_id)),
+    )
+    test_db.commit()
+
+    result = ensure_exam_sources_imported()
+
+    assert result == {"created": False, "paper_count": 5}
+    assert get_current_exam_paper()["id"] == first_formal_paper["id"]
+
+
 def test_startup_exam_source_hook_uses_import_helper(monkeypatch):
     calls = []
 
