@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import sqlite3
+import gc
 
 # 添加项目根目录到path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -558,6 +559,8 @@ def test_db():
         )
     """)
 
+    from database.exam_schema import init_exam_schema
+    init_exam_schema(conn)
     conn.commit()
     conn.close()
 
@@ -567,6 +570,9 @@ def test_db():
         def __init__(self, db_path):
             self._path = db_path
             self._conn = None
+
+        def __fspath__(self):
+            return self._path
 
         def _ensure_conn(self):
             if self._conn is None:
@@ -596,6 +602,7 @@ def test_db():
     yield db
 
     db.close()
+    gc.collect()
     os.unlink(path)
     config.DATABASE_PATH = _orig_path  # 恢复
 
@@ -615,7 +622,7 @@ def app(test_db):
     from blueprints import (
         auth_bp, material_bp, inquiry_bp, stock_bp,
         sales_bp, reconciliation_bp, system_bp, dashboard_bp, transfer_bp,
-        supplier_bp, petty_cash_bp
+        supplier_bp, petty_cash_bp, exam_bp
     )
     app.register_blueprint(auth_bp)
     app.register_blueprint(material_bp)
@@ -628,6 +635,7 @@ def app(test_db):
     app.register_blueprint(transfer_bp)
     app.register_blueprint(supplier_bp)
     app.register_blueprint(petty_cash_bp)
+    app.register_blueprint(exam_bp)
 
     return app
 

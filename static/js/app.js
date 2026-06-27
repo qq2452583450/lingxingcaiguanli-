@@ -393,6 +393,7 @@ function showModule(module) {
         case 'reconciliation': loadReconciliation(); break;
         case 'owner_supplied': loadOwnerSupplied(); break;
         case 'petty_cash': loadPettyCash(); break;
+        case 'exam': loadExamCenter(); break;
         case 'system': loadUsers(); break;
     }
 }
@@ -890,6 +891,10 @@ function applyPermissionControls() {
     });
     document.querySelectorAll('.supplier-create-btn').forEach(el => {
         el.style.display = canCreateSupplier() ? '' : 'none';
+    });
+    document.querySelectorAll('[data-module="exam"]').forEach(el => {
+        const allowed = typeof canUseExamCenter === 'function' && canUseExamCenter(currentUser);
+        el.style.display = allowed ? '' : 'none';
     });
 }
 

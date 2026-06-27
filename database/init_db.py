@@ -6,6 +6,8 @@ import os
 import config
 from datetime import datetime
 
+from database.exam_schema import init_exam_schema
+
 
 def get_connection():
     """获取数据库连接"""
@@ -909,6 +911,7 @@ def init_database():
         )
     """)
 
+    init_exam_schema(conn)
     conn.commit()
     return conn
 
