@@ -182,8 +182,11 @@ def test_manager_can_change_current_paper_and_summary_reflects_it(client, test_d
     summary = client.get("/api/exam/summary").get_json()
 
     assert change["success"] is True
+    assert change["data"]["id"] == target_paper["id"]
+    assert change["data"]["title"] == target_paper["title"]
     assert summary["success"] is True
     assert summary["data"]["current_paper"]["id"] == target_paper["id"]
+    assert summary["data"]["current_paper"]["title"] == target_paper["title"]
 
 
 def test_clerk_can_start_submit_and_see_own_results(client, test_db):

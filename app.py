@@ -105,6 +105,14 @@ app.register_blueprint(exam_bp)
 
 # ==================== 静态文件 ====================
 
+def ensure_startup_exam_sources():
+    """Seed bundled exam papers during normal app startup."""
+    from services.exam_import_service import ensure_exam_sources_imported
+
+    with app.app_context():
+        return ensure_exam_sources_imported()
+
+
 @app.route('/')
 def index():
     """主页"""
@@ -143,6 +151,7 @@ if __name__ == '__main__':
     # 自动修复数据库表结构（确保与代码定义一致）
     from database.auto_fix import auto_fix_database
     auto_fix_database()
+    ensure_startup_exam_sources()
 
     print("=" * 50)
     print("零星材管理系统 Web版")

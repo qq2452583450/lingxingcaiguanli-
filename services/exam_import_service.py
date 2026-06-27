@@ -19,6 +19,7 @@ QUESTION_SCORES = {
     "short_answer": 7,
     "case_analysis": 15,
 }
+EXAM_SOURCE_PATTERN = "*材料进场验收标准专项考试卷*.docx"
 
 
 PAPER_TITLE_RE = re.compile(r"^第[一二三四五]套(?!.*参考答案)")
@@ -704,6 +705,33 @@ def import_exam_papers_from_docx(path: Path) -> dict:
     finally:
         if should_close:
             conn.close()
+
+
+def ensure_exam_sources_imported() -> dict:
+    """Import bundled formal exam papers only when the database has none."""
+    conn, should_close = _connection()
+    try:
+        existing_count = conn.execute(
+            "SELECT COUNT(*) FROM exam_papers WHERE source_type = ?",
+            ("exam",),
+        ).fetchone()[0]
+    finally:
+        if should_close:
+            conn.close()
+
+    if existing_count:
+        return {"created": False, "paper_count": existing_count}
+
+    source_dir = Path(__file__).resolve().parents[1] / "docs" / "exam_sources"
+    try:
+        source_path = next(source_dir.glob(EXAM_SOURCE_PATTERN))
+    except StopIteration as exc:
+        raise FileNotFoundError(
+            f"No exam source matching {EXAM_SOURCE_PATTERN!r} in {source_dir}"
+        ) from exc
+
+    result = import_exam_papers_from_docx(source_path)
+    return {"created": True, "paper_count": result["inserted"]}
 
 
 def _delete_existing_exam_papers(cursor, paper_ids: list[int]) -> None:

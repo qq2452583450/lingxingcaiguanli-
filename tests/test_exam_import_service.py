@@ -1,6 +1,11 @@
 from pathlib import Path
+import importlib
 
-from services.exam_import_service import parse_exam_docx, import_exam_papers_from_docx
+from services.exam_import_service import (
+    ensure_exam_sources_imported,
+    parse_exam_docx,
+    import_exam_papers_from_docx,
+)
 from services.exam_service import list_papers, get_paper_questions, get_current_exam_paper
 
 
@@ -31,6 +36,33 @@ def test_import_exam_papers_sets_current_exam_paper(test_db):
     assert len(papers) == 5
     assert current["title"] == "\u7b2c\u4e00\u5957\uff08\u65b0\u7f16\u5b9e\u64cd\u7248\uff09"
     assert len(get_paper_questions(current["id"])) == 38
+
+
+def test_ensure_exam_sources_imported_is_idempotent(test_db):
+    first = ensure_exam_sources_imported()
+    second = ensure_exam_sources_imported()
+
+    assert first == {"created": True, "paper_count": 5}
+    assert second == {"created": False, "paper_count": 5}
+    assert len([paper for paper in list_papers() if paper["source_type"] == "exam"]) == 5
+
+
+def test_startup_exam_source_hook_uses_import_helper(monkeypatch):
+    calls = []
+
+    def fake_ensure_exam_sources_imported():
+        calls.append(True)
+        return {"created": False, "paper_count": 5}
+
+    monkeypatch.setenv("SECRET_KEY", "test-secret-key")
+    app_module = importlib.import_module("app")
+    monkeypatch.setattr(
+        "services.exam_import_service.ensure_exam_sources_imported",
+        fake_ensure_exam_sources_imported,
+    )
+
+    assert app_module.ensure_startup_exam_sources() == {"created": False, "paper_count": 5}
+    assert calls == [True]
 
 
 def test_reimport_removes_old_formal_exam_lifecycle_rows(test_db):
