@@ -89,9 +89,15 @@ async function loadExamCenter() {
     try {
         const data = await examJson('/api/exam/summary');
         examSummary = data.data || {};
+        document.querySelectorAll('.exam-taker-only').forEach(el => {
+            el.classList.toggle('hidden', !canTakeExam(currentUser));
+        });
         document.querySelectorAll('.exam-manager-only').forEach(el => {
             el.classList.toggle('hidden', !canManageExam(currentUser));
         });
+        if (!canTakeExam(currentUser) && ['practice', 'exam', 'results'].includes(examCurrentTab)) {
+            examCurrentTab = 'papers';
+        }
         if (!canManageExam(currentUser) && ['papers', 'reviews', 'adminResults'].includes(examCurrentTab)) {
             examCurrentTab = 'practice';
         }
@@ -102,6 +108,9 @@ async function loadExamCenter() {
 }
 
 async function showExamTab(tab) {
+    if (!canTakeExam(currentUser) && ['practice', 'exam', 'results'].includes(tab)) {
+        tab = 'papers';
+    }
     if (!canManageExam(currentUser) && ['papers', 'reviews', 'adminResults'].includes(tab)) {
         tab = 'practice';
     }
