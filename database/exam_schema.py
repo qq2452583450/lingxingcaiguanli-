@@ -94,6 +94,7 @@ def init_exam_schema(conn):
             answer_text TEXT NOT NULL,
             is_correct INTEGER,
             created_at TEXT NOT NULL,
+            practice_session_id TEXT,
             FOREIGN KEY (user_id) REFERENCES users(id),
             FOREIGN KEY (question_id) REFERENCES exam_questions(id)
         )
@@ -105,6 +106,7 @@ def init_exam_schema(conn):
         "CREATE INDEX IF NOT EXISTS idx_exam_answers_attempt ON exam_answers(attempt_id)",
         "CREATE INDEX IF NOT EXISTS idx_exam_reviews_answer ON exam_subjective_reviews(answer_id)",
         "CREATE INDEX IF NOT EXISTS idx_exam_practice_user ON exam_practice_attempts(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_exam_practice_session ON exam_practice_attempts(user_id, practice_session_id)",
     ]
     for statement in statements:
         cursor.execute(statement)

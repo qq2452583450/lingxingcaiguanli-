@@ -31,6 +31,24 @@ def test_exam_attempts_reference_existing_users(test_db):
     assert columns["status"][2].upper() == "TEXT"
 
 
+def test_exam_practice_attempts_have_session_id(test_db):
+    conn = sqlite3.connect(test_db)
+    try:
+        columns = {
+            row[1]: row
+            for row in conn.execute("PRAGMA table_info(exam_practice_attempts)")
+        }
+        indexes = [
+            row[1]
+            for row in conn.execute("PRAGMA index_list(exam_practice_attempts)")
+        ]
+    finally:
+        conn.close()
+
+    assert "practice_session_id" in columns
+    assert "idx_exam_practice_session" in indexes
+
+
 def test_exam_schema_preserves_caller_transaction_rollback():
     from database.exam_schema import init_exam_schema
 
