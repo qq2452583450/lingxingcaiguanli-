@@ -3,7 +3,7 @@
 
 def init_exam_schema(conn):
     cursor = conn.cursor()
-    statements = [
+    table_statements = [
         """
         CREATE TABLE IF NOT EXISTS exam_papers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,6 +99,8 @@ def init_exam_schema(conn):
             FOREIGN KEY (question_id) REFERENCES exam_questions(id)
         )
         """,
+    ]
+    index_statements = [
         "CREATE INDEX IF NOT EXISTS idx_exam_attempts_user ON exam_attempts(user_id)",
         "CREATE INDEX IF NOT EXISTS idx_exam_attempts_paper ON exam_attempts(paper_id)",
         "CREATE INDEX IF NOT EXISTS idx_exam_questions_paper ON exam_questions(paper_id)",
@@ -108,5 +110,18 @@ def init_exam_schema(conn):
         "CREATE INDEX IF NOT EXISTS idx_exam_practice_user ON exam_practice_attempts(user_id)",
         "CREATE INDEX IF NOT EXISTS idx_exam_practice_session ON exam_practice_attempts(user_id, practice_session_id)",
     ]
-    for statement in statements:
+
+    for statement in table_statements:
+        cursor.execute(statement)
+
+    practice_columns = {
+        row[1]
+        for row in cursor.execute("PRAGMA table_info(exam_practice_attempts)")
+    }
+    if "practice_session_id" not in practice_columns:
+        cursor.execute(
+            "ALTER TABLE exam_practice_attempts ADD COLUMN practice_session_id TEXT"
+        )
+
+    for statement in index_statements:
         cursor.execute(statement)
