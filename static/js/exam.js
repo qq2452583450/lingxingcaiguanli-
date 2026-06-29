@@ -143,9 +143,13 @@ function renderPracticeShell() {
             <div class="exam-toolbar">
                 <div>
                     <h2>随机练习</h2>
-                    <p>随机抽题用于自测，不显示答案。</p>
+                    <p>随机抽取选择题和判断题，提交后显示答案并保存练习记录。</p>
                 </div>
-                <button class="btn btn-primary" type="button" onclick="loadRandomPractice()"><i data-lucide="shuffle"></i>开始练习</button>
+                <div class="exam-actions">
+                    <button class="btn btn-primary" type="button" onclick="loadRandomPractice()"><i data-lucide="shuffle"></i>开始练习</button>
+                    <button class="btn btn-secondary" type="button" onclick="loadPracticeHistory()"><i data-lucide="history"></i>练习记录</button>
+                    <button class="btn btn-secondary" type="button" onclick="loadWrongPracticeQuestions()"><i data-lucide="list-x"></i>错题记录</button>
+                </div>
             </div>
             <div id="examPracticeList" class="exam-question-list"></div>
         </div>`;
@@ -162,7 +166,7 @@ async function loadRandomPractice() {
             <form id="examPracticeForm" onsubmit="submitPracticeAnswers(event)">
                 ${renderExamQuestions(questions, { mode: 'practice' })}
                 <div class="exam-actions">
-                    <button class="btn btn-primary" type="submit"><i data-lucide="check"></i>完成练习</button>
+                    <button class="btn btn-primary" type="submit"><i data-lucide="check"></i>提交练习</button>
                     <button class="btn btn-secondary" type="button" onclick="loadRandomPractice()"><i data-lucide="rotate-cw"></i>换一组</button>
                 </div>
                 <div id="examPracticeNotice" class="exam-muted"></div>
@@ -173,12 +177,108 @@ async function loadRandomPractice() {
     }
 }
 
-function submitPracticeAnswers(event) {
+async function submitPracticeAnswers(event) {
     event.preventDefault();
-    const notice = document.getElementById('examPracticeNotice');
-    if (notice) {
-        notice.textContent = '已记录本次作答。练习模式不显示答案，正式成绩请进入正式考试提交。';
+    const form = event.target;
+    const submitButton = form.querySelector('button[type="submit"]');
+    if (submitButton) submitButton.disabled = true;
+    try {
+        const result = await examJson('/api/exam/practice/submit', {
+            method: 'POST',
+            body: JSON.stringify({ answers: collectExamAnswers(form) })
+        });
+        renderPracticeResult(result.data || {});
+    } catch (e) {
+        if (submitButton) submitButton.disabled = false;
+        examNotify(e.message || '练习提交失败', 'error');
     }
+}
+
+function answerTextFromOptions(item, value) {
+    if (!value) return '-';
+    const options = Array.isArray(item.options) ? item.options : [];
+    const labels = String(value).split(',').filter(Boolean).map(key => {
+        const option = options.find(candidate => candidate.key === key);
+        return option ? `${option.key}. ${option.text}` : key;
+    });
+    return labels.join('，') || value;
+}
+
+function renderPracticeResult(result) {
+    const list = document.getElementById('examPracticeList') || examContent();
+    if (!list) return;
+    const items = result.items || [];
+    const rows = items.map((item, index) => `
+        <div class="exam-question ${item.is_correct ? 'exam-correct' : 'exam-wrong'}">
+            <div class="exam-question-head">
+                <strong>${index + 1}. ${examEscape(item.stem || '')}</strong>
+                <span>${item.is_correct ? '正确' : '错误'}</span>
+            </div>
+            <div class="exam-question-paper">${examEscape(item.paper_title || '')}</div>
+            <p><strong>你的答案：</strong>${examEscape(answerTextFromOptions(item, item.answer_text))}</p>
+            <p><strong>正确答案：</strong>${examEscape(answerTextFromOptions(item, item.correct_answer))}</p>
+            ${item.reference_answer ? `<p><strong>参考：</strong>${examEscape(item.reference_answer)}</p>` : ''}
+        </div>`).join('');
+    list.innerHTML = `
+        <div class="exam-toolbar">
+            <div>
+                <h2>练习结果</h2>
+                <p>本次 ${items.length} 题，正确 ${items.filter(item => item.is_correct).length} 题。</p>
+            </div>
+            <div class="exam-actions">
+                <button class="btn btn-primary" type="button" onclick="loadRandomPractice()"><i data-lucide="shuffle"></i>继续练习</button>
+                <button class="btn btn-secondary" type="button" onclick="loadWrongPracticeQuestions()"><i data-lucide="list-x"></i>查看错题</button>
+            </div>
+        </div>
+        <div class="exam-question-list">${rows || '<div class="empty-message">暂无练习结果</div>'}</div>`;
+    examRefreshIcons();
+}
+
+async function loadPracticeHistory() {
+    const list = document.getElementById('examPracticeList') || examContent();
+    if (!list) return;
+    list.innerHTML = '<div class="loading">正在加载练习记录...</div>';
+    try {
+        const data = await examJson('/api/exam/practice/history');
+        renderPracticeRecordList(data.data || [], '暂无练习记录');
+    } catch (e) {
+        list.innerHTML = `<div class="error-message">${examEscape(e.message || '练习记录加载失败')}</div>`;
+    }
+}
+
+async function loadWrongPracticeQuestions() {
+    const list = document.getElementById('examPracticeList') || examContent();
+    if (!list) return;
+    list.innerHTML = '<div class="loading">正在加载错题记录...</div>';
+    try {
+        const data = await examJson('/api/exam/practice/wrong');
+        renderPracticeRecordList(data.data || [], '暂无错题记录');
+    } catch (e) {
+        list.innerHTML = `<div class="error-message">${examEscape(e.message || '错题记录加载失败')}</div>`;
+    }
+}
+
+function renderPracticeRecordList(records, emptyText) {
+    const list = document.getElementById('examPracticeList') || examContent();
+    if (!list) return;
+    const rows = records.map((item, index) => `
+        <div class="exam-question ${item.is_correct ? 'exam-correct' : 'exam-wrong'}">
+            <div class="exam-question-head">
+                <strong>${index + 1}. ${examEscape(item.stem || '')}</strong>
+                <span>${examEscape(item.created_at || '')}</span>
+            </div>
+            <div class="exam-question-paper">${examEscape(item.paper_title || '')}</div>
+            <p><strong>你的答案：</strong>${examEscape(answerTextFromOptions(item, item.answer_text))}</p>
+            <p><strong>正确答案：</strong>${examEscape(answerTextFromOptions(item, item.correct_answer))}</p>
+            <p><strong>结果：</strong>${item.is_correct ? '正确' : '错误'}</p>
+        </div>`).join('');
+    list.innerHTML = `
+        <div class="exam-toolbar">
+            <div><h2>做题记录</h2><p>可反复查看历史练习和错题。</p></div>
+            <button class="btn btn-primary" type="button" onclick="loadRandomPractice()"><i data-lucide="shuffle"></i>继续练习</button>
+        </div>
+        <div class="exam-question-list">${rows || `<div class="empty-message">${examEscape(emptyText)}</div>`}</div>`;
+    examRefreshIcons();
 }
 
 function renderExamStart() {
@@ -260,7 +360,7 @@ function renderExamQuestions(questions, options = {}) {
 
 function renderQuestionOptions(question, inputName, mode) {
     const type = question.question_type;
-    const options = Array.isArray(question.options) ? question.options : [];
+    const options = ensureTrueFalseOptions(question);
     if (type === 'single_choice' || type === 'true_false') {
         return `<div class="exam-options">${options.map(option => `
             <label class="exam-option">
@@ -276,6 +376,17 @@ function renderQuestionOptions(question, inputName, mode) {
             </label>`).join('')}</div>`;
     }
     return `<textarea class="exam-answer-text" name="${inputName}" rows="${mode === 'exam' ? 5 : 3}" placeholder="请输入作答内容"></textarea>`;
+}
+
+function ensureTrueFalseOptions(question) {
+    if (question.question_type !== 'true_false') {
+        return Array.isArray(question.options) ? question.options : [];
+    }
+    const options = Array.isArray(question.options) ? question.options.filter(option => option.key) : [];
+    return options.length ? options : [
+        { key: '√', text: '正确' },
+        { key: '×', text: '错误' }
+    ];
 }
 
 function collectExamAnswers(form) {
@@ -433,6 +544,7 @@ function renderResultsTable(results, options = {}) {
             <td>${examScore(row.final_subjective_score ?? row.suggested_subjective_score)}</td>
             <td><strong>${examScore(row.final_score)}</strong></td>
             <td>${examDate(row.submitted_at || row.started_at)}</td>
+            <td><button class="btn btn-secondary btn-sm" type="button" onclick="viewExamAttemptReview(${Number(row.attempt_id || row.id)})">查看明细</button></td>
         </tr>`).join('');
     const heading = options.admin ? '成绩查询' : '我的成绩';
     const adminHeaders = options.admin ? '<th>姓名</th><th>角色</th>' : '';
@@ -441,10 +553,48 @@ function renderResultsTable(results, options = {}) {
             <div class="exam-toolbar"><h2>${heading}</h2><button class="btn btn-secondary" type="button" onclick="${options.admin ? 'loadAllExamResults' : 'loadMyExamResults'}()"><i data-lucide="refresh-cw"></i>刷新</button></div>
             <div class="table-container">
                 <table>
-                    <thead><tr>${adminHeaders}<th>试卷</th><th>状态</th><th>客观题</th><th>主观题</th><th>总分</th><th>时间</th></tr></thead>
-                    <tbody>${rows || `<tr><td colspan="${options.admin ? 8 : 6}" class="empty-message">暂无成绩</td></tr>`}</tbody>
+                    <thead><tr>${adminHeaders}<th>试卷</th><th>状态</th><th>客观题</th><th>主观题</th><th>总分</th><th>时间</th><th>操作</th></tr></thead>
+                    <tbody>${rows || `<tr><td colspan="${options.admin ? 9 : 7}" class="empty-message">暂无成绩</td></tr>`}</tbody>
                 </table>
             </div>
+        </div>`;
+    examRefreshIcons();
+}
+
+async function viewExamAttemptReview(attemptId) {
+    examLoading('正在加载答题明细...');
+    try {
+        const data = await examJson(`/api/exam/attempts/${attemptId}/review`);
+        renderAttemptReview(data.data || {});
+    } catch (e) {
+        examError(e.message || '答题明细加载失败');
+    }
+}
+
+function renderAttemptReview(review) {
+    const attempt = review.attempt || {};
+    const items = review.items || [];
+    const rows = items.map((item, index) => `
+        <div class="exam-question ${item.is_correct === true ? 'exam-correct' : item.is_correct === false ? 'exam-wrong' : ''}">
+            <div class="exam-question-head">
+                <strong>${index + 1}. ${examEscape(item.stem || '')}</strong>
+                <span>${examScore(item.final_score ?? item.auto_score ?? item.suggested_score)} / ${examScore(item.score)}</span>
+            </div>
+            <p><strong>你的答案：</strong>${examEscape(answerTextFromOptions(item, item.answer_text))}</p>
+            ${item.correct_answer ? `<p><strong>正确答案：</strong>${examEscape(answerTextFromOptions(item, item.correct_answer))}</p>` : ''}
+            ${item.reference_answer ? `<p><strong>参考：</strong>${examEscape(item.reference_answer)}</p>` : ''}
+            ${item.is_correct === null || item.is_correct === undefined ? '' : `<p><strong>结果：</strong>${item.is_correct ? '正确' : '错误'}</p>`}
+        </div>`).join('');
+    examContent().innerHTML = `
+        <div class="exam-panel">
+            <div class="exam-toolbar">
+                <div>
+                    <h2>答题明细</h2>
+                    <p>${examEscape(attempt.paper_title || '-')} · ${examStatusText(attempt.status)}</p>
+                </div>
+                <button class="btn btn-secondary" type="button" onclick="${canManageExam(currentUser) ? 'loadAllExamResults()' : 'loadMyExamResults()'}"><i data-lucide="arrow-left"></i>返回成绩</button>
+            </div>
+            <div class="exam-question-list">${rows || '<div class="empty-message">暂无答题明细</div>'}</div>
         </div>`;
     examRefreshIcons();
 }
