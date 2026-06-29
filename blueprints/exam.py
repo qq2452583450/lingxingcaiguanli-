@@ -7,13 +7,17 @@ from services.exam_service import (
     can_manage_exam,
     can_take_exam,
     get_attempt,
+    get_attempt_review,
     get_current_exam_paper,
     get_exam_paper,
     get_paper_questions,
     get_random_practice_questions,
+    list_practice_history,
     list_papers,
     list_pending_reviews,
     list_results,
+    list_wrong_practice_questions,
+    record_practice_answers,
     review_answer,
     start_attempt,
     submit_attempt,
@@ -114,6 +118,48 @@ def random_practice():
     return jsonify({"success": True, "data": _questions_for_exam_flow(questions)})
 
 
+@exam_bp.route("/practice/submit", methods=["POST"])
+def submit_practice():
+    user, denied = _require_exam_user()
+    if denied:
+        return denied
+    if not can_take_exam(user):
+        return _json_error("Permission denied", 403)
+
+    data = request.get_json(silent=True) or {}
+    try:
+        result = record_practice_answers(user["id"], data.get("answers") or {})
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+    return jsonify({"success": True, "data": result})
+
+
+@exam_bp.route("/practice/history", methods=["GET"])
+def practice_history():
+    user, denied = _require_exam_user()
+    if denied:
+        return denied
+    if not can_take_exam(user):
+        return _json_error("Permission denied", 403)
+
+    limit = request.args.get("limit", default=100, type=int)
+    limit = max(1, min(limit or 100, 500))
+    return jsonify({"success": True, "data": list_practice_history(user["id"], limit=limit)})
+
+
+@exam_bp.route("/practice/wrong", methods=["GET"])
+def wrong_practice():
+    user, denied = _require_exam_user()
+    if denied:
+        return denied
+    if not can_take_exam(user):
+        return _json_error("Permission denied", 403)
+
+    limit = request.args.get("limit", default=100, type=int)
+    limit = max(1, min(limit or 100, 500))
+    return jsonify({"success": True, "data": list_wrong_practice_questions(user["id"], limit=limit)})
+
+
 @exam_bp.route("/papers", methods=["GET"])
 def papers():
     _, denied = _require_exam_user()
@@ -169,6 +215,23 @@ def attempt_detail(attempt_id):
     questions = get_paper_questions(attempt["paper_id"])
     attempt["questions"] = _questions_for_exam_flow(questions)
     return jsonify({"success": True, "data": attempt})
+
+
+@exam_bp.route("/attempts/<int:attempt_id>/review", methods=["GET"])
+def attempt_review(attempt_id):
+    user, denied = _require_exam_user()
+    if denied:
+        return denied
+
+    attempt = get_attempt(attempt_id)
+    if not attempt:
+        return _json_error("Attempt not found", 404)
+    if attempt["user_id"] != user.get("id") and not can_manage_exam(user):
+        return _json_error("Permission denied", 403)
+    if attempt["status"] == "in_progress":
+        return _json_error("Attempt has not been submitted", 400)
+
+    return jsonify({"success": True, "data": get_attempt_review(attempt_id)})
 
 
 @exam_bp.route("/attempts/<int:attempt_id>/submit", methods=["POST"])

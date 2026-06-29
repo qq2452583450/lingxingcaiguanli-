@@ -347,6 +347,90 @@ def list_wrong_practice_questions(user_id: int, limit: int = 100) -> list[dict]:
     return _practice_history_rows(user_id, only_wrong=True, limit=limit)
 
 
+def get_attempt_review(attempt_id: int) -> dict | None:
+    conn, should_close = _connection()
+    try:
+        attempt = conn.execute(
+            """
+            SELECT att.id, att.user_id, att.paper_id, p.title AS paper_title,
+                   att.status, att.objective_score,
+                   att.suggested_subjective_score,
+                   att.final_subjective_score, att.final_score,
+                   att.started_at, att.submitted_at
+            FROM exam_attempts att
+            JOIN exam_papers p ON p.id = att.paper_id
+            WHERE att.id = ?
+            """,
+            (attempt_id,),
+        ).fetchone()
+        if not attempt:
+            return None
+
+        rows = conn.execute(
+            """
+            SELECT q.id AS question_id, q.paper_id, q.question_type, q.order_no,
+                   q.stem, q.correct_answer, q.reference_answer, q.score,
+                   ans.answer_text, ans.auto_score, ans.suggested_score,
+                   ans.final_score
+            FROM exam_questions q
+            LEFT JOIN exam_answers ans
+              ON ans.question_id = q.id
+             AND ans.attempt_id = ?
+            WHERE q.paper_id = ?
+            ORDER BY q.order_no
+            """,
+            (attempt_id, attempt["paper_id"]),
+        ).fetchall()
+        items = []
+        for row in rows:
+            question = dict(row)
+            question["id"] = row["question_id"]
+            option_rows = conn.execute(
+                """
+                SELECT option_key, option_text
+                FROM exam_question_options
+                WHERE question_id = ?
+                ORDER BY option_key
+                """,
+                (row["question_id"],),
+            ).fetchall()
+            question["options"] = [
+                {"key": option["option_key"], "text": option["option_text"]}
+                for option in option_rows
+            ]
+            question = ensure_question_options(question)
+            answer_text = row["answer_text"] or ""
+            is_correct = None
+            if row["question_type"] in OBJECTIVE_TYPES:
+                is_correct = grade_objective(
+                    row["question_type"],
+                    answer_text,
+                    row["correct_answer"],
+                    row["score"],
+                ) == float(row["score"])
+            items.append(
+                {
+                    "question_id": row["question_id"],
+                    "question_type": row["question_type"],
+                    "order_no": row["order_no"],
+                    "stem": row["stem"],
+                    "options": question["options"],
+                    "answer_text": answer_text,
+                    "correct_answer": row["correct_answer"],
+                    "reference_answer": row["reference_answer"],
+                    "score": row["score"],
+                    "auto_score": row["auto_score"],
+                    "suggested_score": row["suggested_score"],
+                    "final_score": row["final_score"],
+                    "is_correct": is_correct,
+                }
+            )
+        return {"attempt": dict(attempt), "items": items}
+    finally:
+        if should_close:
+            conn.close()
+
+
 def _normalize_answer(value: str) -> str:
     return (value or "").strip().replace(" ", "").upper()
 
