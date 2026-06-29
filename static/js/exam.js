@@ -275,7 +275,11 @@ function renderPracticeRecordList(records, emptyText) {
     list.innerHTML = `
         <div class="exam-toolbar">
             <div><h2>做题记录</h2><p>可反复查看历史练习和错题。</p></div>
-            <button class="btn btn-primary" type="button" onclick="loadRandomPractice()"><i data-lucide="shuffle"></i>继续练习</button>
+            <div class="exam-actions">
+                <button class="btn btn-primary" type="button" onclick="loadRandomPractice()"><i data-lucide="shuffle"></i>继续练习</button>
+                <button class="btn btn-secondary" type="button" onclick="loadPracticeHistory()"><i data-lucide="history"></i>练习记录</button>
+                <button class="btn btn-secondary" type="button" onclick="loadWrongPracticeQuestions()"><i data-lucide="list-x"></i>错题记录</button>
+            </div>
         </div>
         <div class="exam-question-list">${rows || `<div class="empty-message">${examEscape(emptyText)}</div>`}</div>`;
     examRefreshIcons();
