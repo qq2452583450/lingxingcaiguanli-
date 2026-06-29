@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from uuid import uuid4
 
 
 OBJECTIVE_TYPES = {"single_choice", "multiple_choice", "true_false"}
@@ -40,6 +41,16 @@ def _answer_to_text(value) -> str:
     if isinstance(value, (list, tuple, set)):
         return ",".join(str(item) for item in value)
     return str(value)
+
+
+def ensure_question_options(question: dict) -> dict:
+    if question.get("question_type") == "true_false" and not question.get("options"):
+        question = dict(question)
+        question["options"] = [
+            {"key": "√", "text": "正确"},
+            {"key": "×", "text": "错误"},
+        ]
+    return question
 
 
 def can_take_exam(user) -> bool:
@@ -132,7 +143,7 @@ def get_paper_questions(paper_id: int) -> list[dict]:
                 for row in option_rows
             ]
 
-        return questions
+        return [ensure_question_options(question) for question in questions]
     finally:
         if should_close:
             conn.close()
@@ -142,10 +153,11 @@ def get_random_practice_questions(limit=10, paper_id=None) -> list[dict]:
     conn, should_close = _connection()
     try:
         params = []
-        where = ""
+        where_parts = ["q.question_type IN ('single_choice', 'multiple_choice', 'true_false')"]
         if paper_id is not None:
-            where = "WHERE q.paper_id = ?"
+            where_parts.append("q.paper_id = ?")
             params.append(paper_id)
+        where = "WHERE " + " AND ".join(where_parts)
         params.append(limit)
         question_rows = conn.execute(
             f"""
@@ -175,10 +187,164 @@ def get_random_practice_questions(limit=10, paper_id=None) -> list[dict]:
                 {"key": row["option_key"], "text": row["option_text"]}
                 for row in option_rows
             ]
-        return questions
+        return [ensure_question_options(question) for question in questions]
     finally:
         if should_close:
             conn.close()
+
+
+def _load_objective_questions_by_ids(conn, question_ids: list[int]) -> dict[int, dict]:
+    if not question_ids:
+        raise ValueError("No practice answers submitted")
+    placeholders = ",".join("?" for _ in question_ids)
+    rows = conn.execute(
+        f"""
+        SELECT q.id, q.paper_id, p.title AS paper_title, q.question_type,
+               q.order_no, q.stem, q.correct_answer, q.reference_answer,
+               q.keywords, q.score
+        FROM exam_questions q
+        JOIN exam_papers p ON p.id = q.paper_id
+        WHERE q.id IN ({placeholders})
+          AND q.question_type IN ('single_choice', 'multiple_choice', 'true_false')
+        """,
+        question_ids,
+    ).fetchall()
+    questions = {row["id"]: dict(row) for row in rows}
+    if len(questions) != len(set(question_ids)):
+        raise ValueError("Practice answers contain unknown or unsupported questions")
+    for question in questions.values():
+        option_rows = conn.execute(
+            """
+            SELECT option_key, option_text
+            FROM exam_question_options
+            WHERE question_id = ?
+            ORDER BY option_key
+            """,
+            (question["id"],),
+        ).fetchall()
+        question["options"] = [
+            {"key": row["option_key"], "text": row["option_text"]}
+            for row in option_rows
+        ]
+    return {
+        question_id: ensure_question_options(question)
+        for question_id, question in questions.items()
+    }
+
+
+def _practice_item(question: dict, answer_text: str, is_correct: bool, created_at: str, session_id: str | None) -> dict:
+    return {
+        "session_id": session_id,
+        "question_id": question["id"],
+        "paper_id": question["paper_id"],
+        "paper_title": question["paper_title"],
+        "question_type": question["question_type"],
+        "order_no": question["order_no"],
+        "stem": question["stem"],
+        "options": question.get("options", []),
+        "answer_text": answer_text,
+        "correct_answer": question["correct_answer"],
+        "reference_answer": question.get("reference_answer"),
+        "is_correct": bool(is_correct),
+        "score": question["score"],
+        "created_at": created_at,
+    }
+
+
+def record_practice_answers(user_id: int, answers: dict) -> dict:
+    answer_map = {str(key): _answer_to_text(value) for key, value in (answers or {}).items()}
+    question_ids = [int(question_id) for question_id in answer_map.keys()]
+    conn, should_close = _connection()
+    try:
+        questions = _load_objective_questions_by_ids(conn, question_ids)
+        session_id = uuid4().hex
+        created_at = _now()
+        items = []
+        for question_id in question_ids:
+            question = questions[question_id]
+            answer_text = answer_map[str(question_id)]
+            is_correct = grade_objective(
+                question["question_type"],
+                answer_text,
+                question["correct_answer"],
+                question["score"],
+            ) == float(question["score"])
+            conn.execute(
+                """
+                INSERT INTO exam_practice_attempts (
+                    user_id, question_id, answer_text, is_correct,
+                    created_at, practice_session_id
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (user_id, question_id, answer_text, 1 if is_correct else 0, created_at, session_id),
+            )
+            items.append(_practice_item(question, answer_text, is_correct, created_at, session_id))
+        conn.commit()
+        return {"session_id": session_id, "items": items}
+    finally:
+        if should_close:
+            conn.close()
+
+
+def _practice_history_rows(user_id: int, only_wrong: bool, limit: int) -> list[dict]:
+    where_wrong = "AND pa.is_correct = 0" if only_wrong else ""
+    conn, should_close = _connection()
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT pa.id, pa.practice_session_id, pa.answer_text, pa.is_correct,
+                   pa.created_at, q.id AS question_id, q.paper_id,
+                   p.title AS paper_title, q.question_type, q.order_no,
+                   q.stem, q.correct_answer, q.reference_answer, q.score
+            FROM exam_practice_attempts pa
+            JOIN exam_questions q ON q.id = pa.question_id
+            JOIN exam_papers p ON p.id = q.paper_id
+            WHERE pa.user_id = ?
+              {where_wrong}
+            ORDER BY pa.created_at DESC, pa.id DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        items = []
+        for row in rows:
+            question = dict(row)
+            question["id"] = row["question_id"]
+            option_rows = conn.execute(
+                """
+                SELECT option_key, option_text
+                FROM exam_question_options
+                WHERE question_id = ?
+                ORDER BY option_key
+                """,
+                (row["question_id"],),
+            ).fetchall()
+            question["options"] = [
+                {"key": option["option_key"], "text": option["option_text"]}
+                for option in option_rows
+            ]
+            session_id = row["practice_session_id"] or str(row["id"])
+            items.append(
+                _practice_item(
+                    ensure_question_options(question),
+                    row["answer_text"],
+                    bool(row["is_correct"]),
+                    row["created_at"],
+                    session_id,
+                )
+            )
+        return items
+    finally:
+        if should_close:
+            conn.close()
+
+
+def list_practice_history(user_id: int, limit: int = 100) -> list[dict]:
+    return _practice_history_rows(user_id, only_wrong=False, limit=limit)
+
+
+def list_wrong_practice_questions(user_id: int, limit: int = 100) -> list[dict]:
+    return _practice_history_rows(user_id, only_wrong=True, limit=limit)
 
 
 def _normalize_answer(value: str) -> str:
