@@ -68,3 +68,16 @@ def test_exam_js_exposes_expected_entrypoints():
         "loadAllExamResults",
     ):
         assert f"function {function_name}" in exam_js
+
+
+def test_exam_frontend_supports_practice_feedback_and_history():
+    exam_js = read_text("static/js/exam.js")
+
+    assert "/api/exam/practice/submit" in exam_js
+    assert "/api/exam/practice/history" in exam_js
+    assert "/api/exam/practice/wrong" in exam_js
+    assert "renderPracticeResult" in exam_js
+    assert "loadPracticeHistory" in exam_js
+    assert "loadWrongPracticeQuestions" in exam_js
+    assert "ensureTrueFalseOptions" in exam_js
+    assert "/review" in exam_js

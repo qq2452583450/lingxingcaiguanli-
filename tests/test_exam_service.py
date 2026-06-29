@@ -9,8 +9,11 @@ from services.exam_service import (
     get_attempt,
     get_paper_questions,
     get_random_practice_questions,
+    list_practice_history,
     list_pending_reviews,
     list_results,
+    list_wrong_practice_questions,
+    record_practice_answers,
     list_user_attempts,
     review_answer,
     start_attempt,
@@ -79,6 +82,42 @@ def test_random_practice_returns_requested_count_with_options_after_import(test_
     assert {question["paper_title"] for question in questions} == {paper["title"]}
     assert all("options" in question for question in questions)
     assert any(question["options"] for question in questions)
+
+
+def test_random_practice_excludes_subjective_questions(test_db):
+    paper, _, _ = load_exam(test_db)
+
+    questions = get_random_practice_questions(limit=50, paper_id=paper["id"])
+
+    assert questions
+    assert {question["question_type"] for question in questions} <= {
+        "single_choice",
+        "multiple_choice",
+        "true_false",
+    }
+
+
+def test_record_practice_answers_scores_and_lists_history(test_db):
+    paper, _, _ = load_exam(test_db)
+    user_id = seed_user(test_db, "practice_clerk", "\u7ec3\u4e60\u6750\u6599\u5458", "\u6750\u6599\u5458")
+    objective = next(
+        question
+        for question in get_random_practice_questions(limit=20, paper_id=paper["id"])
+        if question["question_type"] in {"single_choice", "true_false"}
+    )
+    wrong_answer = "B" if objective["correct_answer"] != "B" else "A"
+
+    result = record_practice_answers(user_id, {str(objective["id"]): wrong_answer})
+    history = list_practice_history(user_id)
+    wrong = list_wrong_practice_questions(user_id)
+
+    assert result["session_id"]
+    assert result["items"][0]["question_id"] == objective["id"]
+    assert result["items"][0]["answer_text"] == wrong_answer
+    assert result["items"][0]["correct_answer"] == objective["correct_answer"]
+    assert result["items"][0]["is_correct"] is False
+    assert history[0]["session_id"] == result["session_id"]
+    assert wrong[0]["question_id"] == objective["id"]
 
 
 def test_submit_attempt_scores_objective_and_leaves_subjective_pending_review(test_db):

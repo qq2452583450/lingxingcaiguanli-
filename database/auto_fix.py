@@ -422,6 +422,9 @@ def auto_fix_database():
             'updated_at': 'TEXT',
             'supplier_remark': 'TEXT',
         },
+        'exam_practice_attempts': {
+            'practice_session_id': 'TEXT',
+        },
     }
 
     cursor.execute("""

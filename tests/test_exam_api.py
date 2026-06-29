@@ -320,3 +320,82 @@ def test_duplicate_submission_returns_non_success_response(client, test_db):
     assert first["success"] is True
     assert duplicate_response.status_code == 400
     assert duplicate["success"] is False
+
+
+def test_practice_submit_returns_answers_and_persists_history(client, test_db):
+    seed_exam()
+    clerk_id = seed_user(test_db, "practice_api", "\u7ec3\u4e60\u63a5\u53e3", ROLE_CLERK)
+    login(client, clerk_id, "practice_api", "\u7ec3\u4e60\u63a5\u53e3", ROLE_CLERK)
+    practice = client.get("/api/exam/practice/random?limit=10").get_json()
+    question = next(
+        q for q in practice["data"]
+        if q["question_type"] in {"single_choice", "true_false"}
+    )
+    correct = test_db.execute(
+        "SELECT correct_answer FROM exam_questions WHERE id = ?",
+        (question["id"],),
+    ).fetchone()["correct_answer"]
+
+    submit = client.post(
+        "/api/exam/practice/submit",
+        json={"answers": {str(question["id"]): correct}},
+        headers=csrf_headers(),
+    ).get_json()
+    history = client.get("/api/exam/practice/history").get_json()
+
+    assert submit["success"] is True
+    assert submit["data"]["items"][0]["correct_answer"] == correct
+    assert submit["data"]["items"][0]["is_correct"] is True
+    assert history["success"] is True
+    assert history["data"][0]["question_id"] == question["id"]
+
+
+def test_wrong_practice_endpoint_scopes_to_current_user(client, test_db):
+    from services.exam_service import record_practice_answers
+
+    seed_exam()
+    clerk_id = seed_user(test_db, "wrong_api", "\u9519\u9898\u63a5\u53e3", ROLE_CLERK)
+    other_id = seed_user(test_db, "other_wrong_api", "\u5176\u4ed6\u6750\u6599\u5458", ROLE_CLERK)
+    question = next(
+        q for q in get_paper_questions(papers(test_db)[0]["id"])
+        if q["question_type"] in {"single_choice", "true_false"}
+    )
+    wrong_answer = "B" if question["correct_answer"] != "B" else "A"
+    record_practice_answers(clerk_id, {str(question["id"]): wrong_answer})
+    record_practice_answers(other_id, {str(question["id"]): wrong_answer})
+    login(client, clerk_id, "wrong_api", "\u9519\u9898\u63a5\u53e3", ROLE_CLERK)
+
+    data = client.get("/api/exam/practice/wrong").get_json()
+
+    assert data["success"] is True
+    assert len(data["data"]) == 1
+    assert data["data"][0]["question_id"] == question["id"]
+
+
+def test_attempt_review_returns_answer_details_for_owner_only(client, test_db):
+    seed_exam()
+    clerk_id = seed_user(test_db, "review_owner", "\u56de\u770b\u672c\u4eba", ROLE_CLERK)
+    other_id = seed_user(test_db, "review_other", "\u5176\u4ed6\u4eba\u5458", ROLE_CLERK)
+    login(client, clerk_id, "review_owner", "\u56de\u770b\u672c\u4eba", ROLE_CLERK)
+    current_paper = papers(test_db)[0]
+    objective = next(
+        q for q in get_paper_questions(current_paper["id"])
+        if q["question_type"] in {"single_choice", "true_false"}
+    )
+    start = client.post("/api/exam/attempts", json={}, headers=csrf_headers()).get_json()
+    attempt_id = start["attempt_id"]
+    client.post(
+        f"/api/exam/attempts/{attempt_id}/submit",
+        json={"answers": {str(objective["id"]): objective["correct_answer"]}},
+        headers=csrf_headers(),
+    )
+
+    owner_review = client.get(f"/api/exam/attempts/{attempt_id}/review").get_json()
+    login(client, other_id, "review_other", "\u5176\u4ed6\u4eba\u5458", ROLE_CLERK)
+    other_response = client.get(f"/api/exam/attempts/{attempt_id}/review")
+
+    assert owner_review["success"] is True
+    assert owner_review["data"]["attempt"]["id"] == attempt_id
+    assert owner_review["data"]["items"][0]["answer_text"] == objective["correct_answer"]
+    assert owner_review["data"]["items"][0]["correct_answer"] == objective["correct_answer"]
+    assert other_response.status_code == 403
