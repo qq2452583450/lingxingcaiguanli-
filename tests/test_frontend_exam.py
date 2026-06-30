@@ -81,3 +81,26 @@ def test_exam_frontend_supports_practice_feedback_and_history():
     assert "loadWrongPracticeQuestions" in exam_js
     assert "ensureTrueFalseOptions" in exam_js
     assert "/review" in exam_js
+
+
+def test_exam_practice_uses_dedicated_mobile_session_page():
+    app_py = read_text("app.py")
+    exam_js = read_text("static/js/exam.js")
+
+    assert "/exam/practice-session" in app_py
+    assert "exam-practice-session.html" in app_py
+    assert "window.location.href = '/exam/practice-session'" in exam_js
+    assert "/api/exam/practice/daily-status" in exam_js
+
+
+def test_dedicated_practice_page_requests_thirty_and_shows_checkin_status():
+    html = read_text("exam-practice-session.html")
+    page_js = read_text("static/js/exam-practice-page.js")
+
+    assert "/static/js/exam-practice-page.js" in html
+    assert "/api/exam/practice/random?limit=30" in page_js
+    assert "/api/exam/practice/submit" in page_js
+    assert "/api/exam/practice/daily-status" in page_js
+    assert "accuracy >= 80%" in page_js
+    assert "daily-checkin-passed" in page_js
+    assert "daily-checkin-failed" in page_js

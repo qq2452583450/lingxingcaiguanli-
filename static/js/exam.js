@@ -151,11 +151,34 @@ function renderPracticeShell() {
                     <button class="btn btn-secondary" type="button" onclick="loadWrongPracticeQuestions()"><i data-lucide="list-x"></i>错题记录</button>
                 </div>
             </div>
+            <div id="examPracticeDailyStatus" class="exam-summary-card">
+                正在加载今日练习打卡状态...
+            </div>
             <div id="examPracticeList" class="exam-question-list"></div>
         </div>`;
+    loadPracticeDailyStatus();
 }
 
 async function loadRandomPractice() {
+    window.location.href = '/exam/practice-session';
+}
+
+async function loadPracticeDailyStatus() {
+    const target = document.getElementById('examPracticeDailyStatus');
+    if (!target) return;
+    try {
+        const data = await examJson('/api/exam/practice/daily-status');
+        const status = data.data || {};
+        const percent = Math.round((status.best_accuracy || 0) * 100);
+        target.innerHTML = status.passed
+            ? `<strong>今日已合格打卡</strong><span>最高正确率 ${percent}%，已做 ${examEscape(status.answered_count || 0)} 题。</span>`
+            : `<strong>今日未合格</strong><span>每日30题以上，正确率达到80%才算合格。当前最高正确率 ${percent}%。</span>`;
+    } catch (e) {
+        target.innerHTML = `<span>${examEscape(e.message || '今日打卡状态加载失败')}</span>`;
+    }
+}
+
+async function loadRandomPracticeInline() {
     const list = document.getElementById('examPracticeList') || examContent();
     if (!list) return;
     list.innerHTML = '<div class="loading">正在抽题...</div>';
