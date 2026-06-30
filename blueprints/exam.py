@@ -7,12 +7,14 @@ from services.exam_service import (
     can_manage_exam,
     can_take_exam,
     DAILY_PRACTICE_QUESTION_COUNT,
+    delete_exam_attempt,
     get_attempt,
     get_attempt_review,
     get_current_exam_paper,
     get_daily_practice_status,
     get_exam_paper,
     get_paper_questions,
+    list_daily_checkins,
     get_random_practice_questions,
     list_practice_history,
     list_papers,
@@ -323,6 +325,29 @@ def admin_results():
         return denied
 
     return jsonify({"success": True, "data": list_results(_filters_from_request())})
+
+
+@exam_bp.route("/admin/checkins", methods=["GET"])
+def admin_checkins():
+    _, denied = _require_exam_manager()
+    if denied:
+        return denied
+
+    target_date = request.args.get("date") or None
+    return jsonify({"success": True, "data": list_daily_checkins(target_date)})
+
+
+@exam_bp.route("/admin/attempts/<int:attempt_id>", methods=["DELETE"])
+def admin_delete_attempt(attempt_id):
+    _, denied = _require_exam_manager()
+    if denied:
+        return denied
+
+    try:
+        delete_exam_attempt(attempt_id)
+    except ValueError as exc:
+        return _json_error(str(exc), 404)
+    return jsonify({"success": True})
 
 
 @exam_bp.route("/admin/reviews", methods=["GET"])

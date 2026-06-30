@@ -6,10 +6,12 @@ from services.exam_import_service import import_exam_papers_from_docx
 from services.exam_service import (
     can_manage_exam,
     can_take_exam,
+    delete_exam_attempt,
     get_daily_practice_status,
     get_attempt,
     get_paper_questions,
     get_random_practice_questions,
+    list_daily_checkins,
     list_practice_history,
     list_pending_reviews,
     list_results,
@@ -172,6 +174,39 @@ def test_daily_practice_status_requires_continued_practice_below_eighty_percent(
     assert status["answered_count"] == 30
 
 
+def test_daily_checkins_include_passed_failed_and_not_practiced_takers(test_db):
+    paper, _, _ = load_exam(test_db)
+    passed_id = seed_user(test_db, "passed_daily", "\u5df2\u5408\u683c", "\u6750\u6599\u5458")
+    failed_id = seed_user(test_db, "failed_daily", "\u672a\u5408\u683c", "\u57fa\u5730\u8d1f\u8d23\u4eba")
+    missing_id = seed_user(test_db, "missing_daily", "\u672a\u505a\u9898", "\u6750\u6599\u5ba1\u6279\u8d1f\u8d23\u4eba")
+    seed_user(test_db, "supplier_daily", "\u4f9b\u5e94\u5546", "\u4f9b\u5e94\u5546")
+    questions = get_random_practice_questions(limit=30, paper_id=paper["id"])
+    passed_answers = {}
+    failed_answers = {}
+    for index, question in enumerate(questions):
+        wrong = "A" if question["correct_answer"] != "A" else "B"
+        passed_answers[str(question["id"])] = question["correct_answer"] if index < 24 else wrong
+        failed_answers[str(question["id"])] = question["correct_answer"] if index < 10 else wrong
+    record_practice_answers(passed_id, passed_answers)
+    record_practice_answers(failed_id, failed_answers)
+
+    rows = list_daily_checkins()
+    by_username = {row["username"]: row for row in rows}
+
+    assert set(by_username) == {"passed_daily", "failed_daily", "missing_daily"}
+    assert by_username["passed_daily"]["passed"] is True
+    assert by_username["passed_daily"]["practiced"] is True
+    assert by_username["passed_daily"]["answered_count"] == 30
+    assert by_username["passed_daily"]["best_accuracy"] == 0.8
+    assert by_username["failed_daily"]["passed"] is False
+    assert by_username["failed_daily"]["practiced"] is True
+    assert by_username["failed_daily"]["best_accuracy"] == 0.3333
+    assert by_username["missing_daily"]["passed"] is False
+    assert by_username["missing_daily"]["practiced"] is False
+    assert by_username["missing_daily"]["answered_count"] == 0
+    assert by_username["missing_daily"]["latest_practice_at"] is None
+
+
 def test_submit_attempt_scores_objective_and_leaves_subjective_pending_review(test_db):
     paper, objective, subjective = load_exam(test_db)
     user_id = seed_user(test_db, "clerk", "\u6750\u6599\u5458", "\u6750\u6599\u5458")
@@ -264,6 +299,31 @@ def test_review_answer_completes_attempt_and_results_scope_by_viewer(test_db):
     assert manager_results[0]["username"]
     assert manager_results[0]["role_name"]
     assert manager_results[0]["paper_title"] == paper["title"]
+
+
+def test_delete_exam_attempt_removes_formal_answers_and_reviews_but_keeps_practice(test_db):
+    paper, objective, subjective = load_exam(test_db)
+    clerk_id = seed_user(test_db, "delete_clerk", "\u5220\u9664\u6750\u6599\u5458", "\u6750\u6599\u5458")
+    reviewer_id = seed_user(test_db, "delete_reviewer", "\u5220\u9664\u5ba1\u6279", "\u6750\u6599\u5ba1\u6279\u8d1f\u8d23\u4eba")
+    attempt_id = start_attempt(clerk_id, paper["id"])
+    submit_attempt(
+        attempt_id,
+        {
+            str(objective["id"]): objective["correct_answer"],
+            str(subjective["id"]): subjective["keywords"].split(",")[0],
+        },
+    )
+    pending = list_pending_reviews()
+    for row in [item for item in pending if item["attempt_id"] == attempt_id]:
+        review_answer(row["answer_id"], reviewer_id, final_score=row["suggested_score"], comment="\u5220\u9664\u6d4b\u8bd5")
+    practice_result = record_practice_answers(clerk_id, {str(objective["id"]): objective["correct_answer"]})
+
+    delete_exam_attempt(attempt_id)
+
+    assert get_attempt(attempt_id) is None
+    assert test_db.execute("SELECT COUNT(*) FROM exam_answers WHERE attempt_id = ?", (attempt_id,)).fetchone()[0] == 0
+    assert test_db.execute("SELECT COUNT(*) FROM exam_subjective_reviews").fetchone()[0] == 0
+    assert list_practice_history(clerk_id)[0]["session_id"] == practice_result["session_id"]
 
 
 def test_submit_attempt_rejects_duplicate_submission_without_resetting_scores(test_db):

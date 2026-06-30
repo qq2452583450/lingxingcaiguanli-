@@ -157,6 +157,43 @@ def test_material_approval_owner_can_access_admin_papers(client, test_db):
     assert len(data["data"]) >= 5
 
 
+def test_manager_can_view_daily_checkin_records(client, test_db):
+    from services.exam_service import record_practice_answers
+
+    seed_exam()
+    manager_id = seed_user(test_db, "checkin_manager", "\u6253\u5361\u7ba1\u7406", ROLE_MANAGER)
+    passed_id = seed_user(test_db, "checkin_passed", "\u5df2\u6253\u5361", ROLE_CLERK)
+    missing_id = seed_user(test_db, "checkin_missing", "\u672a\u505a\u9898", ROLE_APPROVAL_OWNER)
+    question = next(
+        q for q in get_paper_questions(papers(test_db)[0]["id"])
+        if q["question_type"] in {"single_choice", "true_false"}
+    )
+    record_practice_answers(passed_id, {str(question["id"]): question["correct_answer"]})
+    login(client, manager_id, "checkin_manager", "\u6253\u5361\u7ba1\u7406", ROLE_MANAGER)
+
+    response = client.get("/api/exam/admin/checkins")
+    data = response.get_json()
+    by_username = {row["username"]: row for row in data["data"]}
+
+    assert response.status_code == 200
+    assert data["success"] is True
+    assert {"checkin_passed", "checkin_missing"}.issubset(by_username)
+    assert by_username["checkin_passed"]["practiced"] is True
+    assert by_username["checkin_missing"]["practiced"] is False
+
+
+def test_material_clerk_cannot_view_daily_checkin_records(client, test_db):
+    seed_exam()
+    clerk_id = seed_user(test_db, "checkin_clerk", "\u6750\u6599\u5458", ROLE_CLERK)
+    login(client, clerk_id, "checkin_clerk", "\u6750\u6599\u5458", ROLE_CLERK)
+
+    response = client.get("/api/exam/admin/checkins")
+    data = response.get_json()
+
+    assert response.status_code == 403
+    assert data["success"] is False
+
+
 def test_material_approval_owner_practice_questions_are_sanitized(client, test_db):
     seed_exam()
     owner_id = seed_user(test_db, "owner", "\u5ba1\u6279\u4eba", ROLE_APPROVAL_OWNER)
@@ -450,3 +487,56 @@ def test_attempt_review_returns_answer_details_for_owner_only(client, test_db):
     assert owner_review["data"]["items"][0]["answer_text"] == objective["correct_answer"]
     assert owner_review["data"]["items"][0]["correct_answer"] == objective["correct_answer"]
     assert other_response.status_code == 403
+
+
+def test_manager_can_delete_exam_attempt_result(client, test_db):
+    seed_exam()
+    manager_id = seed_user(test_db, "delete_manager", "\u5220\u9664\u7ba1\u7406", ROLE_MANAGER)
+    clerk_id = seed_user(test_db, "delete_api_clerk", "\u5220\u9664\u5458", ROLE_CLERK)
+    login(client, clerk_id, "delete_api_clerk", "\u5220\u9664\u5458", ROLE_CLERK)
+    current_paper = papers(test_db)[0]
+    objective = next(
+        q for q in get_paper_questions(current_paper["id"])
+        if q["question_type"] in {"single_choice", "true_false"}
+    )
+    start = client.post("/api/exam/attempts", json={}, headers=csrf_headers()).get_json()
+    attempt_id = start["attempt_id"]
+    client.post(
+        f"/api/exam/attempts/{attempt_id}/submit",
+        json={"answers": {str(objective["id"]): objective["correct_answer"]}},
+        headers=csrf_headers(),
+    )
+    login(client, manager_id, "delete_manager", "\u5220\u9664\u7ba1\u7406", ROLE_MANAGER)
+
+    response = client.delete(
+        f"/api/exam/admin/attempts/{attempt_id}",
+        headers=csrf_headers(),
+    )
+    data = response.get_json()
+    results = client.get("/api/exam/admin/results").get_json()
+
+    assert response.status_code == 200
+    assert data["success"] is True
+    assert attempt_id not in {row["attempt_id"] for row in results["data"]}
+
+
+def test_material_clerk_cannot_delete_exam_attempt_result(client, test_db):
+    seed_exam()
+    clerk_id = seed_user(test_db, "delete_denied_clerk", "\u666e\u901a\u6750\u6599\u5458", ROLE_CLERK)
+    login(client, clerk_id, "delete_denied_clerk", "\u666e\u901a\u6750\u6599\u5458", ROLE_CLERK)
+    current_paper = papers(test_db)[0]
+    objective = next(
+        q for q in get_paper_questions(current_paper["id"])
+        if q["question_type"] in {"single_choice", "true_false"}
+    )
+    start = client.post("/api/exam/attempts", json={}, headers=csrf_headers()).get_json()
+    attempt_id = start["attempt_id"]
+
+    response = client.delete(
+        f"/api/exam/admin/attempts/{attempt_id}",
+        headers=csrf_headers(),
+    )
+    data = response.get_json()
+
+    assert response.status_code == 403
+    assert data["success"] is False
