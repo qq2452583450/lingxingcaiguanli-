@@ -6,6 +6,7 @@ from services.exam_import_service import import_exam_papers_from_docx
 from services.exam_service import (
     can_manage_exam,
     can_take_exam,
+    get_daily_practice_status,
     get_attempt,
     get_paper_questions,
     get_random_practice_questions,
@@ -118,6 +119,57 @@ def test_record_practice_answers_scores_and_lists_history(test_db):
     assert result["items"][0]["is_correct"] is False
     assert history[0]["session_id"] == result["session_id"]
     assert wrong[0]["question_id"] == objective["id"]
+
+
+def test_daily_practice_status_passes_at_eighty_percent(test_db):
+    paper, _, _ = load_exam(test_db)
+    user_id = seed_user(test_db, "daily_clerk", "\u6bcf\u65e5\u6750\u6599\u5458", "\u6750\u6599\u5458")
+    questions = get_random_practice_questions(limit=30, paper_id=paper["id"])
+    answers = {}
+    for index, question in enumerate(questions):
+        if index < 24:
+            answers[str(question["id"])] = question["correct_answer"]
+        else:
+            answers[str(question["id"])] = "A" if question["correct_answer"] != "A" else "B"
+
+    result = record_practice_answers(user_id, answers)
+    status = get_daily_practice_status(user_id)
+
+    assert result["total_count"] == 30
+    assert result["correct_count"] == 24
+    assert result["accuracy"] == 0.8
+    assert result["required_accuracy"] == 0.8
+    assert result["passed"] is True
+    assert result["daily_status"]["passed"] is True
+    assert status["passed"] is True
+    assert status["best_accuracy"] == 0.8
+    assert status["session_count"] == 1
+    assert status["answered_count"] == 30
+
+
+def test_daily_practice_status_requires_continued_practice_below_eighty_percent(test_db):
+    paper, _, _ = load_exam(test_db)
+    user_id = seed_user(test_db, "daily_retry", "\u672a\u8fbe\u6807\u6750\u6599\u5458", "\u6750\u6599\u5458")
+    questions = get_random_practice_questions(limit=30, paper_id=paper["id"])
+    answers = {}
+    for index, question in enumerate(questions):
+        if index < 23:
+            answers[str(question["id"])] = question["correct_answer"]
+        else:
+            answers[str(question["id"])] = "A" if question["correct_answer"] != "A" else "B"
+
+    result = record_practice_answers(user_id, answers)
+    status = get_daily_practice_status(user_id)
+
+    assert result["total_count"] == 30
+    assert result["correct_count"] == 23
+    assert result["accuracy"] == 0.7667
+    assert result["passed"] is False
+    assert result["daily_status"]["passed"] is False
+    assert status["passed"] is False
+    assert status["best_accuracy"] == 0.7667
+    assert status["session_count"] == 1
+    assert status["answered_count"] == 30
 
 
 def test_submit_attempt_scores_objective_and_leaves_subjective_pending_review(test_db):

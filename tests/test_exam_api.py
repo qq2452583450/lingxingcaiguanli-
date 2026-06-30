@@ -128,6 +128,22 @@ def test_material_clerk_can_access_summary_and_random_practice(client, test_db):
         assert "paper_title" in question
 
 
+def test_random_practice_defaults_to_daily_thirty_questions(client, test_db):
+    seed_exam()
+    clerk_id = seed_user(test_db, "daily_default", "\u6bcf\u65e5\u7ec3\u4e60", ROLE_CLERK)
+    login(client, clerk_id, "daily_default", "\u6bcf\u65e5\u7ec3\u4e60", ROLE_CLERK)
+
+    practice = client.get("/api/exam/practice/random").get_json()
+
+    assert practice["success"] is True
+    assert len(practice["data"]) == 30
+    assert {question["question_type"] for question in practice["data"]} <= {
+        "single_choice",
+        "multiple_choice",
+        "true_false",
+    }
+
+
 def test_material_approval_owner_can_access_admin_papers(client, test_db):
     seed_exam()
     owner_id = seed_user(test_db, "owner", "\u5ba1\u6279\u4eba", ROLE_APPROVAL_OWNER)
@@ -348,6 +364,41 @@ def test_practice_submit_returns_answers_and_persists_history(client, test_db):
     assert submit["data"]["items"][0]["is_correct"] is True
     assert history["success"] is True
     assert history["data"][0]["question_id"] == question["id"]
+
+
+def test_practice_submit_returns_daily_pass_status(client, test_db):
+    seed_exam()
+    clerk_id = seed_user(test_db, "daily_submit", "\u6253\u5361\u63d0\u4ea4", ROLE_CLERK)
+    login(client, clerk_id, "daily_submit", "\u6253\u5361\u63d0\u4ea4", ROLE_CLERK)
+    practice = client.get("/api/exam/practice/random?limit=30").get_json()
+    correct_answers = {
+        row["id"]: row["correct_answer"]
+        for row in test_db.execute(
+            "SELECT id, correct_answer FROM exam_questions"
+        ).fetchall()
+    }
+    answers = {}
+    for index, question in enumerate(practice["data"]):
+        correct = correct_answers[question["id"]]
+        answers[str(question["id"])] = correct if index < 24 else ("A" if correct != "A" else "B")
+
+    submit = client.post(
+        "/api/exam/practice/submit",
+        json={"answers": answers},
+        headers=csrf_headers(),
+    ).get_json()
+    status = client.get("/api/exam/practice/daily-status").get_json()
+
+    assert submit["success"] is True
+    assert submit["data"]["total_count"] == 30
+    assert submit["data"]["correct_count"] == 24
+    assert submit["data"]["accuracy"] == 0.8
+    assert submit["data"]["required_accuracy"] == 0.8
+    assert submit["data"]["passed"] is True
+    assert submit["data"]["daily_status"]["passed"] is True
+    assert status["success"] is True
+    assert status["data"]["passed"] is True
+    assert status["data"]["answered_count"] == 30
 
 
 def test_wrong_practice_endpoint_scopes_to_current_user(client, test_db):
