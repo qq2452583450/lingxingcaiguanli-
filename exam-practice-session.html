@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>每日练习打卡</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=2026060101">
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <style>
+        body { background: #f5f7fb; margin: 0; }
+        .practice-page { max-width: 860px; margin: 0 auto; padding: 16px; }
+        .practice-header { position: sticky; top: 0; z-index: 5; background: #f5f7fb; padding: 10px 0 12px; }
+        .practice-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .practice-title h1 { font-size: 22px; margin: 0; }
+        .practice-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 12px 0; }
+        .practice-meta { color: #5f6b7a; font-size: 14px; margin-top: 6px; }
+        .practice-options label { display: flex; gap: 8px; align-items: flex-start; padding: 10px; border: 1px solid #e5e7eb; border-radius: 6px; margin-top: 8px; }
+        .practice-actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 16px 0; }
+        .daily-checkin-passed { border-left: 4px solid #16a34a; }
+        .daily-checkin-failed { border-left: 4px solid #dc2626; }
+        .practice-correct { border-left: 4px solid #16a34a; }
+        .practice-wrong { border-left: 4px solid #dc2626; }
+        @media (max-width: 640px) {
+            .practice-page { padding: 10px; }
+            .practice-title { align-items: flex-start; flex-direction: column; }
+            .practice-title h1 { font-size: 20px; }
+            .practice-card { padding: 12px; }
+            .practice-actions .btn { width: 100%; justify-content: center; }
+        }
+    </style>
+</head>
+<body>
+    <main class="practice-page">
+        <header class="practice-header">
+            <div class="practice-title">
+                <div>
+                    <h1>每日练习打卡</h1>
+                    <div id="practiceDailyStatus" class="practice-meta">正在加载今日打卡状态...</div>
+                </div>
+                <button class="btn btn-secondary" type="button" onclick="returnToExamCenter()">返回考试中心</button>
+            </div>
+        </header>
+        <section id="practiceRoot">
+            <div class="practice-card">正在加载练习题...</div>
+        </section>
+    </main>
+    <script src="/static/js/exam-practice-page.js?v=2026063001"></script>
+</body>
+</html>

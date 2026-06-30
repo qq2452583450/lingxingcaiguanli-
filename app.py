@@ -123,6 +123,11 @@ def supplier_portal():
     """供应商报价门户"""
     return send_from_directory('.', 'supplier-portal.html')
 
+@app.route('/exam/practice-session')
+def exam_practice_session():
+    """手机端独立练习作答页"""
+    return send_from_directory('.', 'exam-practice-session.html')
+
 @app.route('/<path:path>')
 def static_files(path):
     """静态文件"""

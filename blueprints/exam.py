@@ -6,9 +6,11 @@ from helpers import get_db
 from services.exam_service import (
     can_manage_exam,
     can_take_exam,
+    DAILY_PRACTICE_QUESTION_COUNT,
     get_attempt,
     get_attempt_review,
     get_current_exam_paper,
+    get_daily_practice_status,
     get_exam_paper,
     get_paper_questions,
     get_random_practice_questions,
@@ -111,8 +113,8 @@ def random_practice():
     if denied:
         return denied
 
-    limit = request.args.get("limit", default=10, type=int)
-    limit = max(1, min(limit or 10, 100))
+    limit = request.args.get("limit", default=DAILY_PRACTICE_QUESTION_COUNT, type=int)
+    limit = max(1, min(limit or DAILY_PRACTICE_QUESTION_COUNT, 100))
     paper_id = request.args.get("paper_id", type=int)
     questions = get_random_practice_questions(limit=limit, paper_id=paper_id)
     return jsonify({"success": True, "data": _questions_for_exam_flow(questions)})
@@ -132,6 +134,17 @@ def submit_practice():
     except ValueError as exc:
         return _json_error(str(exc), 400)
     return jsonify({"success": True, "data": result})
+
+
+@exam_bp.route("/practice/daily-status", methods=["GET"])
+def practice_daily_status():
+    user, denied = _require_exam_user()
+    if denied:
+        return denied
+    if not can_take_exam(user):
+        return _json_error("Permission denied", 403)
+
+    return jsonify({"success": True, "data": get_daily_practice_status(user["id"])})
 
 
 @exam_bp.route("/practice/history", methods=["GET"])

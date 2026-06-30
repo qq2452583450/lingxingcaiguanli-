@@ -8,6 +8,8 @@ from uuid import uuid4
 
 OBJECTIVE_TYPES = {"single_choice", "multiple_choice", "true_false"}
 SUBJECTIVE_TYPES = {"short_answer", "case_analysis"}
+DAILY_PRACTICE_QUESTION_COUNT = 30
+DAILY_PRACTICE_REQUIRED_ACCURACY = 0.8
 EXAM_TAKER_ROLES = {"材料员", "材料审批负责人", "基地负责人"}
 EXAM_MANAGER_ROLES = {"系统管理员", "材料审批负责人"}
 
@@ -33,6 +35,10 @@ def _dict_or_none(row):
 
 def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _today_prefix() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
 
 
 def _answer_to_text(value) -> str:
@@ -280,7 +286,76 @@ def record_practice_answers(user_id: int, answers: dict) -> dict:
             )
             items.append(_practice_item(question, answer_text, is_correct, created_at, session_id))
         conn.commit()
-        return {"session_id": session_id, "items": items}
+        total_count = len(items)
+        correct_count = sum(1 for item in items if item["is_correct"])
+        accuracy = round(correct_count / total_count, 4) if total_count else 0.0
+        passed = (
+            total_count >= DAILY_PRACTICE_QUESTION_COUNT
+            and accuracy >= DAILY_PRACTICE_REQUIRED_ACCURACY
+        )
+        return {
+            "session_id": session_id,
+            "items": items,
+            "total_count": total_count,
+            "correct_count": correct_count,
+            "accuracy": accuracy,
+            "required_accuracy": DAILY_PRACTICE_REQUIRED_ACCURACY,
+            "passed": passed,
+            "daily_status": get_daily_practice_status(user_id, conn=conn),
+        }
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_daily_practice_status(user_id: int, conn=None) -> dict:
+    should_close = False
+    if conn is None:
+        conn, should_close = _connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT COALESCE(practice_session_id, CAST(id AS TEXT)) AS session_id,
+                   COUNT(*) AS total_count,
+                   SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) AS correct_count,
+                   MIN(created_at) AS started_at
+            FROM exam_practice_attempts
+            WHERE user_id = ?
+              AND created_at LIKE ?
+            GROUP BY COALESCE(practice_session_id, CAST(id AS TEXT))
+            ORDER BY started_at DESC
+            """,
+            (user_id, f"{_today_prefix()}%"),
+        ).fetchall()
+        sessions = []
+        for row in rows:
+            total_count = int(row["total_count"] or 0)
+            correct_count = int(row["correct_count"] or 0)
+            accuracy = round(correct_count / total_count, 4) if total_count else 0.0
+            sessions.append(
+                {
+                    "session_id": row["session_id"],
+                    "total_count": total_count,
+                    "correct_count": correct_count,
+                    "accuracy": accuracy,
+                    "passed": (
+                        total_count >= DAILY_PRACTICE_QUESTION_COUNT
+                        and accuracy >= DAILY_PRACTICE_REQUIRED_ACCURACY
+                    ),
+                    "started_at": row["started_at"],
+                }
+            )
+        best_accuracy = max((session["accuracy"] for session in sessions), default=0.0)
+        return {
+            "date": _today_prefix(),
+            "passed": any(session["passed"] for session in sessions),
+            "best_accuracy": best_accuracy,
+            "session_count": len(sessions),
+            "answered_count": sum(session["total_count"] for session in sessions),
+            "required_accuracy": DAILY_PRACTICE_REQUIRED_ACCURACY,
+            "required_question_count": DAILY_PRACTICE_QUESTION_COUNT,
+            "sessions": sessions,
+        }
     finally:
         if should_close:
             conn.close()
