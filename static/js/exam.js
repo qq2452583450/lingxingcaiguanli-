@@ -1,6 +1,8 @@
 let examSummary = null;
 let examCurrentTab = 'practice';
 let examActiveAttempt = null;
+let examCheckinFilter = 'all';
+let examCheckinRecords = [];
 
 const EXAM_TAKER_ROLES = ['材料员', '材料审批负责人', '基地负责人'];
 const EXAM_MANAGER_ROLES = ['材料审批负责人', '系统管理员'];
@@ -98,7 +100,7 @@ async function loadExamCenter() {
         if (!canTakeExam(currentUser) && ['practice', 'exam', 'results'].includes(examCurrentTab)) {
             examCurrentTab = 'papers';
         }
-        if (!canManageExam(currentUser) && ['papers', 'reviews', 'adminResults'].includes(examCurrentTab)) {
+        if (!canManageExam(currentUser) && ['papers', 'reviews', 'checkins', 'adminResults'].includes(examCurrentTab)) {
             examCurrentTab = 'practice';
         }
         await showExamTab(examCurrentTab);
@@ -111,7 +113,7 @@ async function showExamTab(tab) {
     if (!canTakeExam(currentUser) && ['practice', 'exam', 'results'].includes(tab)) {
         tab = 'papers';
     }
-    if (!canManageExam(currentUser) && ['papers', 'reviews', 'adminResults'].includes(tab)) {
+    if (!canManageExam(currentUser) && ['papers', 'reviews', 'checkins', 'adminResults'].includes(tab)) {
         tab = 'practice';
     }
     examCurrentTab = tab;
@@ -129,6 +131,8 @@ async function showExamTab(tab) {
         await loadExamPapersAdmin();
     } else if (tab === 'reviews') {
         await loadPendingReviews();
+    } else if (tab === 'checkins') {
+        await loadCheckinRecords();
     } else if (tab === 'adminResults') {
         await loadAllExamResults();
     }
@@ -561,6 +565,91 @@ async function loadAllExamResults() {
     }
 }
 
+function todayDateValue() {
+    const now = new Date();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${now.getFullYear()}-${month}-${day}`;
+}
+
+async function loadCheckinRecords() {
+    if (!canManageExam(currentUser)) return;
+    const existingDate = document.getElementById('examCheckinDate')?.value || todayDateValue();
+    examLoading('正在加载打卡记录...');
+    try {
+        const data = await examJson(`/api/exam/admin/checkins?date=${encodeURIComponent(existingDate)}`);
+        examCheckinRecords = data.data || [];
+        renderCheckinRecords(existingDate);
+    } catch (e) {
+        examError(e.message || '打卡记录加载失败');
+    }
+}
+
+function setCheckinFilter(filter) {
+    examCheckinFilter = filter;
+    const dateValue = document.getElementById('examCheckinDate')?.value || todayDateValue();
+    renderCheckinRecords(dateValue);
+}
+
+function filteredCheckinRecords() {
+    if (examCheckinFilter === 'passed') {
+        return examCheckinRecords.filter(row => row.passed);
+    }
+    if (examCheckinFilter === 'failed') {
+        return examCheckinRecords.filter(row => row.practiced && !row.passed);
+    }
+    if (examCheckinFilter === 'missing') {
+        return examCheckinRecords.filter(row => !row.practiced);
+    }
+    return examCheckinRecords;
+}
+
+function checkinStatusText(row) {
+    if (row.passed) return '已合格';
+    if (row.practiced) return '已做未合格';
+    return '未做题';
+}
+
+function renderCheckinRecords(dateValue) {
+    const rows = filteredCheckinRecords().map(row => `
+        <tr>
+            <td>${examEscape(row.real_name || row.username || '-')}</td>
+            <td>${examEscape(row.username || '-')}</td>
+            <td>${examEscape(row.role_name || '-')}</td>
+            <td><span class="status ${row.passed ? 'completed' : row.practiced ? 'pending_review' : 'in_progress'}">${checkinStatusText(row)}</span></td>
+            <td>${examEscape(row.answered_count || 0)}</td>
+            <td>${examEscape(row.session_count || 0)}</td>
+            <td>${Math.round((row.best_accuracy || 0) * 100)}%</td>
+            <td>${examDate(row.latest_practice_at)}</td>
+        </tr>`).join('');
+    examContent().innerHTML = `
+        <div class="exam-panel">
+            <div class="exam-toolbar">
+                <div>
+                    <h2>打卡记录</h2>
+                    <p>查看每日谁已做题、谁未做题，以及是否达到80%合格线。</p>
+                </div>
+                <div class="exam-actions">
+                    <input id="examCheckinDate" type="date" value="${examEscape(dateValue)}" onchange="loadCheckinRecords()">
+                    <button class="btn btn-secondary" type="button" onclick="loadCheckinRecords()"><i data-lucide="refresh-cw"></i>刷新</button>
+                </div>
+            </div>
+            <div class="exam-actions">
+                <button class="btn ${examCheckinFilter === 'all' ? 'btn-primary' : 'btn-secondary'}" data-checkin-filter="all" type="button" onclick="setCheckinFilter('all')">全部</button>
+                <button class="btn ${examCheckinFilter === 'passed' ? 'btn-primary' : 'btn-secondary'}" data-checkin-filter="passed" type="button" onclick="setCheckinFilter('passed')">已合格</button>
+                <button class="btn ${examCheckinFilter === 'failed' ? 'btn-primary' : 'btn-secondary'}" data-checkin-filter="failed" type="button" onclick="setCheckinFilter('failed')">已做未合格</button>
+                <button class="btn ${examCheckinFilter === 'missing' ? 'btn-primary' : 'btn-secondary'}" data-checkin-filter="missing" type="button" onclick="setCheckinFilter('missing')">未做题</button>
+            </div>
+            <div class="table-container">
+                <table>
+                    <thead><tr><th>姓名</th><th>账号</th><th>角色</th><th>打卡状态</th><th>已做题数</th><th>练习次数</th><th>最高正确率</th><th>最近练习</th></tr></thead>
+                    <tbody>${rows || '<tr><td colspan="8" class="empty-message">暂无打卡记录</td></tr>'}</tbody>
+                </table>
+            </div>
+        </div>`;
+    examRefreshIcons();
+}
+
 function renderResultsTable(results, options = {}) {
     const rows = results.map(row => `
         <tr>
@@ -571,7 +660,10 @@ function renderResultsTable(results, options = {}) {
             <td>${examScore(row.final_subjective_score ?? row.suggested_subjective_score)}</td>
             <td><strong>${examScore(row.final_score)}</strong></td>
             <td>${examDate(row.submitted_at || row.started_at)}</td>
-            <td><button class="btn btn-secondary btn-sm" type="button" onclick="viewExamAttemptReview(${Number(row.attempt_id || row.id)})">查看明细</button></td>
+            <td>
+                <button class="btn btn-secondary btn-sm" type="button" onclick="viewExamAttemptReview(${Number(row.attempt_id || row.id)})">查看明细</button>
+                ${options.admin ? `<button class="btn btn-danger btn-sm" type="button" onclick="deleteExamAttempt(${Number(row.attempt_id || row.id)})">删除</button>` : ''}
+            </td>
         </tr>`).join('');
     const heading = options.admin ? '成绩查询' : '我的成绩';
     const adminHeaders = options.admin ? '<th>姓名</th><th>角色</th>' : '';
@@ -586,6 +678,20 @@ function renderResultsTable(results, options = {}) {
             </div>
         </div>`;
     examRefreshIcons();
+}
+
+async function deleteExamAttempt(attemptId) {
+    if (!canManageExam(currentUser)) return;
+    if (!confirm('确认删除这条正式考试成绩？删除后不可恢复。')) return;
+    try {
+        await examJson(`/api/exam/admin/attempts/${attemptId}`, {
+            method: 'DELETE'
+        });
+        examNotify('成绩已删除', 'success');
+        await loadAllExamResults();
+    } catch (e) {
+        examNotify(e.message || '删除成绩失败', 'error');
+    }
 }
 
 async function viewExamAttemptReview(attemptId) {
