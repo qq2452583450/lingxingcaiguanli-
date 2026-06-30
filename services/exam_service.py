@@ -361,6 +361,88 @@ def get_daily_practice_status(user_id: int, conn=None) -> dict:
             conn.close()
 
 
+def list_daily_checkins(target_date: str | None = None) -> list[dict]:
+    date_prefix = target_date or _today_prefix()
+    conn, should_close = _connection()
+    try:
+        users = conn.execute(
+            """
+            SELECT u.id, u.username, u.real_name, r.role_name
+            FROM users u
+            JOIN roles r ON r.id = u.role_id
+            WHERE COALESCE(u.is_active, 1) = 1
+              AND r.role_name IN ('材料员', '材料审批负责人', '基地负责人')
+            ORDER BY r.role_name, u.real_name, u.username
+            """
+        ).fetchall()
+        rows = conn.execute(
+            """
+            SELECT user_id,
+                   COALESCE(practice_session_id, CAST(id AS TEXT)) AS session_id,
+                   COUNT(*) AS total_count,
+                   SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) AS correct_count,
+                   MIN(created_at) AS started_at,
+                   MAX(created_at) AS latest_at
+            FROM exam_practice_attempts
+            WHERE created_at LIKE ?
+            GROUP BY user_id, COALESCE(practice_session_id, CAST(id AS TEXT))
+            """,
+            (f"{date_prefix}%",),
+        ).fetchall()
+        sessions_by_user: dict[int, list[dict]] = {}
+        for row in rows:
+            total_count = int(row["total_count"] or 0)
+            correct_count = int(row["correct_count"] or 0)
+            accuracy = round(correct_count / total_count, 4) if total_count else 0.0
+            session = {
+                "session_id": row["session_id"],
+                "total_count": total_count,
+                "correct_count": correct_count,
+                "accuracy": accuracy,
+                "passed": (
+                    total_count >= DAILY_PRACTICE_QUESTION_COUNT
+                    and accuracy >= DAILY_PRACTICE_REQUIRED_ACCURACY
+                ),
+                "started_at": row["started_at"],
+                "latest_at": row["latest_at"],
+            }
+            sessions_by_user.setdefault(row["user_id"], []).append(session)
+
+        report = []
+        for user in users:
+            sessions = sessions_by_user.get(user["id"], [])
+            answered_count = sum(session["total_count"] for session in sessions)
+            best_accuracy = max((session["accuracy"] for session in sessions), default=0.0)
+            latest_practice_at = max(
+                (session["latest_at"] for session in sessions if session["latest_at"]),
+                default=None,
+            )
+            passed = any(session["passed"] for session in sessions)
+            practiced = bool(sessions)
+            report.append(
+                {
+                    "user_id": user["id"],
+                    "username": user["username"],
+                    "real_name": user["real_name"],
+                    "role_name": user["role_name"],
+                    "date": date_prefix,
+                    "practiced": practiced,
+                    "passed": passed,
+                    "status": "passed" if passed else ("failed" if practiced else "missing"),
+                    "answered_count": answered_count,
+                    "session_count": len(sessions),
+                    "best_accuracy": best_accuracy,
+                    "latest_practice_at": latest_practice_at,
+                    "required_accuracy": DAILY_PRACTICE_REQUIRED_ACCURACY,
+                    "required_question_count": DAILY_PRACTICE_QUESTION_COUNT,
+                }
+            )
+        return report
+    finally:
+        if should_close:
+            conn.close()
+
+
 def _practice_history_rows(user_id: int, only_wrong: bool, limit: int) -> list[dict]:
     where_wrong = "AND pa.is_correct = 0" if only_wrong else ""
     conn, should_close = _connection()
@@ -802,6 +884,32 @@ def review_answer(answer_id, reviewer_id, final_score, comment="") -> None:
                 """,
                 (final_subjective_score, final_score_total, answer["attempt_id"]),
             )
+        conn.commit()
+    finally:
+        if should_close:
+            conn.close()
+
+
+def delete_exam_attempt(attempt_id: int) -> None:
+    conn, should_close = _connection()
+    try:
+        attempt = conn.execute(
+            "SELECT id FROM exam_attempts WHERE id = ?",
+            (attempt_id,),
+        ).fetchone()
+        if not attempt:
+            raise ValueError("Exam attempt not found")
+        conn.execute(
+            """
+            DELETE FROM exam_subjective_reviews
+            WHERE answer_id IN (
+                SELECT id FROM exam_answers WHERE attempt_id = ?
+            )
+            """,
+            (attempt_id,),
+        )
+        conn.execute("DELETE FROM exam_answers WHERE attempt_id = ?", (attempt_id,))
+        conn.execute("DELETE FROM exam_attempts WHERE id = ?", (attempt_id,))
         conn.commit()
     finally:
         if should_close:
