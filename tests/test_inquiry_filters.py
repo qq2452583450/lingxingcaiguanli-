@@ -1141,8 +1141,8 @@ def test_import_draft_quote_sheet_parses_exported_template(client, test_db):
     export_response = client.get(f"/api/purchase-inquiries/draft/{inquiry_id}/export-quote-sheet")
     workbook = load_workbook(BytesIO(export_response.data), data_only=False)
     sheet = workbook.active
-    sheet["H4"] = 7
-    sheet["J4"] = 12.5
+    sheet["H4"] = 200
+    sheet["J4"] = 9.6954
     uploaded = BytesIO()
     workbook.save(uploaded)
     uploaded.seek(0)
@@ -1166,12 +1166,13 @@ def test_import_draft_quote_sheet_parses_exported_template(client, test_db):
     assert item["detail_spec"] == "加厚款"
     assert item["brand"] == "导入品牌"
     assert item["unit_name"] == "个"
-    assert item["quantity"] == 7
+    assert item["quantity"] == 200
     assert item["is_national_standard"] == 1
     assert item["unmatched_material"] is False
     assert item["quotes"][0]["supplier_id"] == supplier_id
     assert item["quotes"][0]["supplier_name"] == "导入供应商"
-    assert item["quotes"][0]["tax_price"] == 12.5
+    assert item["quotes"][0]["tax_price"] == 9.6954
+    assert item["quotes"][0]["total_amount"] == 1939.08
     assert item["quotes"][0]["tax_rate"] == 0.13
 
 

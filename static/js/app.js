@@ -3908,7 +3908,7 @@ function updateQuoteFieldLive(itemIndex, quoteIndex, value) {
     if (!item || !item.quotes[quoteIndex]) return;
     const quote = item.quotes[quoteIndex];
     const numValue = parseFloat(value) || 0;
-    quote.tax_price = roundMoney(numValue);
+    quote.tax_price = numValue;
     quote.tax_exempt_price = numValue > 0 ? roundMoney(numValue / (1 + quote.tax_rate)) : 0;
     quote.total_amount = roundMoney(numValue * item.quantity);
     // 局部更新 DOM，不重建
@@ -3977,7 +3977,7 @@ function updateQuoteField(itemIndex, quoteIndex, field, value) {
 
     // 自动计算不含税单价和总金额
     if (field === 'tax_price') {
-        quote.tax_price = roundMoney(numValue);
+        quote.tax_price = numValue;
         quote.tax_exempt_price = numValue > 0 ? roundMoney(numValue / (1 + quote.tax_rate)) : 0;
         quote.total_amount = roundMoney(numValue * item.quantity);
     } else if (field === 'tax_rate') {
@@ -4577,7 +4577,7 @@ function renderInquiryItems() {
                         <div class="quote-inputs">
                             <div class="input-group">
                                 <label>${item.is_cash_price ? '现金含税价' : '含税单价'}</label>
-                                <input type="number" step="0.01" value="${quote.tax_price || ''}"
+                                <input type="number" step="0.0001" value="${quote.tax_price || ''}"
                                        oninput="updateQuoteFieldLive(${itemIndex}, ${quoteIndex}, this.value)"
                                        onchange="updateQuoteField(${itemIndex}, ${quoteIndex}, 'tax_price', this.value)"
                                        placeholder="0.00">
