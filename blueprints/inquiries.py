@@ -3174,7 +3174,7 @@ def import_draft_quote_sheet(draft_id):
             quotes.append({
                 'supplier_id': supplier_data['id'],
                 'supplier_name': supplier_data['supplier_name'],
-                'tax_price': round(tax_price, 2),
+                'tax_price': tax_price,
                 'tax_exempt_price': tax_exempt_price,
                 'tax_rate': tax_rate,
                 'total_amount': round(tax_price * quantity, 2) if tax_price > 0 else 0,

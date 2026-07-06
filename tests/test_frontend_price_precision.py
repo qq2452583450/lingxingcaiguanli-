@@ -27,3 +27,24 @@ def test_quote_tax_exempt_display_does_not_rewrite_tax_price_input():
 
     assert "onchange=" not in exempt_input_markup
     assert "taxPriceInput.value" not in update_body
+
+
+def test_quote_tax_price_precision_is_preserved_when_editing():
+    source = Path("static/js/app.js").read_text(encoding="utf-8")
+    update_body = _function_body(source, "updateQuoteField")
+    live_body = _function_body(source, "updateQuoteFieldLive")
+
+    assert "quote.tax_price = roundMoney(numValue)" not in update_body
+    assert "quote.tax_price = roundMoney(numValue)" not in live_body
+
+
+def test_quote_tax_price_input_accepts_four_decimal_precision():
+    source = Path("static/js/app.js").read_text(encoding="utf-8")
+    render_body = _function_body(source, "renderInquiryItems")
+
+    tax_price_input_start = render_body.index('oninput="updateQuoteFieldLive')
+    tax_price_input_markup_start = render_body.rindex("<input", 0, tax_price_input_start)
+    tax_price_input_markup_end = render_body.index(">", tax_price_input_start)
+    tax_price_input_markup = render_body[tax_price_input_markup_start:tax_price_input_markup_end]
+
+    assert 'step="0.0001"' in tax_price_input_markup
