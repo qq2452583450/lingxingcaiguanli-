@@ -48,3 +48,21 @@ def test_quote_tax_price_input_accepts_four_decimal_precision():
     tax_price_input_markup = render_body[tax_price_input_markup_start:tax_price_input_markup_end]
 
     assert 'step="0.0001"' in tax_price_input_markup
+
+
+def test_manual_quote_payload_rounds_tax_price_before_save_or_submit():
+    source = Path("static/js/app.js").read_text(encoding="utf-8")
+    submit_body = _function_body(source, "submitInquiryForm")
+    draft_body = _function_body(source, "saveInquiryDraft")
+
+    assert "tax_price: normalizeManualQuoteMoney(q.tax_price)" in submit_body
+    assert "tax_exempt_price: normalizeManualQuoteMoney(q.tax_exempt_price)" in submit_body
+    assert "tax_price: normalizeManualQuoteMoney(q.tax_price)" in draft_body
+    assert "tax_exempt_price: normalizeManualQuoteMoney(q.tax_exempt_price)" in draft_body
+
+
+def test_manual_quote_input_formats_float_tail_for_display():
+    source = Path("static/js/app.js").read_text(encoding="utf-8")
+    render_body = _function_body(source, "renderInquiryItems")
+
+    assert 'value="${formatManualQuoteInputValue(quote.tax_price)}"' in render_body
