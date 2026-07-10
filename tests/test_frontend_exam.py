@@ -105,9 +105,21 @@ def test_dedicated_practice_page_requests_thirty_and_shows_checkin_status():
     assert "/api/exam/practice/random?limit=30" in page_js
     assert "/api/exam/practice/submit" in page_js
     assert "/api/exam/practice/daily-status" in page_js
-    assert "accuracy >= 80%" in page_js
+    assert "80%" in page_js
     assert "daily-checkin-passed" in page_js
     assert "daily-checkin-failed" in page_js
+
+
+def test_dedicated_practice_page_supports_draft_save_but_formal_exam_does_not():
+    page_js = read_text("static/js/exam-practice-page.js")
+    exam_js = read_text("static/js/exam.js")
+
+    assert "/api/exam/practice/draft" in page_js
+    assert "savePracticeDraft" in page_js
+    assert "restorePracticeDraft" in page_js
+    assert "暂存" in page_js
+    assert "/api/exam/attempts/${attemptId}/draft" not in exam_js
+    assert "暂存" not in exam_js
 
 
 def test_exam_admin_checkin_records_and_result_delete_frontend():

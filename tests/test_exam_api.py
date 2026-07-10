@@ -403,6 +403,79 @@ def test_practice_submit_returns_answers_and_persists_history(client, test_db):
     assert history["data"][0]["question_id"] == question["id"]
 
 
+def test_practice_draft_can_be_saved_and_restored_without_checkin(client, test_db):
+    seed_exam()
+    clerk_id = seed_user(test_db, "practice_draft", "\u7ec3\u4e60\u6682\u5b58", ROLE_CLERK)
+    login(client, clerk_id, "practice_draft", "\u7ec3\u4e60\u6682\u5b58", ROLE_CLERK)
+    practice = client.get("/api/exam/practice/random?limit=5").get_json()
+    question_ids = [question["id"] for question in practice["data"]]
+    first_question = practice["data"][0]
+    answer = first_question["options"][0]["key"]
+
+    saved = client.put(
+        "/api/exam/practice/draft",
+        json={
+            "question_ids": question_ids,
+            "answers": {str(first_question["id"]): answer},
+        },
+        headers=csrf_headers(),
+    ).get_json()
+    restored = client.get("/api/exam/practice/draft").get_json()
+    status = client.get("/api/exam/practice/daily-status").get_json()
+
+    assert saved["success"] is True
+    assert restored["success"] is True
+    assert [question["id"] for question in restored["data"]["questions"]] == question_ids
+    for question in restored["data"]["questions"]:
+        assert_question_is_sanitized(question)
+    assert restored["data"]["answers"][str(first_question["id"])] == answer
+    assert status["data"]["answered_count"] == 0
+    assert status["data"]["session_count"] == 0
+
+
+def test_practice_submit_clears_saved_draft(client, test_db):
+    seed_exam()
+    clerk_id = seed_user(test_db, "practice_draft_submit", "\u6682\u5b58\u63d0\u4ea4", ROLE_CLERK)
+    login(client, clerk_id, "practice_draft_submit", "\u6682\u5b58\u63d0\u4ea4", ROLE_CLERK)
+    practice = client.get("/api/exam/practice/random?limit=5").get_json()
+    question = practice["data"][0]
+    correct = test_db.execute(
+        "SELECT correct_answer FROM exam_questions WHERE id = ?",
+        (question["id"],),
+    ).fetchone()["correct_answer"]
+    client.put(
+        "/api/exam/practice/draft",
+        json={"question_ids": [question["id"]], "answers": {str(question["id"]): correct}},
+        headers=csrf_headers(),
+    )
+
+    submit = client.post(
+        "/api/exam/practice/submit",
+        json={"answers": {str(question["id"]): correct}},
+        headers=csrf_headers(),
+    ).get_json()
+    restored = client.get("/api/exam/practice/draft").get_json()
+
+    assert submit["success"] is True
+    assert restored["success"] is True
+    assert restored["data"] is None
+
+
+def test_formal_exam_has_no_draft_endpoint(client, test_db):
+    seed_exam()
+    clerk_id = seed_user(test_db, "formal_no_draft", "\u6b63\u5f0f\u65e0\u6682\u5b58", ROLE_CLERK)
+    login(client, clerk_id, "formal_no_draft", "\u6b63\u5f0f\u65e0\u6682\u5b58", ROLE_CLERK)
+    start = client.post("/api/exam/attempts", json={}, headers=csrf_headers()).get_json()
+
+    response = client.post(
+        f"/api/exam/attempts/{start['attempt_id']}/draft",
+        json={"answers": {}},
+        headers=csrf_headers(),
+    )
+
+    assert response.status_code == 404
+
+
 def test_practice_submit_returns_daily_pass_status(client, test_db):
     seed_exam()
     clerk_id = seed_user(test_db, "daily_submit", "\u6253\u5361\u63d0\u4ea4", ROLE_CLERK)
