@@ -204,6 +204,11 @@ def test_multiple_choice_partial_answer_counts_toward_practice_accuracy(test_db)
     assert wrong["accuracy"] == 0.0
 
 
+def test_multiple_choice_comma_separated_full_answer_scores_full_credit():
+    assert grade_objective("multiple_choice", "A,C", "AC", 3) == 3.0
+    assert grade_objective("multiple_choice", "A，C", "AC", 3) == 3.0
+
+
 def test_daily_practice_status_passes_at_eighty_percent(test_db):
     paper, _, _ = load_exam(test_db)
     user_id = seed_user(test_db, "daily_clerk", "\u6bcf\u65e5\u6750\u6599\u5458", "\u6750\u6599\u5458")
