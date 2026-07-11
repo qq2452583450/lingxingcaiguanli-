@@ -283,6 +283,21 @@ def test_manager_can_clear_current_paper_and_summary_hides_formal_exam(client, t
     assert summary["data"]["current_paper"] is None
 
 
+def test_manager_can_clear_current_paper_when_exam_settings_table_is_missing(client, test_db):
+    seed_exam()
+    manager_id = seed_user(test_db, "manager_clear_missing_table", "\u7ba1\u7406\u5458", ROLE_MANAGER)
+    login(client, manager_id, "manager_clear_missing_table", "\u7ba1\u7406\u5458", ROLE_MANAGER)
+    test_db.execute("DROP TABLE exam_settings")
+    test_db.commit()
+
+    response = client.delete("/api/exam/admin/current-paper", headers=csrf_headers())
+    data = response.get_json()
+
+    assert response.status_code == 200
+    assert data["success"] is True
+    assert data["data"] is None
+
+
 def test_manager_cannot_set_non_formal_paper_current(client, test_db):
     seed_exam()
     formal_paper_id = select_current_paper(test_db)
