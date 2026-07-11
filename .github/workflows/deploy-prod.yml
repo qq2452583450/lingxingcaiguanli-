@@ -28,4 +28,14 @@ jobs:
             powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $Diag = 'C:\wwwroot\lxclgl\deploy-diagnostic.txt'; & C:\wwwroot\lxclgl\deploy\deploy.ps1 -AppDir C:\wwwroot\lxclgl -ServiceName lxclgl -Branch prod -Port 5000 *>&1 | Add-Content -LiteralPath $Diag; 'deploy_ps1_exit=' + $LASTEXITCODE | Add-Content -LiteralPath $Diag }"
             powershell -NoProfile -Command "$r = Invoke-WebRequest -Uri 'http://127.0.0.1:5000' -UseBasicParsing -TimeoutSec 10; if ([int]$r.StatusCode -ne 200) { throw 'HTTP health check failed' }"
             powershell -NoProfile -Command "$r = Invoke-WebRequest -Uri 'http://127.0.0.1:5000/api/petty-cash/usages/1' -Method Options -UseBasicParsing -TimeoutSec 10; $allow = [string]$r.Headers['Allow']; if ($allow -notmatch 'PUT') { throw \"Petty cash usage PUT route not loaded. Allow=$allow\" }"
-            powershell -NoProfile -Command "$AppDir = 'C:\wwwroot\lxclgl'; 'runtime_sha=' + (git -C $AppDir rev-parse HEAD); $ErrLog = Join-Path $AppDir '.server-err.log'; if (Test-Path -LiteralPath $ErrLog) { 'recent_server_errors:'; Get-Content -LiteralPath $ErrLog -Tail 120 } else { 'recent_server_errors: none' }"
+      - name: Read production diagnostics
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_SSH_PORT || 22 }}
+          script_stop: true
+          command_timeout: 2m
+          script: |
+            powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command '$AppDir = "C:\wwwroot\lxclgl"; Write-Output ("runtime_sha=" + (git -C $AppDir rev-parse HEAD)); $ErrLog = Join-Path $AppDir ".server-err.log"; if (Test-Path -LiteralPath $ErrLog) { Write-Output "recent_server_errors:"; Get-Content -LiteralPath $ErrLog -Tail 120 } else { Write-Output "recent_server_errors: none" }'
