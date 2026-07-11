@@ -100,6 +100,16 @@ def init_exam_schema(conn):
             FOREIGN KEY (question_id) REFERENCES exam_questions(id)
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS exam_practice_drafts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL UNIQUE,
+            question_ids TEXT NOT NULL DEFAULT '[]',
+            answers_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+        """,
     ]
     index_statements = [
         "CREATE INDEX IF NOT EXISTS idx_exam_attempts_user ON exam_attempts(user_id)",
@@ -110,6 +120,7 @@ def init_exam_schema(conn):
         "CREATE INDEX IF NOT EXISTS idx_exam_reviews_answer ON exam_subjective_reviews(answer_id)",
         "CREATE INDEX IF NOT EXISTS idx_exam_practice_user ON exam_practice_attempts(user_id)",
         "CREATE INDEX IF NOT EXISTS idx_exam_practice_session ON exam_practice_attempts(user_id, practice_session_id)",
+        "CREATE INDEX IF NOT EXISTS idx_exam_practice_drafts_user ON exam_practice_drafts(user_id)",
     ]
 
     for statement in table_statements:
@@ -136,6 +147,23 @@ def init_exam_schema(conn):
         )
 
     _require_manual_current_exam_selection(cursor)
+
+    draft_columns = {
+        row[1]
+        for row in cursor.execute("PRAGMA table_info(exam_practice_drafts)")
+    }
+    if "question_ids" not in draft_columns:
+        cursor.execute(
+            "ALTER TABLE exam_practice_drafts ADD COLUMN question_ids TEXT NOT NULL DEFAULT '[]'"
+        )
+    if "answers_json" not in draft_columns:
+        cursor.execute(
+            "ALTER TABLE exam_practice_drafts ADD COLUMN answers_json TEXT NOT NULL DEFAULT '{}'"
+        )
+    if "updated_at" not in draft_columns:
+        cursor.execute(
+            "ALTER TABLE exam_practice_drafts ADD COLUMN updated_at TEXT"
+        )
 
     for statement in index_statements:
         cursor.execute(statement)
