@@ -38,7 +38,8 @@ function Stop-PythonListenerOnPort {
     $Listeners = Get-NetTCPConnection -LocalPort $TargetPort -State Listen -ErrorAction SilentlyContinue
     foreach ($Listener in $Listeners) {
         $Process = Get-Process -Id $Listener.OwningProcess -ErrorAction SilentlyContinue
-        if ($Process -and $Process.ProcessName -match "python") {
+        if ($Process) {
+            Write-Host "Stopping stale listener $($Process.ProcessName) (PID $($Process.Id)) on port $TargetPort."
             Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
         }
     }
