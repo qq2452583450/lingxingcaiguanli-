@@ -37,6 +37,9 @@ Thumbs.db
 # Workbuddy AI
 .workbuddy/
 
+# Local git worktrees
+.worktrees/
+
 # Database files
 *.db
 *.sqlite

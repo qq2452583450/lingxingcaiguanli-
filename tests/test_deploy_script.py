@@ -27,12 +27,13 @@ def test_deploy_script_restarts_service_with_port_cleanup_fallback():
     assert 'throw "Windows service $ServiceName failed to start"' in script
 
 
-def test_workflow_uses_force_restart_script_for_route_reload():
+def test_workflow_uses_deploy_script_for_dependency_install_before_restart():
     workflow = Path('.github/workflows/deploy-prod.yml').read_text(encoding='utf-8')
-    force_restart = Path('deploy/force-restart-app.ps1').read_text(encoding='utf-8')
+    deploy_script = Path('deploy/deploy.ps1').read_text(encoding='utf-8')
 
-    assert 'deploy\\force-restart-app.ps1' in workflow
+    assert 'deploy\\deploy.ps1' in workflow
+    assert 'deploy\\force-restart-app.ps1' not in workflow
     assert "Invoke-Retry 'pull'" in workflow
     assert 'petty-cash/usages/1' in workflow
-    assert 'force_restart_done=1' in force_restart
-    assert 'Get-CimInstance Win32_Process' in force_restart
+    assert 'Installing Python dependencies' in deploy_script
+    assert 'Start-Service -Name $ServiceName' in deploy_script

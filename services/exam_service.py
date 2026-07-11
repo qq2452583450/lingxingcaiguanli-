@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from uuid import uuid4
 
@@ -54,6 +55,57 @@ def _answer_to_text(value) -> str:
     if isinstance(value, (list, tuple, set)):
         return ",".join(str(item) for item in value)
     return str(value)
+
+
+def _normalize_question_ids(question_ids) -> list[int]:
+    normalized = []
+    seen = set()
+    for raw_id in question_ids or []:
+        try:
+            question_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if question_id > 0 and question_id not in seen:
+            normalized.append(question_id)
+            seen.add(question_id)
+    return normalized
+
+
+def _load_practice_questions_by_ids(conn, question_ids: list[int]) -> list[dict]:
+    if not question_ids:
+        return []
+    placeholders = ",".join("?" for _ in question_ids)
+    rows = conn.execute(
+        f"""
+        SELECT q.id, q.paper_id, p.title AS paper_title, q.question_type,
+               q.order_no, q.stem, q.correct_answer, q.reference_answer,
+               q.keywords, q.score
+        FROM exam_questions q
+        JOIN exam_papers p ON p.id = q.paper_id
+        WHERE q.id IN ({placeholders})
+          AND q.question_type IN ('single_choice', 'multiple_choice', 'true_false')
+        """,
+        question_ids,
+    ).fetchall()
+    questions_by_id = {row["id"]: dict(row) for row in rows}
+    if len(questions_by_id) != len(question_ids):
+        raise ValueError("Practice draft contains unknown or unsupported questions")
+    ordered = [questions_by_id[question_id] for question_id in question_ids]
+    for question in ordered:
+        option_rows = conn.execute(
+            """
+            SELECT option_key, option_text
+            FROM exam_question_options
+            WHERE question_id = ?
+            ORDER BY option_key
+            """,
+            (question["id"],),
+        ).fetchall()
+        question["options"] = [
+            {"key": row["option_key"], "text": row["option_text"]}
+            for row in option_rows
+        ]
+    return [ensure_question_options(question) for question in ordered]
 
 
 def ensure_question_options(question: dict) -> dict:
@@ -310,7 +362,6 @@ def record_practice_answers(user_id: int, answers: dict) -> dict:
                 (user_id, question_id, answer_text, 1 if is_correct else 0, accuracy_credit, created_at, session_id),
             )
             items.append(_practice_item(question, answer_text, is_correct, created_at, session_id, accuracy_credit))
-        conn.commit()
         total_count = len(items)
         correct_count = sum(1 for item in items if item["is_correct"])
         accuracy_credit = sum(float(item["accuracy_credit"]) for item in items)
@@ -319,6 +370,8 @@ def record_practice_answers(user_id: int, answers: dict) -> dict:
             total_count >= DAILY_PRACTICE_QUESTION_COUNT
             and accuracy >= DAILY_PRACTICE_REQUIRED_ACCURACY
         )
+        clear_practice_draft(user_id, conn=conn)
+        conn.commit()
         return {
             "session_id": session_id,
             "items": items,
@@ -329,6 +382,85 @@ def record_practice_answers(user_id: int, answers: dict) -> dict:
             "passed": passed,
             "daily_status": get_daily_practice_status(user_id, conn=conn),
         }
+    finally:
+        if should_close:
+            conn.close()
+
+
+def save_practice_draft(user_id: int, question_ids, answers: dict) -> dict:
+    normalized_ids = _normalize_question_ids(question_ids)
+    answer_map = {
+        str(key): _answer_to_text(value)
+        for key, value in (answers or {}).items()
+        if str(key) in {str(question_id) for question_id in normalized_ids}
+    }
+    conn, should_close = _connection()
+    try:
+        questions = _load_practice_questions_by_ids(conn, normalized_ids)
+        updated_at = _now()
+        conn.execute(
+            """
+            INSERT INTO exam_practice_drafts (
+                user_id, question_ids, answers_json, updated_at
+            ) VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                question_ids = excluded.question_ids,
+                answers_json = excluded.answers_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                user_id,
+                json.dumps(normalized_ids, ensure_ascii=False),
+                json.dumps(answer_map, ensure_ascii=False),
+                updated_at,
+            ),
+        )
+        conn.commit()
+        return {
+            "question_ids": normalized_ids,
+            "questions": questions,
+            "answers": answer_map,
+            "updated_at": updated_at,
+        }
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_practice_draft(user_id: int) -> dict | None:
+    conn, should_close = _connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT question_ids, answers_json, updated_at
+            FROM exam_practice_drafts
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+        if not row:
+            return None
+        question_ids = _normalize_question_ids(json.loads(row["question_ids"] or "[]"))
+        answers = json.loads(row["answers_json"] or "{}")
+        return {
+            "question_ids": question_ids,
+            "questions": _load_practice_questions_by_ids(conn, question_ids),
+            "answers": {str(key): _answer_to_text(value) for key, value in answers.items()},
+            "updated_at": row["updated_at"],
+        }
+    finally:
+        if should_close:
+            conn.close()
+
+
+def clear_practice_draft(user_id: int, conn=None) -> None:
+    should_close = False
+    if conn is None:
+        conn, should_close = _connection()
+    try:
+        conn.execute("DELETE FROM exam_practice_drafts WHERE user_id = ?", (user_id,))
+        if should_close:
+            conn.commit()
     finally:
         if should_close:
             conn.close()

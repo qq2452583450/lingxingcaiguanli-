@@ -798,6 +798,16 @@ function roundMoney(val, decimals = 2) {
     return Math.round((num + Number.EPSILON) * factor) / factor;
 }
 
+function normalizeManualQuoteMoney(val, decimals = 4) {
+    return roundMoney(val, decimals);
+}
+
+function formatManualQuoteInputValue(val) {
+    const num = normalizeManualQuoteMoney(val, 4);
+    if (!Number.isFinite(num) || num <= 0) return '';
+    return Number.isInteger(num) ? String(num) : num.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+}
+
 // 辅助函数：安全格式化税率
 function safeRate(val) {
     const num = parseFloat(val);
@@ -4582,7 +4592,7 @@ function renderInquiryItems() {
                         <div class="quote-inputs">
                             <div class="input-group">
                                 <label>${item.is_cash_price ? '现金含税价' : '含税单价'}</label>
-                                <input type="number" step="0.0001" value="${quote.tax_price || ''}"
+                                <input type="number" step="0.0001" value="${formatManualQuoteInputValue(quote.tax_price)}"
                                        oninput="updateQuoteFieldLive(${itemIndex}, ${quoteIndex}, this.value)"
                                        onchange="updateQuoteField(${itemIndex}, ${quoteIndex}, 'tax_price', this.value)"
                                        placeholder="0.00">
@@ -4887,8 +4897,8 @@ async function submitInquiryForm() {
             .filter(q => q.supplier_id)  // 只要有供应商即可，价格可以为0（留给供应商填）
             .map(q => ({
                 supplier_id: parseInt(q.supplier_id, 10),
-                tax_price: parseFloat(q.tax_price) || 0,
-                tax_exempt_price: parseFloat(q.tax_exempt_price) || 0,
+                tax_price: normalizeManualQuoteMoney(q.tax_price),
+                tax_exempt_price: normalizeManualQuoteMoney(q.tax_exempt_price),
                 tax_rate: parseFloat(q.tax_rate) || 0.13
             }));
 
@@ -4975,8 +4985,8 @@ async function saveInquiryDraft() {
         if (!item) return null;
         const quotes = (item.quotes || []).map(q => ({
             supplier_id: q.supplier_id ? parseInt(q.supplier_id, 10) : null,
-            tax_price: parseFloat(q.tax_price) || 0,
-            tax_exempt_price: parseFloat(q.tax_exempt_price) || 0,
+            tax_price: normalizeManualQuoteMoney(q.tax_price),
+            tax_exempt_price: normalizeManualQuoteMoney(q.tax_exempt_price),
             tax_rate: parseFloat(q.tax_rate) || 0.13
         }));
 

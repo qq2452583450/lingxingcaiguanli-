@@ -7,6 +7,7 @@ from helpers import get_db
 from services.exam_service import (
     can_manage_exam,
     can_take_exam,
+    clear_practice_draft,
     DAILY_PRACTICE_QUESTION_COUNT,
     delete_exam_attempt,
     get_attempt,
@@ -15,6 +16,7 @@ from services.exam_service import (
     get_daily_practice_status,
     get_exam_paper,
     get_paper_questions,
+    get_practice_draft,
     list_daily_checkins,
     get_random_practice_questions,
     list_practice_history,
@@ -24,6 +26,7 @@ from services.exam_service import (
     list_wrong_practice_questions,
     record_practice_answers,
     review_answer,
+    save_practice_draft,
     start_attempt,
     submit_attempt,
 )
@@ -137,6 +140,54 @@ def submit_practice():
     except ValueError as exc:
         return _json_error(str(exc), 400)
     return jsonify({"success": True, "data": result})
+
+
+@exam_bp.route("/practice/draft", methods=["GET"])
+def practice_draft_detail():
+    user, denied = _require_exam_user()
+    if denied:
+        return denied
+    if not can_take_exam(user):
+        return _json_error("Permission denied", 403)
+
+    draft = get_practice_draft(user["id"])
+    if draft:
+        draft = dict(draft)
+        draft["questions"] = _questions_for_exam_flow(draft.get("questions") or [])
+    return jsonify({"success": True, "data": draft})
+
+
+@exam_bp.route("/practice/draft", methods=["PUT"])
+def save_practice_draft_route():
+    user, denied = _require_exam_user()
+    if denied:
+        return denied
+    if not can_take_exam(user):
+        return _json_error("Permission denied", 403)
+
+    data = request.get_json(silent=True) or {}
+    try:
+        draft = save_practice_draft(
+            user["id"],
+            data.get("question_ids") or [],
+            data.get("answers") or {},
+        )
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+    draft["questions"] = _questions_for_exam_flow(draft.get("questions") or [])
+    return jsonify({"success": True, "data": draft})
+
+
+@exam_bp.route("/practice/draft", methods=["DELETE"])
+def clear_practice_draft_route():
+    user, denied = _require_exam_user()
+    if denied:
+        return denied
+    if not can_take_exam(user):
+        return _json_error("Permission denied", 403)
+
+    clear_practice_draft(user["id"])
+    return jsonify({"success": True})
 
 
 @exam_bp.route("/practice/daily-status", methods=["GET"])

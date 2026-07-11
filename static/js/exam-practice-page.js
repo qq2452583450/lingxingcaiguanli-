@@ -1,5 +1,6 @@
 let csrfToken = '';
 let practiceQuestions = [];
+let practiceDraftUpdatedAt = '';
 
 function practiceEscape(value) {
     const text = value === null || value === undefined ? '' : String(value);
@@ -52,13 +53,16 @@ async function loadDailyStatus() {
     renderDailyStatus(data.data || {});
 }
 
-function renderQuestions() {
+function renderQuestions(savedAnswers = {}, updatedAt = '') {
     const root = document.getElementById('practiceRoot');
     const questionCards = practiceQuestions.map((question, index) => {
         const inputType = question.question_type === 'multiple_choice' ? 'checkbox' : 'radio';
+        const selectedValues = new Set(
+            String(savedAnswers[String(question.id)] || '').split(',').filter(Boolean)
+        );
         const options = (question.options || []).map(option => `
             <label>
-                <input type="${inputType}" name="q_${practiceEscape(question.id)}" value="${practiceEscape(option.key)}">
+                <input type="${inputType}" name="q_${practiceEscape(question.id)}" value="${practiceEscape(option.key)}" ${selectedValues.has(String(option.key)) ? 'checked' : ''}>
                 <span>${practiceEscape(option.key)}. ${practiceEscape(option.text)}</span>
             </label>
         `).join('');
@@ -74,24 +78,42 @@ function renderQuestions() {
         <form id="practiceForm" onsubmit="submitPractice(event)">
             <div class="practice-card">
                 <strong>本次共 ${practiceQuestions.length} 题</strong>
-                <div class="practice-meta">accuracy >= 80% 视为今日合格打卡，未达标需要继续练习。</div>
+                <div class="practice-meta">正确率达到 80% 视为今日合格打卡，未达标需要继续练习。</div>
+                <div class="practice-meta" id="practiceDraftStatus">${updatedAt ? `已恢复暂存：${practiceEscape(updatedAt)}` : ''}</div>
             </div>
             ${questionCards}
             <div class="practice-actions">
                 <button class="btn btn-primary" type="submit">提交打卡</button>
-                <button class="btn btn-secondary" type="button" onclick="loadPractice()">换一组题</button>
+                <button class="btn btn-secondary" type="button" onclick="savePracticeDraft(event)">暂存</button>
+                <button class="btn btn-secondary" type="button" onclick="loadPractice({ clearDraft: true })">换一组题</button>
             </div>
         </form>
     `;
     if (typeof lucide !== 'undefined') lucide.createIcons();
 }
 
-async function loadPractice() {
+async function loadPractice(options = {}) {
     const root = document.getElementById('practiceRoot');
     root.innerHTML = '<div class="practice-card">正在加载30道练习题...</div>';
+    if (options.clearDraft) {
+        await practiceApi('/api/exam/practice/draft', { method: 'DELETE' });
+    }
     const data = await practiceApi('/api/exam/practice/random?limit=30');
     practiceQuestions = data.data || [];
+    practiceDraftUpdatedAt = '';
     renderQuestions();
+}
+
+async function restorePracticeDraft() {
+    const data = await practiceApi('/api/exam/practice/draft');
+    const draft = data.data;
+    if (!draft || !Array.isArray(draft.questions) || draft.questions.length === 0) {
+        return false;
+    }
+    practiceQuestions = draft.questions;
+    practiceDraftUpdatedAt = draft.updated_at || '';
+    renderQuestions(draft.answers || {}, practiceDraftUpdatedAt);
+    return true;
 }
 
 function collectAnswers() {
@@ -118,6 +140,30 @@ async function submitPractice(event) {
     } catch (error) {
         if (button) button.disabled = false;
         alert(error.message || '提交失败');
+    }
+}
+
+async function savePracticeDraft(event) {
+    if (!practiceQuestions.length) return;
+    const button = event && event.target ? event.target : null;
+    if (button) button.disabled = true;
+    try {
+        const data = await practiceApi('/api/exam/practice/draft', {
+            method: 'PUT',
+            body: JSON.stringify({
+                question_ids: practiceQuestions.map(question => question.id),
+                answers: collectAnswers()
+            })
+        });
+        practiceDraftUpdatedAt = (data.data && data.data.updated_at) || '';
+        const status = document.getElementById('practiceDraftStatus');
+        if (status) {
+            status.textContent = practiceDraftUpdatedAt ? `已暂存：${practiceDraftUpdatedAt}` : '已暂存';
+        }
+    } catch (error) {
+        alert(error.message || '暂存失败');
+    } finally {
+        if (button) button.disabled = false;
     }
 }
 
@@ -157,7 +203,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
         await loadCsrfToken();
         await loadDailyStatus();
-        await loadPractice();
+        const restored = await restorePracticeDraft();
+        if (!restored) await loadPractice();
     } catch (error) {
         document.getElementById('practiceRoot').innerHTML = `
             <div class="practice-card daily-checkin-failed">
