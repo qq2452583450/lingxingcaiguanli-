@@ -22,3 +22,13 @@ def test_prod_deploy_runs_sync_restart_and_verification_in_separate_ssh_steps():
     assert "name: Sync prod source" in workflow
     assert "name: Restart production service" in workflow
     assert "name: Verify production routes" in workflow
+
+
+def test_practice_regrade_workflow_backs_up_database_and_runs_script():
+    workflow = (ROOT / ".github" / "workflows" / "regrade-practice.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "workflow_dispatch" in workflow
+    assert "tools\\regrade_practice_attempts.py" in workflow
+    assert "--apply --backup" in workflow

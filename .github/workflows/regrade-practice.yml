@@ -1,0 +1,24 @@
+name: Regrade practice attempts
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: lxclgl-practice-regrade
+  cancel-in-progress: false
+
+jobs:
+  regrade:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Regrade production practice attempts
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_SSH_PORT || 22 }}
+          script_stop: true
+          command_timeout: 10m
+          script: |
+            powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& { $AppDir = 'C:\wwwroot\lxclgl'; $Python = Join-Path $AppDir '.venv\Scripts\python.exe'; $Db = Join-Path $AppDir '零星材管理系统.db'; Set-Location -LiteralPath $AppDir; Write-Output ('runtime_sha=' + (git -C $AppDir rev-parse HEAD)); Write-Output 'dry_run:'; & $Python tools\regrade_practice_attempts.py --db $Db; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; Write-Output 'apply:'; & $Python tools\regrade_practice_attempts.py --db $Db --apply --backup; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }"
