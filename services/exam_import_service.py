@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from zipfile import BadZipFile
 
 from docx import Document
 
@@ -805,7 +806,14 @@ def import_exam_papers_from_question_bank_dir(path: Path = DESKTOP_QUESTION_BANK
     if not docx_files:
         raise FileNotFoundError(f"No question bank .docx files found in {source_dir}")
 
-    papers = [parse_literature_question_bank_docx(docx_path) for docx_path in docx_files]
+    papers = []
+    for docx_path in docx_files:
+        try:
+            papers.append(parse_literature_question_bank_docx(docx_path))
+        except BadZipFile:
+            continue
+    if not papers:
+        raise ValueError(f"No valid question bank .docx files found in {source_dir}")
     conn, should_close = _connection()
     cursor = conn.cursor()
 
@@ -848,8 +856,11 @@ def ensure_exam_sources_imported() -> dict:
         return {"created": False, "paper_count": existing_count}
 
     if DESKTOP_QUESTION_BANK_DIR.exists() and list(DESKTOP_QUESTION_BANK_DIR.glob("*.docx")):
-        result = import_exam_papers_from_question_bank_dir(DESKTOP_QUESTION_BANK_DIR)
-        return {"created": True, "paper_count": result["inserted"]}
+        try:
+            result = import_exam_papers_from_question_bank_dir(DESKTOP_QUESTION_BANK_DIR)
+            return {"created": True, "paper_count": result["inserted"]}
+        except ValueError:
+            pass
 
     source_dir = Path(__file__).resolve().parents[1] / "docs" / "exam_sources"
     try:

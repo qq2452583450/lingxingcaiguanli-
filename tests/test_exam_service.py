@@ -112,6 +112,48 @@ def test_random_practice_excludes_subjective_questions(test_db):
     }
 
 
+def test_daily_random_practice_only_uses_current_five_exam_sets(test_db):
+    load_exam(test_db)
+    cursor = test_db.cursor()
+    cursor.execute(
+        """
+        INSERT INTO exam_papers (title, duration_minutes, total_score, source_type, create_time)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("旧题库混入卷", 30, 100, "bank", "2026-07-11 00:00:00"),
+    )
+    old_paper_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO exam_questions (
+            paper_id, question_type, order_no, stem, correct_answer, score
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (old_paper_id, "single_choice", 1, "不应该被打卡抽到的旧题", "A", 1),
+    )
+    old_question_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO exam_question_options (question_id, option_key, option_text)
+        VALUES (?, ?, ?)
+        """,
+        (old_question_id, "A", "旧答案"),
+    )
+    test_db.commit()
+
+    questions = get_random_practice_questions(limit=200)
+
+    assert questions
+    assert "旧题库混入卷" not in {question["paper_title"] for question in questions}
+    assert {question["paper_title"] for question in questions} <= {
+        "第一套（新编实操版）",
+        "第二套（新编案例版）",
+        "第三套（新编内控版）",
+        "第四套（新编实操易错版）",
+        "第五套（新编综合押题版）",
+    }
+
+
 def test_record_practice_answers_scores_and_lists_history(test_db):
     paper, _, _ = load_exam(test_db)
     user_id = seed_user(test_db, "practice_clerk", "\u7ec3\u4e60\u6750\u6599\u5458", "\u6750\u6599\u5458")

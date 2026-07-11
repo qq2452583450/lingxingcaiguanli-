@@ -11,6 +11,13 @@ OBJECTIVE_TYPES = {"single_choice", "multiple_choice", "true_false"}
 SUBJECTIVE_TYPES = {"short_answer", "case_analysis"}
 DAILY_PRACTICE_QUESTION_COUNT = 30
 DAILY_PRACTICE_REQUIRED_ACCURACY = 0.8
+DAILY_PRACTICE_PAPER_TITLES = {
+    "第一套（新编实操版）",
+    "第二套（新编案例版）",
+    "第三套（新编内控版）",
+    "第四套（新编实操易错版）",
+    "第五套（新编综合押题版）",
+}
 EXAM_TAKER_ROLES = {"材料员", "材料审批负责人", "基地负责人"}
 EXAM_MANAGER_ROLES = {"系统管理员", "材料审批负责人"}
 
@@ -213,11 +220,13 @@ def get_random_practice_questions(limit=10, paper_id=None) -> list[dict]:
     try:
         params = []
         where_parts = ["q.question_type IN ('single_choice', 'multiple_choice', 'true_false')"]
+        title_placeholders = ",".join("?" for _ in DAILY_PRACTICE_PAPER_TITLES)
         if paper_id is not None:
             where_parts.append("q.paper_id = ?")
             params.append(paper_id)
-        else:
-            where_parts.append("p.source_type != 'archived_exam'")
+        where_parts.append("p.source_type = 'exam'")
+        where_parts.append(f"p.title IN ({title_placeholders})")
+        params.extend(sorted(DAILY_PRACTICE_PAPER_TITLES))
         where = "WHERE " + " AND ".join(where_parts)
         params.append(limit)
         question_rows = conn.execute(

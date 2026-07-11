@@ -2,6 +2,7 @@
 
 from flask import Blueprint, jsonify, request, session
 
+from database.exam_schema import init_exam_schema
 from helpers import get_db
 from services.exam_service import (
     can_manage_exam,
@@ -361,6 +362,7 @@ def set_current_paper():
         return _json_error("只能设置正式考试卷为当前试卷")
 
     conn = get_db()
+    init_exam_schema(conn)
     conn.execute(
         "INSERT OR REPLACE INTO exam_settings (key, value) VALUES (?, ?)",
         ("current_exam_paper_id", str(paper_id)),
@@ -376,6 +378,7 @@ def clear_current_paper():
         return denied
 
     conn = get_db()
+    init_exam_schema(conn)
     conn.execute(
         "DELETE FROM exam_settings WHERE key = ?",
         ("current_exam_paper_id",),
