@@ -269,7 +269,7 @@ def submit_attempt_route(attempt_id):
     except ValueError as exc:
         return _json_error(str(exc), 400)
 
-    return jsonify({"success": True, "data": get_attempt(attempt_id)})
+    return jsonify({"success": True, "data": get_attempt_review(attempt_id)})
 
 
 @exam_bp.route("/results", methods=["GET"])
@@ -316,6 +316,21 @@ def set_current_paper():
     )
     conn.commit()
     return jsonify({"success": True, "data": get_current_exam_paper()})
+
+
+@exam_bp.route("/admin/current-paper", methods=["DELETE"])
+def clear_current_paper():
+    _, denied = _require_exam_manager()
+    if denied:
+        return denied
+
+    conn = get_db()
+    conn.execute(
+        "DELETE FROM exam_settings WHERE key = ?",
+        ("current_exam_paper_id",),
+    )
+    conn.commit()
+    return jsonify({"success": True, "data": None})
 
 
 @exam_bp.route("/admin/results", methods=["GET"])

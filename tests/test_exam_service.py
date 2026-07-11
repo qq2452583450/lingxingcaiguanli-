@@ -21,6 +21,7 @@ from services.exam_service import (
     review_answer,
     start_attempt,
     submit_attempt,
+    grade_objective,
 )
 
 
@@ -61,6 +62,17 @@ def load_exam(test_db):
     objective = next(q for q in questions if q["question_type"] in {"single_choice", "multiple_choice", "true_false"})
     subjective = next(q for q in questions if q["question_type"] in {"short_answer", "case_analysis"})
     return dict(paper), objective, subjective
+
+
+def definitely_wrong_objective_answer(question):
+    if question["question_type"] == "multiple_choice":
+        correct = set(question["correct_answer"])
+        wrong_option = next(
+            (option["key"] for option in question.get("options", []) if option["key"] not in correct),
+            "Z",
+        )
+        return question["correct_answer"][:1] + wrong_option
+    return "A" if question["correct_answer"] != "A" else "B"
 
 
 def test_role_permissions_for_takers_managers_and_supplier_exclusion():
@@ -123,6 +135,33 @@ def test_record_practice_answers_scores_and_lists_history(test_db):
     assert wrong[0]["question_id"] == objective["id"]
 
 
+def test_multiple_choice_partial_answer_counts_toward_practice_accuracy(test_db):
+    paper, _, _ = load_exam(test_db)
+    user_id = seed_user(test_db, "partial_multi", "\u591a\u9009\u6750\u6599\u5458", "\u6750\u6599\u5458")
+    question = next(
+        question
+        for question in get_random_practice_questions(limit=50, paper_id=paper["id"])
+        if question["question_type"] == "multiple_choice"
+        and len(question["correct_answer"]) >= 2
+        and len(question["options"]) > len(set(question["correct_answer"]))
+    )
+    partial_answer = question["correct_answer"][0]
+    wrong_answer = partial_answer + next(
+        option["key"] for option in question["options"] if option["key"] not in set(question["correct_answer"])
+    )
+
+    partial = record_practice_answers(user_id, {str(question["id"]): partial_answer})
+    wrong = record_practice_answers(user_id, {str(question["id"]): wrong_answer})
+
+    expected_credit = round(1 / len(question["correct_answer"]), 4)
+    assert grade_objective("multiple_choice", partial_answer, question["correct_answer"], question["score"]) > 0
+    assert partial["items"][0]["is_correct"] is False
+    assert partial["items"][0]["accuracy_credit"] == expected_credit
+    assert partial["accuracy"] == expected_credit
+    assert wrong["items"][0]["accuracy_credit"] == 0.0
+    assert wrong["accuracy"] == 0.0
+
+
 def test_daily_practice_status_passes_at_eighty_percent(test_db):
     paper, _, _ = load_exam(test_db)
     user_id = seed_user(test_db, "daily_clerk", "\u6bcf\u65e5\u6750\u6599\u5458", "\u6750\u6599\u5458")
@@ -132,7 +171,7 @@ def test_daily_practice_status_passes_at_eighty_percent(test_db):
         if index < 24:
             answers[str(question["id"])] = question["correct_answer"]
         else:
-            answers[str(question["id"])] = "A" if question["correct_answer"] != "A" else "B"
+            answers[str(question["id"])] = definitely_wrong_objective_answer(question)
 
     result = record_practice_answers(user_id, answers)
     status = get_daily_practice_status(user_id)
@@ -158,7 +197,7 @@ def test_daily_practice_status_requires_continued_practice_below_eighty_percent(
         if index < 23:
             answers[str(question["id"])] = question["correct_answer"]
         else:
-            answers[str(question["id"])] = "A" if question["correct_answer"] != "A" else "B"
+            answers[str(question["id"])] = definitely_wrong_objective_answer(question)
 
     result = record_practice_answers(user_id, answers)
     status = get_daily_practice_status(user_id)
@@ -184,7 +223,7 @@ def test_daily_checkins_include_passed_failed_and_not_practiced_takers(test_db):
     passed_answers = {}
     failed_answers = {}
     for index, question in enumerate(questions):
-        wrong = "A" if question["correct_answer"] != "A" else "B"
+        wrong = definitely_wrong_objective_answer(question)
         passed_answers[str(question["id"])] = question["correct_answer"] if index < 24 else wrong
         failed_answers[str(question["id"])] = question["correct_answer"] if index < 10 else wrong
     record_practice_answers(passed_id, passed_answers)

@@ -13,3 +13,11 @@ def test_exam_taker_tabs_are_role_gated():
     assert 'class="exam-tab exam-taker-only" data-exam-tab="results"' in index
     assert "document.querySelectorAll('.exam-taker-only')" in script
     assert "canTakeExam(currentUser)" in script
+
+
+def test_exam_bank_management_can_clear_current_paper():
+    script = (ROOT / "static" / "js" / "exam.js").read_text(encoding="utf-8")
+
+    assert "clearCurrentExamPaper()" in script
+    assert "取消当前" in script
+    assert "method: 'DELETE'" in script

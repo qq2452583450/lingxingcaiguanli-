@@ -75,6 +75,17 @@ def seed_exam():
     import_exam_papers_from_docx(source_docx())
 
 
+def select_current_paper(test_db, paper_id=None):
+    if paper_id is None:
+        paper_id = papers(test_db)[0]["id"]
+    test_db.execute(
+        "INSERT OR REPLACE INTO exam_settings (key, value) VALUES (?, ?)",
+        ("current_exam_paper_id", str(paper_id)),
+    )
+    test_db.commit()
+    return paper_id
+
+
 def papers(test_db):
     return [
         dict(row)
@@ -82,6 +93,17 @@ def papers(test_db):
             "SELECT id, title FROM exam_papers ORDER BY id"
         ).fetchall()
     ]
+
+
+def definitely_wrong_objective_answer(question, correct):
+    if question["question_type"] == "multiple_choice":
+        correct_set = set(correct)
+        wrong_option = next(
+            (option["key"] for option in question.get("options", []) if option["key"] not in correct_set),
+            "Z",
+        )
+        return correct[:1] + wrong_option
+    return "A" if correct != "A" else "B"
 
 
 def assert_question_is_sanitized(question):
@@ -112,6 +134,7 @@ def test_supplier_cannot_access_exam_summary(client, test_db):
 
 def test_material_clerk_can_access_summary_and_random_practice(client, test_db):
     seed_exam()
+    current_id = select_current_paper(test_db)
     clerk_id = seed_user(test_db, "clerk", "\u5f20\u6750\u6599", ROLE_CLERK)
     login(client, clerk_id, "clerk", "\u5f20\u6750\u6599", ROLE_CLERK)
 
@@ -120,7 +143,7 @@ def test_material_clerk_can_access_summary_and_random_practice(client, test_db):
 
     assert summary["success"] is True
     assert summary["data"]["can_manage"] is False
-    assert summary["data"]["current_paper"]["id"] == papers(test_db)[0]["id"]
+    assert summary["data"]["current_paper"]["id"] == current_id
     assert practice["success"] is True
     assert len(practice["data"]) == 5
     for question in practice["data"]:
@@ -209,6 +232,7 @@ def test_material_approval_owner_practice_questions_are_sanitized(client, test_d
 
 def test_material_approval_owner_attempt_detail_questions_are_sanitized(client, test_db):
     seed_exam()
+    select_current_paper(test_db)
     owner_id = seed_user(test_db, "owner", "\u5ba1\u6279\u4eba", ROLE_APPROVAL_OWNER)
     login(client, owner_id, "owner", "\u5ba1\u6279\u4eba", ROLE_APPROVAL_OWNER)
 
@@ -242,11 +266,28 @@ def test_manager_can_change_current_paper_and_summary_reflects_it(client, test_d
     assert summary["data"]["current_paper"]["title"] == target_paper["title"]
 
 
+def test_manager_can_clear_current_paper_and_summary_hides_formal_exam(client, test_db):
+    seed_exam()
+    select_current_paper(test_db)
+    manager_id = seed_user(test_db, "manager_clear", "\u7ba1\u7406\u5458", ROLE_MANAGER)
+    login(client, manager_id, "manager_clear", "\u7ba1\u7406\u5458", ROLE_MANAGER)
+
+    response = client.delete("/api/exam/admin/current-paper", headers=csrf_headers())
+    data = response.get_json()
+    summary = client.get("/api/exam/summary").get_json()
+
+    assert response.status_code == 200
+    assert data["success"] is True
+    assert data["data"] is None
+    assert summary["success"] is True
+    assert summary["data"]["current_paper"] is None
+
+
 def test_manager_cannot_set_non_formal_paper_current(client, test_db):
     seed_exam()
+    formal_paper_id = select_current_paper(test_db)
     manager_id = seed_user(test_db, "manager", "\u7ba1\u7406\u5458", ROLE_MANAGER)
     login(client, manager_id, "manager", "\u7ba1\u7406\u5458", ROLE_MANAGER)
-    formal_paper = papers(test_db)[0]
     cursor = test_db.cursor()
     cursor.execute(
         """
@@ -271,11 +312,12 @@ def test_manager_cannot_set_non_formal_paper_current(client, test_db):
     assert data["success"] is False
     assert "\u6b63\u5f0f\u8003\u8bd5\u5377" in data["message"]
     assert summary["success"] is True
-    assert summary["data"]["current_paper"]["id"] == formal_paper["id"]
+    assert summary["data"]["current_paper"]["id"] == formal_paper_id
 
 
 def test_clerk_can_start_submit_and_see_own_results(client, test_db):
     seed_exam()
+    select_current_paper(test_db)
     clerk_id = seed_user(test_db, "clerk", "\u5f20\u6750\u6599", ROLE_CLERK)
     login(client, clerk_id, "clerk", "\u5f20\u6750\u6599", ROLE_CLERK)
     current_paper = papers(test_db)[0]
@@ -306,12 +348,16 @@ def test_clerk_can_start_submit_and_see_own_results(client, test_db):
         assert_question_is_sanitized(question)
         assert "paper_title" not in question
     assert submit["success"] is True
+    assert submit["data"]["attempt"]["id"] == attempt_id
+    assert submit["data"]["items"]
+    assert any("correct_answer" in item or "reference_answer" in item for item in submit["data"]["items"])
     assert results["success"] is True
     assert [row["attempt_id"] for row in results["data"]] == [attempt_id]
 
 
 def test_clerk_cannot_start_attempt_for_non_current_paper(client, test_db):
     seed_exam()
+    select_current_paper(test_db)
     clerk_id = seed_user(test_db, "clerk", "\u5f20\u6750\u6599", ROLE_CLERK)
     login(client, clerk_id, "clerk", "\u5f20\u6750\u6599", ROLE_CLERK)
     non_current_paper = papers(test_db)[1]
@@ -332,8 +378,26 @@ def test_clerk_cannot_start_attempt_for_non_current_paper(client, test_db):
     assert attempts_for_paper == 0
 
 
+def test_clerk_cannot_start_formal_exam_before_manager_selects_current_paper(client, test_db):
+    seed_exam()
+    clerk_id = seed_user(test_db, "no_current", "\u672a\u9009\u8bd5\u5377", ROLE_CLERK)
+    login(client, clerk_id, "no_current", "\u672a\u9009\u8bd5\u5377", ROLE_CLERK)
+
+    summary = client.get("/api/exam/summary").get_json()
+    response = client.post("/api/exam/attempts", json={}, headers=csrf_headers())
+    data = response.get_json()
+
+    assert summary["success"] is True
+    assert summary["data"]["current_paper"] is None
+    assert response.status_code == 400
+    assert data["success"] is False
+    assert "current exam paper" in data["message"]
+    assert test_db.execute("SELECT COUNT(*) FROM exam_attempts").fetchone()[0] == 0
+
+
 def test_exam_attempt_post_without_csrf_token_is_rejected(client, test_db):
     seed_exam()
+    select_current_paper(test_db)
     clerk_id = seed_user(test_db, "clerk", "\u5f20\u6750\u6599", ROLE_CLERK)
     login(client, clerk_id, "clerk", "\u5f20\u6750\u6599", ROLE_CLERK)
 
@@ -346,6 +410,7 @@ def test_exam_attempt_post_without_csrf_token_is_rejected(client, test_db):
 
 def test_duplicate_submission_returns_non_success_response(client, test_db):
     seed_exam()
+    select_current_paper(test_db)
     clerk_id = seed_user(test_db, "clerk", "\u5f20\u6750\u6599", ROLE_CLERK)
     login(client, clerk_id, "clerk", "\u5f20\u6750\u6599", ROLE_CLERK)
     current_paper = papers(test_db)[0]
@@ -417,7 +482,7 @@ def test_practice_submit_returns_daily_pass_status(client, test_db):
     answers = {}
     for index, question in enumerate(practice["data"]):
         correct = correct_answers[question["id"]]
-        answers[str(question["id"])] = correct if index < 24 else ("A" if correct != "A" else "B")
+        answers[str(question["id"])] = correct if index < 24 else definitely_wrong_objective_answer(question, correct)
 
     submit = client.post(
         "/api/exam/practice/submit",
@@ -462,6 +527,7 @@ def test_wrong_practice_endpoint_scopes_to_current_user(client, test_db):
 
 def test_attempt_review_returns_answer_details_for_owner_only(client, test_db):
     seed_exam()
+    select_current_paper(test_db)
     clerk_id = seed_user(test_db, "review_owner", "\u56de\u770b\u672c\u4eba", ROLE_CLERK)
     other_id = seed_user(test_db, "review_other", "\u5176\u4ed6\u4eba\u5458", ROLE_CLERK)
     login(client, clerk_id, "review_owner", "\u56de\u770b\u672c\u4eba", ROLE_CLERK)
@@ -491,6 +557,7 @@ def test_attempt_review_returns_answer_details_for_owner_only(client, test_db):
 
 def test_manager_can_delete_exam_attempt_result(client, test_db):
     seed_exam()
+    select_current_paper(test_db)
     manager_id = seed_user(test_db, "delete_manager", "\u5220\u9664\u7ba1\u7406", ROLE_MANAGER)
     clerk_id = seed_user(test_db, "delete_api_clerk", "\u5220\u9664\u5458", ROLE_CLERK)
     login(client, clerk_id, "delete_api_clerk", "\u5220\u9664\u5458", ROLE_CLERK)
@@ -522,6 +589,7 @@ def test_manager_can_delete_exam_attempt_result(client, test_db):
 
 def test_material_clerk_cannot_delete_exam_attempt_result(client, test_db):
     seed_exam()
+    select_current_paper(test_db)
     clerk_id = seed_user(test_db, "delete_denied_clerk", "\u666e\u901a\u6750\u6599\u5458", ROLE_CLERK)
     login(client, clerk_id, "delete_denied_clerk", "\u666e\u901a\u6750\u6599\u5458", ROLE_CLERK)
     current_paper = papers(test_db)[0]

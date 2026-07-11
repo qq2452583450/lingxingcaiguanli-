@@ -20,6 +20,7 @@ QUESTION_SCORES = {
     "case_analysis": 15,
 }
 EXAM_SOURCE_PATTERN = "*材料进场验收标准专项考试卷*.docx"
+DESKTOP_QUESTION_BANK_DIR = Path.home() / "Desktop" / "题库及对应文献" / "题库"
 
 
 PAPER_TITLE_RE = re.compile(r"^第[一二三四五]套(?!.*参考答案)")
@@ -131,6 +132,97 @@ def parse_question_bank_docx(path: Path) -> dict:
         "duration_minutes": EXAM_DURATION_MINUTES,
         "questions": questions,
     }
+
+
+def parse_literature_question_bank_docx(path: Path) -> dict:
+    """Parse the current desktop question-bank format with inline answers/explanations."""
+    lines = _read_lines(path)
+    title = lines[0] if lines else path.stem
+    questions: list[dict] = []
+    current_type = "single_choice"
+    current: dict | None = None
+
+    def flush() -> None:
+        nonlocal current
+        if current and current.get("stem") and current.get("correct_answer"):
+            current["order_no"] = len(questions) + 1
+            current["type_order"] = sum(
+                1 for item in questions if item["question_type"] == current["question_type"]
+            ) + 1
+            questions.append(current)
+        current = None
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line == title:
+            continue
+        if _is_literature_section_heading(line):
+            flush()
+            current_type = "multiple_choice" if "多" in line else "single_choice"
+            continue
+
+        answer = _prefixed_text(line, "答案")
+        if answer is not None:
+            if current:
+                current["correct_answer"] = answer.replace(" ", "").upper()
+            continue
+
+        explanation = _prefixed_text(line, "解析")
+        if explanation is not None:
+            if current:
+                current["reference_answer"] = explanation
+                current["keywords"] = _keywords(explanation)
+            flush()
+            continue
+
+        inline_options = _parse_options(line)
+        if inline_options:
+            if current is not None:
+                current["options"].extend(inline_options)
+            continue
+
+        option = BANK_OPTION_RE.match(line)
+        if option:
+            if current is not None:
+                current["options"].append({"key": option.group(1), "text": option.group(2).strip()})
+            continue
+
+        flush()
+        current = _question(
+            question_type=current_type,
+            type_order=0,
+            stem=re.sub(r"^\d+\s*[.．、]\s*", "", line).strip(),
+            options=[],
+            correct_answer="",
+            reference_answer="",
+            keywords="",
+        )
+
+    flush()
+    if not questions:
+        raise ValueError(f"No questions parsed from {path}")
+    return {
+        "title": title,
+        "total_score": sum(question["score"] for question in questions),
+        "duration_minutes": EXAM_DURATION_MINUTES,
+        "questions": questions,
+    }
+
+
+def _is_literature_section_heading(line: str) -> bool:
+    return bool(re.match(r"^[一二三四五六七八九十]+[、.．]", line)) and (
+        "单" in line or "多" in line or "判断" in line
+    )
+
+
+def _prefixed_text(line: str, prefix: str) -> str | None:
+    for separator in (":", "："):
+        marker = prefix + separator
+        if line.startswith(marker):
+            return line[len(marker):].strip()
+    return None
 
 
 def _parse_bank_answer_tokens(lines: list[str]) -> dict[int, str]:
@@ -675,7 +767,7 @@ def _connection():
 
 
 def import_exam_papers_from_docx(path: Path) -> dict:
-    """Replace formal exam papers from a DOCX source and set the first as current."""
+    """Replace active formal exam papers without deleting historical records."""
     papers = parse_exam_docx(Path(path))
     conn, should_close = _connection()
     cursor = conn.cursor()
@@ -686,19 +778,51 @@ def import_exam_papers_from_docx(path: Path) -> dict:
             ("exam",),
         ).fetchall()
         existing_ids = [row["id"] for row in existing_rows]
-        removed = len(existing_ids)
+        archived = len(existing_ids)
 
-        _delete_existing_exam_papers(cursor, existing_ids)
+        _archive_existing_exam_papers(cursor, existing_ids)
+        _clear_current_exam_setting(cursor)
 
         inserted_ids = [insert_paper(cursor, paper, source_type="exam") for paper in papers]
-        if inserted_ids:
-            cursor.execute(
-                "INSERT OR REPLACE INTO exam_settings (key, value) VALUES (?, ?)",
-                ("current_exam_paper_id", str(inserted_ids[0])),
-            )
 
         conn.commit()
-        return {"inserted": len(inserted_ids), "removed": removed}
+        result = {"inserted": len(inserted_ids), "removed": 0}
+        if archived:
+            result["archived"] = archived
+        return result
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        if should_close:
+            conn.close()
+
+
+def import_exam_papers_from_question_bank_dir(path: Path = DESKTOP_QUESTION_BANK_DIR) -> dict:
+    """Replace active formal papers with all .docx files from the provided question-bank directory."""
+    source_dir = Path(path)
+    docx_files = sorted(source_dir.glob("*.docx"))
+    if not docx_files:
+        raise FileNotFoundError(f"No question bank .docx files found in {source_dir}")
+
+    papers = [parse_literature_question_bank_docx(docx_path) for docx_path in docx_files]
+    conn, should_close = _connection()
+    cursor = conn.cursor()
+
+    try:
+        existing_rows = cursor.execute(
+            "SELECT id FROM exam_papers WHERE source_type = ?",
+            ("exam",),
+        ).fetchall()
+        existing_ids = [row["id"] for row in existing_rows]
+        archived = len(existing_ids)
+        _archive_existing_exam_papers(cursor, existing_ids)
+        _clear_current_exam_setting(cursor)
+
+        inserted_ids = [insert_paper(cursor, paper, source_type="exam") for paper in papers]
+
+        conn.commit()
+        return {"inserted": len(inserted_ids), "archived": archived, "removed": 0}
     except Exception:
         conn.rollback()
         raise
@@ -716,15 +840,16 @@ def ensure_exam_sources_imported() -> dict:
             ("exam",),
         ).fetchall()
         existing_count = len(formal_rows)
-        if existing_count:
-            _ensure_current_exam_setting(conn, formal_rows[0]["id"])
-            conn.commit()
     finally:
         if should_close:
             conn.close()
 
     if existing_count:
         return {"created": False, "paper_count": existing_count}
+
+    if DESKTOP_QUESTION_BANK_DIR.exists() and list(DESKTOP_QUESTION_BANK_DIR.glob("*.docx")):
+        result = import_exam_papers_from_question_bank_dir(DESKTOP_QUESTION_BANK_DIR)
+        return {"created": True, "paper_count": result["inserted"]}
 
     source_dir = Path(__file__).resolve().parents[1] / "docs" / "exam_sources"
     try:
@@ -738,72 +863,21 @@ def ensure_exam_sources_imported() -> dict:
     return {"created": True, "paper_count": result["inserted"]}
 
 
-def _ensure_current_exam_setting(conn, fallback_paper_id: int) -> None:
-    current = conn.execute(
-        """
-        SELECT p.id
-        FROM exam_settings s
-        JOIN exam_papers p ON p.id = CAST(s.value AS INTEGER)
-        WHERE s.key = ?
-          AND p.source_type = 'exam'
-        """,
+def _clear_current_exam_setting(cursor) -> None:
+    cursor.execute(
+        "DELETE FROM exam_settings WHERE key = ?",
         ("current_exam_paper_id",),
-    ).fetchone()
-    if current:
-        return
-
-    conn.execute(
-        "INSERT OR REPLACE INTO exam_settings (key, value) VALUES (?, ?)",
-        ("current_exam_paper_id", str(fallback_paper_id)),
     )
 
 
-def _delete_existing_exam_papers(cursor, paper_ids: list[int]) -> None:
+def _archive_existing_exam_papers(cursor, paper_ids: list[int]) -> None:
     if not paper_ids:
         return
 
     placeholders = ",".join("?" for _ in paper_ids)
-    question_subquery = (
-        f"SELECT id FROM exam_questions WHERE paper_id IN ({placeholders})"
-    )
-    answer_subquery = (
-        f"""
-        SELECT a.id
-        FROM exam_answers a
-        LEFT JOIN exam_attempts t ON t.id = a.attempt_id
-        WHERE t.paper_id IN ({placeholders})
-           OR a.question_id IN ({question_subquery})
-        """
-    )
-    answer_params = [*paper_ids, *paper_ids]
-
     cursor.execute(
-        f"DELETE FROM exam_subjective_reviews WHERE answer_id IN ({answer_subquery})",
-        answer_params,
-    )
-    cursor.execute(
-        f"DELETE FROM exam_answers WHERE id IN ({answer_subquery})",
-        answer_params,
-    )
-    cursor.execute(
-        f"DELETE FROM exam_practice_attempts WHERE question_id IN ({question_subquery})",
-        paper_ids,
-    )
-    cursor.execute(
-        f"DELETE FROM exam_attempts WHERE paper_id IN ({placeholders})",
-        paper_ids,
-    )
-    cursor.execute(
-        f"DELETE FROM exam_question_options WHERE question_id IN ({question_subquery})",
-        paper_ids,
-    )
-    cursor.execute(
-        f"DELETE FROM exam_questions WHERE paper_id IN ({placeholders})",
-        paper_ids,
-    )
-    cursor.execute(
-        f"DELETE FROM exam_papers WHERE id IN ({placeholders})",
-        paper_ids,
+        f"UPDATE exam_papers SET source_type = ? WHERE id IN ({placeholders})",
+        ["archived_exam", *paper_ids],
     )
 
 

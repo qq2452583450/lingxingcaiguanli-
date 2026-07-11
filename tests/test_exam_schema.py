@@ -82,6 +82,47 @@ def test_exam_schema_upgrades_existing_practice_attempts_table():
     assert "idx_exam_practice_session" in indexes
 
 
+def test_exam_schema_clears_legacy_auto_current_paper_once():
+    from database.exam_schema import init_exam_schema
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT)")
+    conn.execute(
+        """
+        CREATE TABLE exam_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO exam_settings (key, value) VALUES (?, ?)",
+        ("current_exam_paper_id", "1"),
+    )
+
+    init_exam_schema(conn)
+
+    assert conn.execute(
+        "SELECT value FROM exam_settings WHERE key = ?",
+        ("current_exam_paper_id",),
+    ).fetchone() is None
+    assert conn.execute(
+        "SELECT value FROM exam_settings WHERE key = ?",
+        ("manual_current_exam_required_migration_20260711",),
+    ).fetchone()[0] == "done"
+
+    conn.execute(
+        "INSERT INTO exam_settings (key, value) VALUES (?, ?)",
+        ("current_exam_paper_id", "2"),
+    )
+    init_exam_schema(conn)
+
+    assert conn.execute(
+        "SELECT value FROM exam_settings WHERE key = ?",
+        ("current_exam_paper_id",),
+    ).fetchone()[0] == "2"
+
+
 def test_exam_schema_preserves_caller_transaction_rollback():
     from database.exam_schema import init_exam_schema
 

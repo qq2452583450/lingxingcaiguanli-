@@ -74,6 +74,7 @@ def list_papers() -> list[dict]:
             """
             SELECT id, title, duration_minutes, total_score, source_type, create_time
             FROM exam_papers
+            WHERE source_type != 'archived_exam'
             ORDER BY id
             """
         ).fetchall()
@@ -163,6 +164,8 @@ def get_random_practice_questions(limit=10, paper_id=None) -> list[dict]:
         if paper_id is not None:
             where_parts.append("q.paper_id = ?")
             params.append(paper_id)
+        else:
+            where_parts.append("p.source_type != 'archived_exam'")
         where = "WHERE " + " AND ".join(where_parts)
         params.append(limit)
         question_rows = conn.execute(
@@ -238,7 +241,17 @@ def _load_objective_questions_by_ids(conn, question_ids: list[int]) -> dict[int,
     }
 
 
-def _practice_item(question: dict, answer_text: str, is_correct: bool, created_at: str, session_id: str | None) -> dict:
+def _practice_item(
+    question: dict,
+    answer_text: str,
+    is_correct: bool,
+    created_at: str,
+    session_id: str | None,
+    accuracy_credit: float | None = None,
+) -> dict:
+    credit = 1.0 if is_correct else 0.0
+    if accuracy_credit is not None:
+        credit = round(float(accuracy_credit), 4)
     return {
         "session_id": session_id,
         "question_id": question["id"],
@@ -252,6 +265,7 @@ def _practice_item(question: dict, answer_text: str, is_correct: bool, created_a
         "correct_answer": question["correct_answer"],
         "reference_answer": question.get("reference_answer"),
         "is_correct": bool(is_correct),
+        "accuracy_credit": credit,
         "score": question["score"],
         "created_at": created_at,
     }
@@ -269,26 +283,29 @@ def record_practice_answers(user_id: int, answers: dict) -> dict:
         for question_id in question_ids:
             question = questions[question_id]
             answer_text = answer_map[str(question_id)]
-            is_correct = grade_objective(
+            earned_score = grade_objective(
                 question["question_type"],
                 answer_text,
                 question["correct_answer"],
                 question["score"],
-            ) == float(question["score"])
+            )
+            is_correct = earned_score == float(question["score"])
+            accuracy_credit = round(earned_score / float(question["score"]), 4) if question["score"] else 0.0
             conn.execute(
                 """
                 INSERT INTO exam_practice_attempts (
                     user_id, question_id, answer_text, is_correct,
-                    created_at, practice_session_id
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    accuracy_credit, created_at, practice_session_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (user_id, question_id, answer_text, 1 if is_correct else 0, created_at, session_id),
+                (user_id, question_id, answer_text, 1 if is_correct else 0, accuracy_credit, created_at, session_id),
             )
-            items.append(_practice_item(question, answer_text, is_correct, created_at, session_id))
+            items.append(_practice_item(question, answer_text, is_correct, created_at, session_id, accuracy_credit))
         conn.commit()
         total_count = len(items)
         correct_count = sum(1 for item in items if item["is_correct"])
-        accuracy = round(correct_count / total_count, 4) if total_count else 0.0
+        accuracy_credit = sum(float(item["accuracy_credit"]) for item in items)
+        accuracy = round(accuracy_credit / total_count, 4) if total_count else 0.0
         passed = (
             total_count >= DAILY_PRACTICE_QUESTION_COUNT
             and accuracy >= DAILY_PRACTICE_REQUIRED_ACCURACY
@@ -318,6 +335,7 @@ def get_daily_practice_status(user_id: int, conn=None) -> dict:
             SELECT COALESCE(practice_session_id, CAST(id AS TEXT)) AS session_id,
                    COUNT(*) AS total_count,
                    SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) AS correct_count,
+                   SUM(COALESCE(accuracy_credit, CASE WHEN is_correct = 1 THEN 1 ELSE 0 END)) AS accuracy_credit,
                    MIN(created_at) AS started_at
             FROM exam_practice_attempts
             WHERE user_id = ?
@@ -331,7 +349,8 @@ def get_daily_practice_status(user_id: int, conn=None) -> dict:
         for row in rows:
             total_count = int(row["total_count"] or 0)
             correct_count = int(row["correct_count"] or 0)
-            accuracy = round(correct_count / total_count, 4) if total_count else 0.0
+            accuracy_credit = float(row["accuracy_credit"] or 0)
+            accuracy = round(accuracy_credit / total_count, 4) if total_count else 0.0
             sessions.append(
                 {
                     "session_id": row["session_id"],
@@ -381,6 +400,7 @@ def list_daily_checkins(target_date: str | None = None) -> list[dict]:
                    COALESCE(practice_session_id, CAST(id AS TEXT)) AS session_id,
                    COUNT(*) AS total_count,
                    SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) AS correct_count,
+                   SUM(COALESCE(accuracy_credit, CASE WHEN is_correct = 1 THEN 1 ELSE 0 END)) AS accuracy_credit,
                    MIN(created_at) AS started_at,
                    MAX(created_at) AS latest_at
             FROM exam_practice_attempts
@@ -393,7 +413,8 @@ def list_daily_checkins(target_date: str | None = None) -> list[dict]:
         for row in rows:
             total_count = int(row["total_count"] or 0)
             correct_count = int(row["correct_count"] or 0)
-            accuracy = round(correct_count / total_count, 4) if total_count else 0.0
+            accuracy_credit = float(row["accuracy_credit"] or 0)
+            accuracy = round(accuracy_credit / total_count, 4) if total_count else 0.0
             session = {
                 "session_id": row["session_id"],
                 "total_count": total_count,
@@ -450,6 +471,7 @@ def _practice_history_rows(user_id: int, only_wrong: bool, limit: int) -> list[d
         rows = conn.execute(
             f"""
             SELECT pa.id, pa.practice_session_id, pa.answer_text, pa.is_correct,
+                   COALESCE(pa.accuracy_credit, CASE WHEN pa.is_correct = 1 THEN 1 ELSE 0 END) AS accuracy_credit,
                    pa.created_at, q.id AS question_id, q.paper_id,
                    p.title AS paper_title, q.question_type, q.order_no,
                    q.stem, q.correct_answer, q.reference_answer, q.score
@@ -488,6 +510,7 @@ def _practice_history_rows(user_id: int, only_wrong: bool, limit: int) -> list[d
                     bool(row["is_correct"]),
                     row["created_at"],
                     session_id,
+                    row["accuracy_credit"],
                 )
             )
         return items
@@ -602,7 +625,13 @@ def grade_objective(
     correct = _normalize_answer(correct_answer)
 
     if question_type == "multiple_choice":
-        return float(score) if set(candidate) == set(correct) and len(candidate) == len(correct) else 0.0
+        candidate_set = set(candidate)
+        correct_set = set(correct)
+        if not candidate_set or not correct_set:
+            return 0.0
+        if candidate_set - correct_set:
+            return 0.0
+        return round(float(score) * len(candidate_set) / len(correct_set), 4)
 
     return float(score) if candidate == correct else 0.0
 

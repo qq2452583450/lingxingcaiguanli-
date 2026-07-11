@@ -93,6 +93,7 @@ def init_exam_schema(conn):
             question_id INTEGER NOT NULL,
             answer_text TEXT NOT NULL,
             is_correct INTEGER,
+            accuracy_credit REAL DEFAULT 0,
             created_at TEXT NOT NULL,
             practice_session_id TEXT,
             FOREIGN KEY (user_id) REFERENCES users(id),
@@ -122,6 +123,38 @@ def init_exam_schema(conn):
         cursor.execute(
             "ALTER TABLE exam_practice_attempts ADD COLUMN practice_session_id TEXT"
         )
+    if "accuracy_credit" not in practice_columns:
+        cursor.execute(
+            "ALTER TABLE exam_practice_attempts ADD COLUMN accuracy_credit REAL DEFAULT 0"
+        )
+        cursor.execute(
+            """
+            UPDATE exam_practice_attempts
+            SET accuracy_credit = CASE WHEN is_correct = 1 THEN 1 ELSE 0 END
+            WHERE accuracy_credit IS NULL OR accuracy_credit = 0
+            """
+        )
+
+    _require_manual_current_exam_selection(cursor)
 
     for statement in index_statements:
         cursor.execute(statement)
+
+
+def _require_manual_current_exam_selection(cursor):
+    migration_key = "manual_current_exam_required_migration_20260711"
+    migrated = cursor.execute(
+        "SELECT value FROM exam_settings WHERE key = ?",
+        (migration_key,),
+    ).fetchone()
+    if migrated:
+        return
+
+    cursor.execute(
+        "DELETE FROM exam_settings WHERE key = ?",
+        ("current_exam_paper_id",),
+    )
+    cursor.execute(
+        "INSERT INTO exam_settings (key, value) VALUES (?, ?)",
+        (migration_key, "done"),
+    )

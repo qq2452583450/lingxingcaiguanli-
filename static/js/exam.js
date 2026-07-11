@@ -444,12 +444,12 @@ async function submitExamAttempt(event, attemptId) {
     const submitButton = form.querySelector('button[type="submit"]');
     if (submitButton) submitButton.disabled = true;
     try {
-        await examJson(`/api/exam/attempts/${attemptId}/submit`, {
+        const result = await examJson(`/api/exam/attempts/${attemptId}/submit`, {
             method: 'POST',
             body: JSON.stringify({ answers: collectExamAnswers(form) })
         });
         examNotify('试卷已提交', 'success');
-        await loadMyExamResults();
+        renderAttemptReview(result.data || {});
     } catch (e) {
         if (submitButton) submitButton.disabled = false;
         examNotify(e.message || '提交失败', 'error');
@@ -476,14 +476,20 @@ async function loadExamPapersAdmin() {
         ]);
         examSummary = summary.data || examSummary;
         const currentId = examSummary?.current_paper?.id;
-        const rows = (papers.data || []).map(paper => `
+        const rows = (papers.data || []).map(paper => {
+            const isCurrent = Number(paper.id) === Number(currentId);
+            const action = isCurrent
+                ? '<button class="btn btn-warning btn-sm" type="button" onclick="clearCurrentExamPaper()">取消当前</button>'
+                : `<button class="btn btn-secondary btn-sm" type="button" onclick="setCurrentExamPaper(${paper.id})">设为当前</button>`;
+            return `
             <tr>
                 <td>${examEscape(paper.title)}</td>
                 <td>${examEscape(paper.source_type || '-')}</td>
                 <td>${examEscape(paper.duration_minutes || '-')}</td>
                 <td>${examScore(paper.total_score)}</td>
-                <td>${Number(paper.id) === Number(currentId) ? '<span class="badge badge-ok">当前</span>' : `<button class="btn btn-secondary btn-sm" type="button" onclick="setCurrentExamPaper(${paper.id})">设为当前</button>`}</td>
-            </tr>`).join('');
+                <td>${isCurrent ? '<span class="badge badge-ok">当前</span>' : ''}${action}</td>
+            </tr>`;
+        }).join('');
         examContent().innerHTML = `
             <div class="exam-panel">
                 <div class="exam-toolbar"><h2>题库管理</h2><button class="btn btn-secondary" type="button" onclick="loadExamPapersAdmin()"><i data-lucide="refresh-cw"></i>刷新</button></div>
@@ -505,6 +511,23 @@ async function setCurrentExamPaper(paperId) {
         await loadExamPapersAdmin();
     } catch (e) {
         examNotify(e.message || '设置失败', 'error');
+    }
+}
+
+async function clearCurrentExamPaper() {
+    if (!confirm('确认取消当前正式考试试卷？取消后材料员将不能进入正式考试。')) return;
+    try {
+        await examJson('/api/exam/admin/current-paper', {
+            method: 'DELETE'
+        });
+        examSummary = {
+            ...(examSummary || {}),
+            current_paper: null
+        };
+        examNotify('已取消当前试卷', 'success');
+        await loadExamPapersAdmin();
+    } catch (e) {
+        examNotify(e.message || '取消失败', 'error');
     }
 }
 

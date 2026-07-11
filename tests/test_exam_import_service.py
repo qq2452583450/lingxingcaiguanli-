@@ -26,7 +26,7 @@ def test_parse_receiving_exam_docx_has_five_complete_papers():
     assert all(len(paper["questions"]) == 38 for paper in papers)
 
 
-def test_import_exam_papers_sets_current_exam_paper(test_db):
+def test_import_exam_papers_does_not_auto_select_current_exam_paper(test_db):
     result = import_exam_papers_from_docx(source_docx())
 
     papers = list_papers()
@@ -34,8 +34,8 @@ def test_import_exam_papers_sets_current_exam_paper(test_db):
 
     assert result == {"inserted": 5, "removed": 0}
     assert len(papers) == 5
-    assert current["title"] == "\u7b2c\u4e00\u5957\uff08\u65b0\u7f16\u5b9e\u64cd\u7248\uff09"
-    assert len(get_paper_questions(current["id"])) == 38
+    assert current is None
+    assert len(get_paper_questions(papers[0]["id"])) == 38
 
 
 def test_ensure_exam_sources_imported_is_idempotent(test_db):
@@ -47,9 +47,8 @@ def test_ensure_exam_sources_imported_is_idempotent(test_db):
     assert len([paper for paper in list_papers() if paper["source_type"] == "exam"]) == 5
 
 
-def test_ensure_exam_sources_imported_restores_missing_current_setting(test_db):
+def test_ensure_exam_sources_imported_keeps_missing_current_setting(test_db):
     import_exam_papers_from_docx(source_docx())
-    first_formal_paper = list_papers()[0]
     test_db.execute(
         "DELETE FROM exam_settings WHERE key = ?",
         ("current_exam_paper_id",),
@@ -58,12 +57,11 @@ def test_ensure_exam_sources_imported_restores_missing_current_setting(test_db):
     result = ensure_exam_sources_imported()
 
     assert result == {"created": False, "paper_count": 5}
-    assert get_current_exam_paper()["id"] == first_formal_paper["id"]
+    assert get_current_exam_paper() is None
 
 
-def test_ensure_exam_sources_imported_repairs_non_exam_current_setting(test_db):
+def test_ensure_exam_sources_imported_does_not_replace_non_exam_current_setting(test_db):
     import_exam_papers_from_docx(source_docx())
-    first_formal_paper = list_papers()[0]
     cursor = test_db.cursor()
     cursor.execute(
         """
@@ -83,12 +81,11 @@ def test_ensure_exam_sources_imported_repairs_non_exam_current_setting(test_db):
     result = ensure_exam_sources_imported()
 
     assert result == {"created": False, "paper_count": 5}
-    assert get_current_exam_paper()["id"] == first_formal_paper["id"]
+    assert get_current_exam_paper() is None
 
 
-def test_ensure_exam_sources_imported_repairs_stale_current_setting(test_db):
+def test_ensure_exam_sources_imported_does_not_replace_stale_current_setting(test_db):
     import_exam_papers_from_docx(source_docx())
-    first_formal_paper = list_papers()[0]
     test_db.execute(
         "INSERT OR REPLACE INTO exam_settings (key, value) VALUES (?, ?)",
         ("current_exam_paper_id", "999999"),
@@ -97,7 +94,7 @@ def test_ensure_exam_sources_imported_repairs_stale_current_setting(test_db):
     result = ensure_exam_sources_imported()
 
     assert result == {"created": False, "paper_count": 5}
-    assert get_current_exam_paper()["id"] == first_formal_paper["id"]
+    assert get_current_exam_paper() is None
     assert len([paper for paper in list_papers() if paper["source_type"] == "exam"]) == 5
 
 
@@ -119,9 +116,9 @@ def test_startup_exam_source_hook_uses_import_helper(monkeypatch):
     assert calls == [True]
 
 
-def test_reimport_removes_old_formal_exam_lifecycle_rows(test_db):
+def test_reimport_archives_old_formal_exam_without_removing_lifecycle_rows(test_db):
     first_result = import_exam_papers_from_docx(source_docx())
-    old_current = get_current_exam_paper()
+    old_current = list_papers()[0]
     old_question = get_paper_questions(old_current["id"])[0]
 
     cursor = test_db.cursor()
@@ -176,23 +173,26 @@ def test_reimport_removes_old_formal_exam_lifecycle_rows(test_db):
     current = get_current_exam_paper()
 
     assert first_result == {"inserted": 5, "removed": 0}
-    assert second_result == {"inserted": 5, "removed": 5}
+    assert second_result == {"inserted": 5, "archived": 5, "removed": 0}
     assert len([paper for paper in papers if paper["source_type"] == "exam"]) == 5
-    assert current["title"] == "\u7b2c\u4e00\u5957\uff08\u65b0\u7f16\u5b9e\u64cd\u7248\uff09"
-    assert current["id"] != old_current["id"]
+    assert current is None
     assert test_db.execute(
         "SELECT COUNT(*) FROM exam_attempts WHERE id = ?",
         (attempt_id,),
-    ).fetchone()[0] == 0
+    ).fetchone()[0] == 1
     assert test_db.execute(
         "SELECT COUNT(*) FROM exam_answers WHERE id = ?",
         (answer_id,),
-    ).fetchone()[0] == 0
+    ).fetchone()[0] == 1
     assert test_db.execute(
         "SELECT COUNT(*) FROM exam_subjective_reviews WHERE id = ?",
         (review_id,),
-    ).fetchone()[0] == 0
+    ).fetchone()[0] == 1
     assert test_db.execute(
         "SELECT COUNT(*) FROM exam_practice_attempts WHERE id = ?",
         (practice_id,),
-    ).fetchone()[0] == 0
+    ).fetchone()[0] == 1
+    assert test_db.execute(
+        "SELECT source_type FROM exam_papers WHERE id = ?",
+        (old_current["id"],),
+    ).fetchone()[0] == "archived_exam"
