@@ -1,5 +1,8 @@
 """Exam center API blueprint."""
 
+import sqlite3
+import time
+
 from flask import Blueprint, jsonify, request, session
 
 from helpers import get_db
@@ -51,6 +54,27 @@ def _ensure_exam_settings_table(conn):
         )
         """
     )
+
+
+def _clear_current_exam_setting(conn):
+    last_error = None
+    for _ in range(3):
+        try:
+            _ensure_exam_settings_table(conn)
+            conn.execute(
+                "DELETE FROM exam_settings WHERE key = ?",
+                ("current_exam_paper_id",),
+            )
+            conn.commit()
+            return
+        except sqlite3.OperationalError as exc:
+            last_error = exc
+            conn.rollback()
+            if "locked" in str(exc).lower() or "no such table" in str(exc).lower():
+                time.sleep(0.2)
+                continue
+            raise
+    raise last_error
 
 
 def _require_exam_user():
@@ -388,12 +412,10 @@ def clear_current_paper():
         return denied
 
     conn = get_db()
-    _ensure_exam_settings_table(conn)
-    conn.execute(
-        "DELETE FROM exam_settings WHERE key = ?",
-        ("current_exam_paper_id",),
-    )
-    conn.commit()
+    try:
+        _clear_current_exam_setting(conn)
+    except sqlite3.OperationalError as exc:
+        return _json_error(f"取消当前试卷失败：{exc}", 500)
     return jsonify({"success": True, "data": None})
 
 

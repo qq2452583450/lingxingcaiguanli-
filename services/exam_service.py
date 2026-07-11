@@ -756,14 +756,19 @@ def _normalize_answer(value: str) -> str:
     return (value or "").strip().replace(" ", "").upper()
 
 
+def _normalize_option_answer(value: str) -> str:
+    separators = {",", "，", "、", ";", "；", "|", "/", "\\", ".", "．", "。"}
+    return "".join(char for char in _normalize_answer(value) if char not in separators)
+
+
 def grade_objective(
     question_type: str,
     candidate_answer: str,
     correct_answer: str,
     score: float,
 ) -> float:
-    candidate = _normalize_answer(candidate_answer)
-    correct = _normalize_answer(correct_answer)
+    candidate = _normalize_option_answer(candidate_answer)
+    correct = _normalize_option_answer(correct_answer)
 
     if question_type == "multiple_choice":
         candidate_set = set(candidate)
