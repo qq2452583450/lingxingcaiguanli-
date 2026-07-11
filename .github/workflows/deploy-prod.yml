@@ -39,4 +39,4 @@ jobs:
           script_stop: true
           command_timeout: 2m
           script: |
-            powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$AppDir = 'C:\wwwroot\lxclgl'; Write-Output ('runtime_sha=' + (git -C $AppDir rev-parse HEAD)); $ErrLog = Join-Path $AppDir '.server-err.log'; if (Test-Path -LiteralPath $ErrLog) { Write-Output 'recent_server_errors:'; Get-Content -LiteralPath $ErrLog -Tail 120 } else { Write-Output 'recent_server_errors: none' }"
+            powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$AppDir = 'C:\wwwroot\lxclgl'; Write-Output ('runtime_sha=' + (git -C $AppDir rev-parse HEAD)); Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'python*.exe' -and $_.CommandLine -match 'app\.py|lxclgl' } | ForEach-Object { Write-Output ('python_process=' + $_.ProcessId + '|' + $_.CommandLine) }; sc.exe qc lxclgl; $ErrLog = Join-Path $AppDir '.server-err.log'; if (Test-Path -LiteralPath $ErrLog) { Write-Output 'recent_server_errors:'; Get-Content -LiteralPath $ErrLog -Tail 120 } else { Write-Output 'recent_server_errors: none' }"
