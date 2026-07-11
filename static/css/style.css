@@ -550,6 +550,141 @@ td input[type="checkbox"] {
     margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--bdr);
 }
 
+/* ============ Exam Center ============ */
+.exam-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 14px;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--bdr);
+}
+.exam-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 14px;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--txt2);
+    cursor: pointer;
+    white-space: nowrap;
+    font-family: var(--font);
+    font-size: 13px;
+    font-weight: 600;
+}
+.exam-tab:hover { color: var(--pri); }
+.exam-tab.active {
+    color: var(--pri);
+    border-bottom-color: var(--pri);
+}
+.exam-tab svg { width: 16px; height: 16px; }
+.exam-content {
+    min-height: 320px;
+}
+.exam-panel {
+    background: var(--surf);
+    border: 1px solid var(--bdr);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--sh);
+    padding: 18px;
+}
+.exam-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.exam-toolbar h2 {
+    margin: 0 0 4px;
+    font-size: 17px;
+    color: var(--txt);
+}
+.exam-toolbar p,
+.exam-muted {
+    color: var(--txt2);
+    font-size: 13px;
+}
+.exam-question-list {
+    display: grid;
+    gap: 12px;
+}
+.exam-question {
+    border: 1px solid var(--bdr);
+    border-radius: var(--radius);
+    background: #fff;
+    padding: 14px;
+}
+.exam-question-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+.exam-question-head strong {
+    line-height: 1.6;
+}
+.exam-question-head span,
+.exam-question-paper {
+    flex-shrink: 0;
+    color: var(--txt2);
+    font-size: 12px;
+}
+.exam-question-paper {
+    margin-bottom: 8px;
+}
+.exam-options {
+    display: grid;
+    gap: 8px;
+}
+.exam-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--bdr);
+    border-radius: var(--radius);
+    background: #f8fafc;
+    cursor: pointer;
+}
+.exam-option:hover {
+    border-color: var(--pri);
+    background: var(--pri-l);
+}
+.exam-option input {
+    margin-top: 3px;
+    flex-shrink: 0;
+}
+.exam-answer-text {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--bdr);
+    border-radius: var(--radius);
+    font-family: var(--font);
+    font-size: 14px;
+    resize: vertical;
+}
+.exam-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+}
+.exam-review-form {
+    display: grid;
+    grid-template-columns: 120px 1fr auto;
+    gap: 8px;
+    margin-top: 12px;
+}
+.exam-review-form input {
+    padding: 8px 10px;
+    border: 1px solid var(--bdr);
+    border-radius: var(--radius);
+    font-family: var(--font);
+}
+
 /* ============ Loading/Error states ============ */
 .loading { text-align: center; padding: 40px; color: var(--txt2); }
 
@@ -649,6 +784,30 @@ td input[type="checkbox"] {
     .owner-table-wrap { max-height: calc(100vh - 250px); }
     .owner-form-grid { grid-template-columns: 1fr; }
     .owner-form-grid .owner-field-wide { grid-column: span 1; }
+
+    .exam-tabs { gap: 0; }
+    .exam-tab {
+        flex: 0 0 auto;
+        padding: 8px 10px;
+        font-size: 12px;
+    }
+    .exam-panel { padding: 12px; }
+    .exam-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .exam-toolbar .btn,
+    .exam-actions .btn {
+        width: 100%;
+        justify-content: center;
+    }
+    .exam-question-head {
+        flex-direction: column;
+        gap: 4px;
+    }
+    .exam-review-form {
+        grid-template-columns: 1fr;
+    }
 
     /* ---- 询价卡片 ---- */
     .inquiry-item-card .item-header { flex-direction: column !important; gap: 8px !important; align-items: flex-start !important; }

@@ -67,7 +67,8 @@
                 <div class="nav-item" data-module="stock_out" onclick="showModule('stock_out')"><i data-lucide="package-minus"></i> <span class="nav-label">出库管理</span></div>
                 <div class="nav-item" data-module="stock_transfer" onclick="showModule('stock_transfer')"><i data-lucide="arrow-left-right"></i> <span class="nav-label">材料调拨</span></div>
                 <div class="nav-item" data-module="owner_supplied" onclick="showModule('owner_supplied')"><i data-lucide="clipboard-check"></i> <span class="nav-label">甲供材量控</span></div>
-                <div class="nav-item" data-module="petty_cash" onclick="showModule('petty_cash')"><i data-lucide="wallet"></i> <span class="nav-label">备用金</span></div></div>
+                <div class="nav-item" data-module="petty_cash" onclick="showModule('petty_cash')"><i data-lucide="wallet"></i> <span class="nav-label">备用金</span></div>
+                <div class="nav-item" data-module="exam" onclick="showModule('exam')"><i data-lucide="clipboard-list"></i> <span class="nav-label">考试中心</span></div></div>
                 <div class="nav-group"><div class="nav-group-title">数据中心</div>
                 <div class="nav-item active" data-module="home" onclick="showModule('home')"><i data-lucide="home"></i> <span class="nav-label">首页</span></div>
                 <div class="nav-item" data-module="material" onclick="showModule('material')"><i data-lucide="package"></i> <span class="nav-label">材料信息</span></div>
@@ -268,6 +269,25 @@
                         </table>
                     </div>
                 </div>
+            </div>
+
+            <div id="examModule" class="module hidden">
+                <div class="page-header">
+                    <div>
+                        <h1>考试中心</h1>
+                        <p class="breadcrumb">练习、考试、阅卷与成绩查询</p>
+                    </div>
+                </div>
+                <div class="exam-tabs" role="tablist">
+                    <button class="exam-tab exam-taker-only active" data-exam-tab="practice" onclick="showExamTab('practice')" type="button"><i data-lucide="shuffle"></i>随机练习</button>
+                    <button class="exam-tab exam-taker-only" data-exam-tab="exam" onclick="showExamTab('exam')" type="button"><i data-lucide="file-pen-line"></i>正式考试</button>
+                    <button class="exam-tab exam-taker-only" data-exam-tab="results" onclick="showExamTab('results')" type="button"><i data-lucide="chart-no-axes-column"></i>我的成绩</button>
+                    <button class="exam-tab exam-manager-only" data-exam-tab="papers" onclick="showExamTab('papers')" type="button"><i data-lucide="book-open-check"></i>题库管理</button>
+                    <button class="exam-tab exam-manager-only" data-exam-tab="reviews" onclick="showExamTab('reviews')" type="button"><i data-lucide="badge-check"></i>阅卷</button>
+                    <button class="exam-tab exam-manager-only" data-exam-tab="checkins" onclick="showExamTab('checkins')" type="button"><i data-lucide="calendar-check"></i>打卡记录</button>
+                    <button class="exam-tab exam-manager-only" data-exam-tab="adminResults" onclick="showExamTab('adminResults')" type="button"><i data-lucide="search-check"></i>成绩查询</button>
+                </div>
+                <div id="examContent" class="exam-content"></div>
             </div>
 
             <!-- 材料管理 -->
@@ -1760,6 +1780,7 @@
         </div>
     </div>
 
+    <script src="/static/js/exam.js?v=2026062601"></script>
     <script src="/static/js/app.js?v=2026060403"></script>
 </body>
 </html>

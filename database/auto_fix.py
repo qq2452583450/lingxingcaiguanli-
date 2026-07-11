@@ -5,11 +5,14 @@
 import sqlite3
 import config
 
+from database.exam_schema import init_exam_schema
+
 def auto_fix_database():
     """自动检测并修复数据库表结构"""
     print("检查数据库表结构...")
 
     conn = sqlite3.connect(config.DATABASE_PATH)
+    init_exam_schema(conn)
     cursor = conn.cursor()
 
     table_schemas = {
@@ -418,6 +421,9 @@ def auto_fix_database():
             'submitted_at': 'TEXT',
             'updated_at': 'TEXT',
             'supplier_remark': 'TEXT',
+        },
+        'exam_practice_attempts': {
+            'practice_session_id': 'TEXT',
         },
     }
 
