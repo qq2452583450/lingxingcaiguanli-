@@ -968,14 +968,29 @@ def _normalize_option_answer(value: str) -> str:
     return "".join(char for char in _normalize_answer(value) if char not in separators)
 
 
+def _normalize_true_false_answer(value: str) -> str:
+    normalized = _normalize_option_answer(value)
+    truthy = {"√", "正", "正确", "对", "是", "TRUE", "T", "YES", "Y"}
+    falsy = {"×", "X", "错", "错误", "否", "FALSE", "F", "NO", "N"}
+    if normalized in truthy:
+        return "TRUE"
+    if normalized in falsy:
+        return "FALSE"
+    return normalized
+
+
 def grade_objective(
     question_type: str,
     candidate_answer: str,
     correct_answer: str,
     score: float,
 ) -> float:
-    candidate = _normalize_option_answer(candidate_answer)
-    correct = _normalize_option_answer(correct_answer)
+    if question_type == "true_false":
+        candidate = _normalize_true_false_answer(candidate_answer)
+        correct = _normalize_true_false_answer(correct_answer)
+    else:
+        candidate = _normalize_option_answer(candidate_answer)
+        correct = _normalize_option_answer(correct_answer)
 
     if question_type == "multiple_choice":
         candidate_set = set(candidate)

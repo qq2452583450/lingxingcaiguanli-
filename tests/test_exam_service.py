@@ -310,6 +310,13 @@ def test_multiple_choice_comma_separated_full_answer_scores_full_credit():
     assert grade_objective("multiple_choice", "A，C", "AC", 3) == 3.0
 
 
+def test_true_false_scores_symbol_answer_against_chinese_correct_answer():
+    assert grade_objective("true_false", "\u221a", "\u6b63\u786e", 1) == 1.0
+    assert grade_objective("true_false", "\u00d7", "\u9519\u8bef", 1) == 1.0
+    assert grade_objective("true_false", "\u6b63\u786e", "\u221a", 1) == 1.0
+    assert grade_objective("true_false", "\u9519\u8bef", "\u00d7", 1) == 1.0
+
+
 def test_daily_practice_status_passes_at_eighty_percent(test_db):
     paper, _, _ = load_exam(test_db)
     user_id = seed_user(test_db, "daily_clerk", "\u6bcf\u65e5\u6750\u6599\u5458", "\u6750\u6599\u5458")
