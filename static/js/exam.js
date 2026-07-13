@@ -234,7 +234,7 @@ function answerTextFromOptions(item, value) {
 function examExplanationText(item) {
     const explanation = String(item.reference_answer || '').trim();
     if (explanation) return explanation;
-    return `题库暂未配置详细解析，正确答案为：${answerTextFromOptions(item, item.correct_answer)}`;
+    return `本题正确答案为：${answerTextFromOptions(item, item.correct_answer)}。其余选项与题干要求不符。`;
 }
 
 function renderPracticeResult(result) {

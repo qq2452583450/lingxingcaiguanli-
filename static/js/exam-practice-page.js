@@ -179,7 +179,7 @@ function renderResult(result) {
             <strong>${index + 1}. ${practiceEscape(item.stem)}</strong>
             <p>你的答案：${practiceEscape(answerLabel(item, item.answer_text))}</p>
             <p>正确答案：${practiceEscape(answerLabel(item, item.correct_answer))}</p>
-            <p>解析：${practiceEscape(item.reference_answer || `题库暂未配置详细解析，正确答案为：${answerLabel(item, item.correct_answer)}`)}</p>
+            <p>解析：${practiceEscape(item.reference_answer || `本题正确答案为：${answerLabel(item, item.correct_answer)}。其余选项与题干要求不符。`)}</p>
             <p>结果：${item.is_correct ? '正确' : '错误'}</p>
         </article>
     `).join('');

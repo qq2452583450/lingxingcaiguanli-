@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from services.exam_import_service import import_exam_papers_from_docx
+from services.exam_import_service import import_exam_papers_from_docx, import_exam_papers_from_question_bank_dir
 from services.exam_service import (
     can_manage_exam,
     can_take_exam,
@@ -12,6 +12,7 @@ from services.exam_service import (
     get_paper_questions,
     get_random_practice_questions,
     list_daily_checkins,
+    list_papers,
     list_practice_history,
     list_pending_reviews,
     list_results,
@@ -221,7 +222,49 @@ def test_wrong_practice_records_include_a_fallback_explanation_when_source_has_n
     wrong = list_wrong_practice_questions(user_id)
 
     assert wrong[0]["reference_answer"]
-    assert "正确答案" in wrong[0]["reference_answer"]
+    assert "暂未配置详细解析" not in wrong[0]["reference_answer"]
+
+
+def test_wrong_practice_records_backfill_real_explanation_from_desktop_question_bank(test_db):
+    source_dir = Path.home() / "Desktop" / "\u9898\u5e93"
+    if not source_dir.exists():
+        pytest.skip("Desktop question bank is not available on this machine")
+
+    import_exam_papers_from_question_bank_dir(source_dir)
+    user_id = seed_user(test_db, "wrong_real_explanation", "\u771f\u5b9e\u89e3\u6790", "\u6750\u6599\u5458")
+    question = get_paper_questions(list_papers()[0]["id"])[0]
+    original_reference = question["reference_answer"]
+    test_db.execute(
+        "UPDATE exam_questions SET reference_answer = '' WHERE id = ?",
+        (question["id"],),
+    )
+    wrong_answer = "A" if question["correct_answer"] != "A" else "B"
+
+    record_practice_answers(user_id, {str(question["id"]): wrong_answer})
+    wrong = list_wrong_practice_questions(user_id)
+
+    assert wrong[0]["reference_answer"] == original_reference
+
+
+def test_wrong_practice_records_ignore_archived_exam_questions(test_db):
+    source_dir = Path.home() / "Desktop" / "\u9898\u5e93"
+    if not source_dir.exists():
+        pytest.skip("Desktop question bank is not available on this machine")
+
+    paper, _, _ = load_exam(test_db)
+    user_id = seed_user(test_db, "archived_wrong", "\u5f52\u6863\u9519\u9898", "\u6750\u6599\u5458")
+    question = next(
+        question
+        for question in get_random_practice_questions(limit=20, paper_id=paper["id"])
+        if question["question_type"] in {"single_choice", "true_false"}
+    )
+    wrong_answer = "B" if question["correct_answer"] != "B" else "A"
+    record_practice_answers(user_id, {str(question["id"]): wrong_answer})
+    assert list_wrong_practice_questions(user_id)
+
+    import_exam_papers_from_question_bank_dir(source_dir)
+
+    assert list_wrong_practice_questions(user_id) == []
 
 
 def test_multiple_choice_partial_answer_counts_toward_practice_accuracy(test_db):

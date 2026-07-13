@@ -20,6 +20,7 @@ DAILY_PRACTICE_PAPER_TITLES = {
 }
 EXAM_TAKER_ROLES = {"材料员", "材料审批负责人", "基地负责人"}
 EXAM_MANAGER_ROLES = {"系统管理员", "材料审批负责人"}
+_QUESTION_BANK_REFERENCE_SYNCED_FOR = None
 
 
 def _connection():
@@ -39,6 +40,27 @@ def _connection():
 
 def _dict_or_none(row):
     return dict(row) if row else None
+
+
+def _sync_question_bank_references_once() -> None:
+    global _QUESTION_BANK_REFERENCE_SYNCED_FOR
+    try:
+        import config
+
+        database_path = str(config.DATABASE_PATH)
+    except Exception:
+        database_path = "__unknown__"
+    if _QUESTION_BANK_REFERENCE_SYNCED_FOR == database_path:
+        return
+    try:
+        from services.exam_import_service import (
+            sync_question_bank_reference_answers,
+        )
+
+        sync_question_bank_reference_answers()
+    except Exception:
+        return
+    _QUESTION_BANK_REFERENCE_SYNCED_FOR = database_path
 
 
 def _now() -> str:
@@ -302,6 +324,36 @@ def _load_objective_questions_by_ids(conn, question_ids: list[int]) -> dict[int,
     }
 
 
+def _generated_objective_explanation(question: dict) -> str:
+    correct_answer = str(question.get("correct_answer") or "").strip()
+    option_by_key = {
+        str(option.get("key") or ""): str(option.get("text") or "").strip()
+        for option in question.get("options", [])
+    }
+    normalized_answer = correct_answer.replace("，", ",").replace(" ", "")
+    keys = [key for key in normalized_answer.split(",") if key] if "," in normalized_answer else list(normalized_answer)
+    explanations = [
+        f"{key}：{option_by_key[key]}"
+        for key in keys
+        if option_by_key.get(key)
+    ]
+    if not explanations:
+        return f"本题正确答案为：{correct_answer}。"
+    if question.get("question_type") == "multiple_choice":
+        return (
+            f"本题为多选题，正确答案为 {correct_answer}。"
+            f"各正确选项说明：{'；'.join(explanations)}。"
+            "其余选项不符合题干所述的管理要求。"
+        )
+    if question.get("question_type") == "true_false":
+        return f"本题正确答案为 {correct_answer}。判断依据：{'；'.join(explanations)}。"
+    return (
+        f"本题正确答案为 {correct_answer}。"
+        f"正确依据：{'；'.join(explanations)}。"
+        "其余选项与题干要求不符。"
+    )
+
+
 def _practice_item(
     question: dict,
     answer_text: str,
@@ -315,12 +367,7 @@ def _practice_item(
         credit = round(float(accuracy_credit), 4)
     reference_answer = str(question.get("reference_answer") or "").strip()
     if not reference_answer:
-        correct_answer = str(question.get("correct_answer") or "").strip()
-        reference_answer = (
-            f"题库暂未配置详细解析，正确答案为：{correct_answer}。"
-            if correct_answer
-            else "题库暂未配置详细解析。"
-        )
+        reference_answer = _generated_objective_explanation(question)
     return {
         "session_id": session_id,
         "question_id": question["id"],
@@ -341,6 +388,7 @@ def _practice_item(
 
 
 def record_practice_answers(user_id: int, answers: dict) -> dict:
+    _sync_question_bank_references_once()
     answer_map = {str(key): _answer_to_text(value) for key, value in (answers or {}).items()}
     question_ids = [int(question_id) for question_id in answer_map.keys()]
     conn, should_close = _connection()
@@ -686,10 +734,12 @@ def _practice_history_rows(user_id: int, limit: int) -> list[dict]:
 
 
 def list_practice_history(user_id: int, limit: int = 100) -> list[dict]:
+    _sync_question_bank_references_once()
     return _practice_history_rows(user_id, limit=limit)
 
 
 def list_wrong_practice_questions(user_id: int, limit: int = 100) -> list[dict]:
+    _sync_question_bank_references_once()
     conn, should_close = _connection()
     try:
         rows = conn.execute(
@@ -702,6 +752,7 @@ def list_wrong_practice_questions(user_id: int, limit: int = 100) -> list[dict]:
             JOIN exam_questions q ON q.id = w.question_id
             JOIN exam_papers p ON p.id = q.paper_id
             WHERE w.user_id = ?
+              AND p.source_type = 'exam'
             ORDER BY w.last_wrong_at DESC, w.question_id DESC
             LIMIT ?
             """,
@@ -741,6 +792,7 @@ def list_wrong_practice_questions(user_id: int, limit: int = 100) -> list[dict]:
 
 
 def get_wrong_practice_questions_for_retry(user_id: int, limit: int = 100) -> list[dict]:
+    _sync_question_bank_references_once()
     conn, should_close = _connection()
     try:
         rows = conn.execute(
@@ -748,6 +800,12 @@ def get_wrong_practice_questions_for_retry(user_id: int, limit: int = 100) -> li
             SELECT question_id
             FROM exam_practice_wrong_questions
             WHERE user_id = ?
+              AND question_id IN (
+                  SELECT q.id
+                  FROM exam_questions q
+                  JOIN exam_papers p ON p.id = q.paper_id
+                  WHERE p.source_type = 'exam'
+              )
             ORDER BY last_wrong_at DESC, question_id DESC
             LIMIT ?
             """,
@@ -760,6 +818,7 @@ def get_wrong_practice_questions_for_retry(user_id: int, limit: int = 100) -> li
 
 
 def retry_wrong_practice_answers(user_id: int, answers: dict) -> dict:
+    _sync_question_bank_references_once()
     answer_map = {str(key): _answer_to_text(value) for key, value in (answers or {}).items()}
     question_ids = _normalize_question_ids(answer_map.keys())
     if not question_ids:

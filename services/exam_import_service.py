@@ -21,7 +21,8 @@ QUESTION_SCORES = {
     "case_analysis": 15,
 }
 EXAM_SOURCE_PATTERN = "*材料进场验收标准专项考试卷*.docx"
-DESKTOP_QUESTION_BANK_DIR = Path.home() / "Desktop" / "题库及对应文献" / "题库"
+DESKTOP_QUESTION_BANK_DIR = Path.home() / "Desktop" / "题库"
+BUNDLED_QUESTION_BANK_DIR = Path(__file__).resolve().parents[1] / "docs" / "exam_sources" / "question_bank"
 
 
 PAPER_TITLE_RE = re.compile(r"^第[一二三四五]套(?!.*参考答案)")
@@ -63,6 +64,15 @@ def parse_available_docx(path: Path) -> tuple[list[dict], str]:
             return papers, str(exc)
 
     return papers, ""
+
+
+def get_question_bank_dir(path: Path | None = None) -> Path:
+    if path is not None:
+        return Path(path)
+    for candidate in (DESKTOP_QUESTION_BANK_DIR, BUNDLED_QUESTION_BANK_DIR):
+        if candidate.exists() and list(candidate.glob("*.docx")):
+            return candidate
+    return DESKTOP_QUESTION_BANK_DIR
 
 
 def parse_question_bank_docx(path: Path) -> dict:
@@ -799,9 +809,9 @@ def import_exam_papers_from_docx(path: Path) -> dict:
             conn.close()
 
 
-def import_exam_papers_from_question_bank_dir(path: Path = DESKTOP_QUESTION_BANK_DIR) -> dict:
+def import_exam_papers_from_question_bank_dir(path: Path | None = None) -> dict:
     """Replace active formal papers with all .docx files from the provided question-bank directory."""
-    source_dir = Path(path)
+    source_dir = get_question_bank_dir(path)
     docx_files = sorted(source_dir.glob("*.docx"))
     if not docx_files:
         raise FileNotFoundError(f"No question bank .docx files found in {source_dir}")
@@ -839,6 +849,114 @@ def import_exam_papers_from_question_bank_dir(path: Path = DESKTOP_QUESTION_BANK
             conn.close()
 
 
+def sync_question_bank_reference_answers(path: Path | None = None) -> dict:
+    """Backfill missing question explanations from the desktop question bank."""
+    source_dir = get_question_bank_dir(path)
+    docx_files = sorted(source_dir.glob("*.docx"))
+    if not docx_files:
+        return {"updated": 0, "matched": 0, "source_files": 0}
+
+    references: dict[tuple[str, str, str], str] = {}
+    references_by_options: dict[tuple[str, str, tuple[tuple[str, str], ...]], str] = {}
+    source_files = 0
+    for docx_path in docx_files:
+        try:
+            paper = parse_literature_question_bank_docx(docx_path)
+        except (BadZipFile, ValueError):
+            continue
+        source_files += 1
+        for question in paper["questions"]:
+            reference_answer = str(question.get("reference_answer") or "").strip()
+            if not reference_answer:
+                continue
+            key = _question_reference_key(question)
+            references.setdefault(key, reference_answer)
+            option_key = _question_option_reference_key(question)
+            if option_key:
+                references_by_options.setdefault(option_key, reference_answer)
+
+    if not references:
+        return {"updated": 0, "matched": 0, "source_files": source_files}
+
+    conn, should_close = _connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, question_type, stem, correct_answer, reference_answer
+            FROM exam_questions
+            """
+        ).fetchall()
+        updated = 0
+        matched = 0
+        for row in rows:
+            key = _question_reference_key(row)
+            reference_answer = references.get(key)
+            if not reference_answer and references_by_options:
+                option_rows = conn.execute(
+                    """
+                    SELECT option_key, option_text
+                    FROM exam_question_options
+                    WHERE question_id = ?
+                    ORDER BY option_key
+                    """,
+                    (row["id"],),
+                ).fetchall()
+                reference_answer = references_by_options.get(
+                    _question_option_reference_key(
+                        row,
+                        [{"key": option["option_key"], "text": option["option_text"]} for option in option_rows],
+                    )
+                )
+            if not reference_answer:
+                continue
+            matched += 1
+            current_reference = str(row["reference_answer"] or "").strip()
+            if current_reference:
+                continue
+            conn.execute(
+                "UPDATE exam_questions SET reference_answer = ? WHERE id = ?",
+                (reference_answer, row["id"]),
+            )
+            updated += 1
+        conn.commit()
+        return {"updated": updated, "matched": matched, "source_files": source_files}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        if should_close:
+            conn.close()
+
+
+def _question_reference_key(question) -> tuple[str, str, str]:
+    stem = question["stem"] if isinstance(question, dict) else question["stem"]
+    question_type = question["question_type"] if isinstance(question, dict) else question["question_type"]
+    correct_answer = question["correct_answer"] if isinstance(question, dict) else question["correct_answer"]
+    normalized_stem = re.sub(r"^\d+\s*[.．、]\s*", "", str(stem or "")).strip()
+    normalized_stem = re.sub(r"\s+", "", normalized_stem)
+    normalized_answer = str(correct_answer or "").replace(" ", "").replace("，", ",").upper()
+    return (str(question_type or ""), normalized_stem, normalized_answer)
+
+
+def _question_option_reference_key(question, options: list[dict] | None = None):
+    question_type = question["question_type"] if isinstance(question, dict) else question["question_type"]
+    correct_answer = question["correct_answer"] if isinstance(question, dict) else question["correct_answer"]
+    normalized_answer = str(correct_answer or "").replace(" ", "").replace("，", ",").upper()
+    if options is None:
+        options = question.get("options", []) if isinstance(question, dict) else []
+    option_signature = tuple(
+        (
+            str(option.get("key") or "").strip().upper(),
+            re.sub(r"\s+", "", str(option.get("text") or "")),
+        )
+        for option in options
+        if str(option.get("key") or "").strip()
+    )
+    if not option_signature:
+        return None
+    return (str(question_type or ""), normalized_answer, option_signature)
+
+
 def ensure_exam_sources_imported() -> dict:
     """Import bundled formal exam papers only when the database has none."""
     conn, should_close = _connection()
@@ -852,12 +970,16 @@ def ensure_exam_sources_imported() -> dict:
         if should_close:
             conn.close()
 
+    question_bank_dir = get_question_bank_dir()
+
     if existing_count:
+        if question_bank_dir.exists() and list(question_bank_dir.glob("*.docx")):
+            sync_question_bank_reference_answers(question_bank_dir)
         return {"created": False, "paper_count": existing_count}
 
-    if DESKTOP_QUESTION_BANK_DIR.exists() and list(DESKTOP_QUESTION_BANK_DIR.glob("*.docx")):
+    if question_bank_dir.exists() and list(question_bank_dir.glob("*.docx")):
         try:
-            result = import_exam_papers_from_question_bank_dir(DESKTOP_QUESTION_BANK_DIR)
+            result = import_exam_papers_from_question_bank_dir(question_bank_dir)
             return {"created": True, "paper_count": result["inserted"]}
         except ValueError:
             pass

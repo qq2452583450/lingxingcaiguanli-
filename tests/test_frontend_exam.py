@@ -103,6 +103,7 @@ def test_wrong_question_records_always_render_the_explanation_block():
 
     assert "function examExplanationText" in exam_js
     assert "解析：" in exam_js
+    assert "暂未配置详细解析" not in exam_js
 
 
 def test_exam_practice_uses_dedicated_mobile_session_page():

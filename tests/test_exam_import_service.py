@@ -2,8 +2,13 @@ from pathlib import Path
 import importlib
 
 from services.exam_import_service import (
+    DESKTOP_QUESTION_BANK_DIR,
     ensure_exam_sources_imported,
+    get_question_bank_dir,
+    import_exam_papers_from_question_bank_dir,
     parse_exam_docx,
+    parse_literature_question_bank_docx,
+    sync_question_bank_reference_answers,
     import_exam_papers_from_docx,
 )
 from services.exam_service import list_papers, get_paper_questions, get_current_exam_paper
@@ -36,6 +41,87 @@ def test_import_exam_papers_does_not_auto_select_current_exam_paper(test_db):
     assert len(papers) == 5
     assert current is None
     assert len(get_paper_questions(papers[0]["id"])) == 38
+
+
+def test_desktop_question_bank_dir_points_to_current_user_folder():
+    assert DESKTOP_QUESTION_BANK_DIR.name == "\u9898\u5e93"
+    assert DESKTOP_QUESTION_BANK_DIR.parent.name == "Desktop"
+    assert get_question_bank_dir(DESKTOP_QUESTION_BANK_DIR) == DESKTOP_QUESTION_BANK_DIR
+
+
+def test_parse_desktop_question_bank_docx_keeps_inline_explanations(tmp_path):
+    source = Path.home() / "Desktop" / "\u9898\u5e93" / "\u4e2d\u5929\u5efa\u8bbe\u6210\u672c\u5e73\u53f0\u7269\u8d44\u7ba1\u7406V4.0\u64cd\u4f5c\u9898\u5e93.docx"
+    if not source.exists():
+        pytest.skip("Desktop question bank is not available on this machine")
+
+    paper = parse_literature_question_bank_docx(source)
+
+    assert paper["questions"]
+    assert all(question["reference_answer"] for question in paper["questions"])
+    assert "\u624b\u518c\u7b2c\u4e8c\u7ae0" in paper["questions"][0]["reference_answer"]
+
+
+def test_sync_question_bank_reference_answers_backfills_existing_questions(test_db, tmp_path):
+    source_dir = Path.home() / "Desktop" / "\u9898\u5e93"
+    if not source_dir.exists():
+        pytest.skip("Desktop question bank is not available on this machine")
+
+    import_exam_papers_from_question_bank_dir(source_dir)
+    question = test_db.execute(
+        """
+        SELECT q.id, q.reference_answer
+        FROM exam_questions q
+        JOIN exam_papers p ON p.id = q.paper_id
+        WHERE p.title = ?
+        ORDER BY q.id
+        LIMIT 1
+        """,
+        ("\u4e2d\u5929\u5efa\u8bbe\u6210\u672c\u5e73\u53f0\u7269\u8d44\u7ba1\u7406V4.0\u64cd\u4f5c\u9898\u5e93",),
+    ).fetchone()
+    assert question["reference_answer"]
+    test_db.execute("UPDATE exam_questions SET reference_answer = '' WHERE id = ?", (question["id"],))
+
+    result = sync_question_bank_reference_answers(source_dir)
+    updated = test_db.execute(
+        "SELECT reference_answer FROM exam_questions WHERE id = ?",
+        (question["id"],),
+    ).fetchone()
+
+    assert result["updated"] >= 1
+    assert "\u624b\u518c\u7b2c\u4e8c\u7ae0" in updated["reference_answer"]
+
+
+def test_sync_question_bank_reference_answers_can_match_by_options_when_stem_changed(test_db):
+    source_dir = Path.home() / "Desktop" / "\u9898\u5e93"
+    if not source_dir.exists():
+        pytest.skip("Desktop question bank is not available on this machine")
+
+    import_exam_papers_from_question_bank_dir(source_dir)
+    question = test_db.execute(
+        """
+        SELECT q.id, q.reference_answer
+        FROM exam_questions q
+        JOIN exam_papers p ON p.id = q.paper_id
+        WHERE p.title = ?
+        ORDER BY q.id
+        LIMIT 1
+        """,
+        ("\u4e2d\u5929\u5efa\u8bbe\u6210\u672c\u5e73\u53f0\u7269\u8d44\u7ba1\u7406V4.0\u64cd\u4f5c\u9898\u5e93",),
+    ).fetchone()
+    assert question["reference_answer"]
+    test_db.execute(
+        "UPDATE exam_questions SET stem = ?, reference_answer = '' WHERE id = ?",
+        ("\u6539\u5199\u540e\u7684\u9898\u5e72\uff0c\u4f46\u9009\u9879\u4e00\u81f4", question["id"]),
+    )
+
+    result = sync_question_bank_reference_answers(source_dir)
+    updated = test_db.execute(
+        "SELECT reference_answer FROM exam_questions WHERE id = ?",
+        (question["id"],),
+    ).fetchone()
+
+    assert result["updated"] >= 1
+    assert "\u624b\u518c\u7b2c\u4e8c\u7ae0" in updated["reference_answer"]
 
 
 def test_ensure_exam_sources_imported_is_idempotent(test_db):
