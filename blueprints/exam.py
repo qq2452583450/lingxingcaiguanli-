@@ -19,6 +19,7 @@ from services.exam_service import (
     get_exam_paper,
     get_paper_questions,
     get_practice_draft,
+    get_wrong_practice_questions_for_retry,
     list_daily_checkins,
     get_random_practice_questions,
     list_practice_history,
@@ -27,6 +28,7 @@ from services.exam_service import (
     list_results,
     list_wrong_practice_questions,
     record_practice_answers,
+    retry_wrong_practice_answers,
     review_answer,
     save_practice_draft,
     start_attempt,
@@ -259,6 +261,36 @@ def wrong_practice():
     limit = request.args.get("limit", default=100, type=int)
     limit = max(1, min(limit or 100, 500))
     return jsonify({"success": True, "data": list_wrong_practice_questions(user["id"], limit=limit)})
+
+
+@exam_bp.route("/practice/wrong/questions", methods=["GET"])
+def wrong_practice_questions():
+    user, denied = _require_exam_user()
+    if denied:
+        return denied
+    if not can_take_exam(user):
+        return _json_error("Permission denied", 403)
+
+    limit = request.args.get("limit", default=100, type=int)
+    limit = max(1, min(limit or 100, 500))
+    questions = get_wrong_practice_questions_for_retry(user["id"], limit=limit)
+    return jsonify({"success": True, "data": _questions_for_exam_flow(questions)})
+
+
+@exam_bp.route("/practice/wrong/submit", methods=["POST"])
+def submit_wrong_practice():
+    user, denied = _require_exam_user()
+    if denied:
+        return denied
+    if not can_take_exam(user):
+        return _json_error("Permission denied", 403)
+
+    data = request.get_json(silent=True) or {}
+    try:
+        result = retry_wrong_practice_answers(user["id"], data.get("answers") or {})
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+    return jsonify({"success": True, "data": result})
 
 
 @exam_bp.route("/papers", methods=["GET"])

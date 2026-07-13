@@ -244,7 +244,7 @@ function renderPracticeResult(result) {
             <div class="exam-question-paper">${examEscape(item.paper_title || '')}</div>
             <p><strong>你的答案：</strong>${examEscape(answerTextFromOptions(item, item.answer_text))}</p>
             <p><strong>正确答案：</strong>${examEscape(answerTextFromOptions(item, item.correct_answer))}</p>
-            ${item.reference_answer ? `<p><strong>参考：</strong>${examEscape(item.reference_answer)}</p>` : ''}
+            ${item.reference_answer ? `<p><strong>解析：</strong>${examEscape(item.reference_answer)}</p>` : ''}
         </div>`).join('');
     list.innerHTML = `
         <div class="exam-toolbar">
@@ -279,13 +279,13 @@ async function loadWrongPracticeQuestions() {
     list.innerHTML = '<div class="loading">正在加载错题记录...</div>';
     try {
         const data = await examJson('/api/exam/practice/wrong');
-        renderPracticeRecordList(data.data || [], '暂无错题记录');
+        renderPracticeRecordList(data.data || [], '暂无错题记录', { wrongQuestions: true });
     } catch (e) {
         list.innerHTML = `<div class="error-message">${examEscape(e.message || '错题记录加载失败')}</div>`;
     }
 }
 
-function renderPracticeRecordList(records, emptyText) {
+function renderPracticeRecordList(records, emptyText, options = {}) {
     const list = document.getElementById('examPracticeList') || examContent();
     if (!list) return;
     const rows = records.map((item, index) => `
@@ -297,18 +297,88 @@ function renderPracticeRecordList(records, emptyText) {
             <div class="exam-question-paper">${examEscape(item.paper_title || '')}</div>
             <p><strong>你的答案：</strong>${examEscape(answerTextFromOptions(item, item.answer_text))}</p>
             <p><strong>正确答案：</strong>${examEscape(answerTextFromOptions(item, item.correct_answer))}</p>
+            ${item.reference_answer ? `<p><strong>解析：</strong>${examEscape(item.reference_answer)}</p>` : ''}
             <p><strong>结果：</strong>${item.is_correct ? '正确' : '错误'}</p>
         </div>`).join('');
     list.innerHTML = `
         <div class="exam-toolbar">
-            <div><h2>做题记录</h2><p>可反复查看历史练习和错题。</p></div>
+            <div><h2>${options.wrongQuestions ? '错题记录' : '做题记录'}</h2><p>${options.wrongQuestions ? '答对后会自动从错题记录中移除。' : '可反复查看历史练习和错题。'}</p></div>
             <div class="exam-actions">
                 <button class="btn btn-primary" type="button" onclick="loadRandomPractice()"><i data-lucide="shuffle"></i>继续练习</button>
+                ${options.wrongQuestions && records.length ? '<button class="btn btn-secondary" type="button" onclick="startWrongPractice()"><i data-lucide="rotate-cw"></i>重新做错题</button>' : ''}
                 <button class="btn btn-secondary" type="button" onclick="loadPracticeHistory()"><i data-lucide="history"></i>练习记录</button>
                 <button class="btn btn-secondary" type="button" onclick="loadWrongPracticeQuestions()"><i data-lucide="list-x"></i>错题记录</button>
             </div>
         </div>
         <div class="exam-question-list">${rows || `<div class="empty-message">${examEscape(emptyText)}</div>`}</div>`;
+    examRefreshIcons();
+}
+
+async function startWrongPractice() {
+    const list = document.getElementById('examPracticeList') || examContent();
+    if (!list) return;
+    list.innerHTML = '<div class="loading">正在加载错题...</div>';
+    try {
+        const data = await examJson('/api/exam/practice/wrong/questions');
+        const questions = data.data || [];
+        if (!questions.length) {
+            renderPracticeRecordList([], '暂无需要重做的错题', { wrongQuestions: true });
+            return;
+        }
+        list.innerHTML = `
+            <form id="examWrongPracticeForm" onsubmit="submitWrongPracticeAnswers(event)">
+                ${renderExamQuestions(questions, { mode: 'practice' })}
+                <div class="exam-actions">
+                    <button class="btn btn-primary" type="submit"><i data-lucide="check"></i>提交错题重做</button>
+                    <button class="btn btn-secondary" type="button" onclick="loadWrongPracticeQuestions()"><i data-lucide="arrow-left"></i>返回错题记录</button>
+                </div>
+            </form>`;
+        examRefreshIcons();
+    } catch (e) {
+        list.innerHTML = `<div class="error-message">${examEscape(e.message || '错题加载失败')}</div>`;
+    }
+}
+
+async function submitWrongPracticeAnswers(event) {
+    event.preventDefault();
+    const form = event.target;
+    const submitButton = form.querySelector('button[type="submit"]');
+    if (submitButton) submitButton.disabled = true;
+    try {
+        const result = await examJson('/api/exam/practice/wrong/submit', {
+            method: 'POST',
+            body: JSON.stringify({ answers: collectExamAnswers(form) })
+        });
+        renderWrongPracticeResult(result.data || {});
+    } catch (e) {
+        if (submitButton) submitButton.disabled = false;
+        examNotify(e.message || '错题提交失败', 'error');
+    }
+}
+
+function renderWrongPracticeResult(result) {
+    const list = document.getElementById('examPracticeList') || examContent();
+    if (!list) return;
+    const items = result.items || [];
+    const rows = items.map((item, index) => `
+        <div class="exam-question ${item.is_correct ? 'exam-correct' : 'exam-wrong'}">
+            <div class="exam-question-head">
+                <strong>${index + 1}. ${examEscape(item.stem || '')}</strong>
+                <span>${item.is_correct ? '正确' : '错误'}</span>
+            </div>
+            <div class="exam-question-paper">${examEscape(item.paper_title || '')}</div>
+            <p><strong>你的答案：</strong>${examEscape(answerTextFromOptions(item, item.answer_text))}</p>
+            <p><strong>正确答案：</strong>${examEscape(answerTextFromOptions(item, item.correct_answer))}</p>
+            ${item.reference_answer ? `<p><strong>解析：</strong>${examEscape(item.reference_answer)}</p>` : ''}
+        </div>`).join('');
+    list.innerHTML = `
+        <div class="exam-toolbar">
+            <div><h2>错题重做结果</h2><p>本次答对并移除 ${examEscape(result.resolved_count || 0)} 题，剩余 ${examEscape(result.remaining_count || 0)} 题。</p></div>
+            <div class="exam-actions">
+                <button class="btn btn-primary" type="button" onclick="loadWrongPracticeQuestions()"><i data-lucide="list-x"></i>查看剩余错题</button>
+            </div>
+        </div>
+        <div class="exam-question-list">${rows}</div>`;
     examRefreshIcons();
 }
 

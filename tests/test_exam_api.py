@@ -631,6 +631,36 @@ def test_wrong_practice_endpoint_scopes_to_current_user(client, test_db):
     assert data["data"][0]["question_id"] == question["id"]
 
 
+def test_wrong_practice_can_be_retried_and_is_removed_after_a_correct_answer(client, test_db):
+    from services.exam_service import record_practice_answers
+
+    seed_exam()
+    clerk_id = seed_user(test_db, "wrong_retry_api", "错题重做接口", ROLE_CLERK)
+    question = next(
+        q for q in get_paper_questions(papers(test_db)[0]["id"])
+        if q["question_type"] in {"single_choice", "true_false"}
+    )
+    wrong_answer = "B" if question["correct_answer"] != "B" else "A"
+    record_practice_answers(clerk_id, {str(question["id"]): wrong_answer})
+    login(client, clerk_id, "wrong_retry_api", "错题重做接口", ROLE_CLERK)
+
+    retry_questions = client.get("/api/exam/practice/wrong/questions").get_json()
+    retry = client.post(
+        "/api/exam/practice/wrong/submit",
+        json={"answers": {str(question["id"]): question["correct_answer"]}},
+        headers=csrf_headers(),
+    ).get_json()
+    remaining = client.get("/api/exam/practice/wrong").get_json()
+
+    assert retry_questions["success"] is True
+    assert_question_is_sanitized(retry_questions["data"][0])
+    assert retry["success"] is True
+    assert retry["data"]["items"][0]["reference_answer"] == question["reference_answer"]
+    assert retry["data"]["resolved_count"] == 1
+    assert retry["data"]["remaining_count"] == 0
+    assert remaining["data"] == []
+
+
 def test_attempt_review_returns_answer_details_for_owner_only(client, test_db):
     seed_exam()
     select_current_paper(test_db)

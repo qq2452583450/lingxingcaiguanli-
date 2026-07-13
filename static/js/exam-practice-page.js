@@ -179,6 +179,7 @@ function renderResult(result) {
             <strong>${index + 1}. ${practiceEscape(item.stem)}</strong>
             <p>你的答案：${practiceEscape(answerLabel(item, item.answer_text))}</p>
             <p>正确答案：${practiceEscape(answerLabel(item, item.correct_answer))}</p>
+            ${item.reference_answer ? `<p>解析：${practiceEscape(item.reference_answer)}</p>` : ''}
             <p>结果：${item.is_correct ? '正确' : '错误'}</p>
         </article>
     `).join('');

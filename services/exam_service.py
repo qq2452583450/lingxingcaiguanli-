@@ -361,6 +361,25 @@ def record_practice_answers(user_id: int, answers: dict) -> dict:
                 """,
                 (user_id, question_id, answer_text, 1 if is_correct else 0, accuracy_credit, created_at, session_id),
             )
+            if is_correct:
+                conn.execute(
+                    "DELETE FROM exam_practice_wrong_questions WHERE user_id = ? AND question_id = ?",
+                    (user_id, question_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO exam_practice_wrong_questions (
+                        user_id, question_id, wrong_count, last_answer_text,
+                        first_wrong_at, last_wrong_at
+                    ) VALUES (?, ?, 1, ?, ?, ?)
+                    ON CONFLICT(user_id, question_id) DO UPDATE SET
+                        wrong_count = exam_practice_wrong_questions.wrong_count + 1,
+                        last_answer_text = excluded.last_answer_text,
+                        last_wrong_at = excluded.last_wrong_at
+                    """,
+                    (user_id, question_id, answer_text, created_at, created_at),
+                )
             items.append(_practice_item(question, answer_text, is_correct, created_at, session_id, accuracy_credit))
         total_count = len(items)
         correct_count = sum(1 for item in items if item["is_correct"])
@@ -605,8 +624,7 @@ def list_daily_checkins(target_date: str | None = None) -> list[dict]:
             conn.close()
 
 
-def _practice_history_rows(user_id: int, only_wrong: bool, limit: int) -> list[dict]:
-    where_wrong = "AND pa.is_correct = 0" if only_wrong else ""
+def _practice_history_rows(user_id: int, limit: int) -> list[dict]:
     conn, should_close = _connection()
     try:
         rows = conn.execute(
@@ -620,7 +638,6 @@ def _practice_history_rows(user_id: int, only_wrong: bool, limit: int) -> list[d
             JOIN exam_questions q ON q.id = pa.question_id
             JOIN exam_papers p ON p.id = q.paper_id
             WHERE pa.user_id = ?
-              {where_wrong}
             ORDER BY pa.created_at DESC, pa.id DESC
             LIMIT ?
             """,
@@ -661,11 +678,137 @@ def _practice_history_rows(user_id: int, only_wrong: bool, limit: int) -> list[d
 
 
 def list_practice_history(user_id: int, limit: int = 100) -> list[dict]:
-    return _practice_history_rows(user_id, only_wrong=False, limit=limit)
+    return _practice_history_rows(user_id, limit=limit)
 
 
 def list_wrong_practice_questions(user_id: int, limit: int = 100) -> list[dict]:
-    return _practice_history_rows(user_id, only_wrong=True, limit=limit)
+    conn, should_close = _connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT w.question_id, w.wrong_count, w.last_answer_text, w.first_wrong_at,
+                   w.last_wrong_at, q.paper_id, p.title AS paper_title,
+                   q.question_type, q.order_no, q.stem, q.correct_answer,
+                   q.reference_answer, q.score
+            FROM exam_practice_wrong_questions w
+            JOIN exam_questions q ON q.id = w.question_id
+            JOIN exam_papers p ON p.id = q.paper_id
+            WHERE w.user_id = ?
+            ORDER BY w.last_wrong_at DESC, w.question_id DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        items = []
+        for row in rows:
+            question = dict(row)
+            question["id"] = row["question_id"]
+            option_rows = conn.execute(
+                """
+                SELECT option_key, option_text
+                FROM exam_question_options
+                WHERE question_id = ?
+                ORDER BY option_key
+                """,
+                (row["question_id"],),
+            ).fetchall()
+            question["options"] = [
+                {"key": option["option_key"], "text": option["option_text"]}
+                for option in option_rows
+            ]
+            item = _practice_item(
+                ensure_question_options(question),
+                row["last_answer_text"],
+                False,
+                row["last_wrong_at"],
+                None,
+            )
+            item["wrong_count"] = row["wrong_count"]
+            item["first_wrong_at"] = row["first_wrong_at"]
+            items.append(item)
+        return items
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_wrong_practice_questions_for_retry(user_id: int, limit: int = 100) -> list[dict]:
+    conn, should_close = _connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT question_id
+            FROM exam_practice_wrong_questions
+            WHERE user_id = ?
+            ORDER BY last_wrong_at DESC, question_id DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+        return _load_practice_questions_by_ids(conn, [row["question_id"] for row in rows])
+    finally:
+        if should_close:
+            conn.close()
+
+
+def retry_wrong_practice_answers(user_id: int, answers: dict) -> dict:
+    answer_map = {str(key): _answer_to_text(value) for key, value in (answers or {}).items()}
+    question_ids = _normalize_question_ids(answer_map.keys())
+    if not question_ids:
+        raise ValueError("Please answer at least one wrong practice question")
+    conn, should_close = _connection()
+    try:
+        active_ids = {
+            row["question_id"]
+            for row in conn.execute(
+                "SELECT question_id FROM exam_practice_wrong_questions WHERE user_id = ?",
+                (user_id,),
+            ).fetchall()
+        }
+        if not set(question_ids).issubset(active_ids):
+            raise ValueError("Wrong practice questions have changed, please reload")
+        questions = _load_objective_questions_by_ids(conn, question_ids)
+        created_at = _now()
+        items = []
+        resolved_count = 0
+        for question_id in question_ids:
+            question = questions[question_id]
+            answer_text = answer_map[str(question_id)]
+            earned_score = grade_objective(
+                question["question_type"], answer_text, question["correct_answer"], question["score"]
+            )
+            is_correct = earned_score == float(question["score"])
+            if is_correct:
+                conn.execute(
+                    "DELETE FROM exam_practice_wrong_questions WHERE user_id = ? AND question_id = ?",
+                    (user_id, question_id),
+                )
+                resolved_count += 1
+            else:
+                conn.execute(
+                    """
+                    UPDATE exam_practice_wrong_questions
+                    SET wrong_count = wrong_count + 1,
+                        last_answer_text = ?,
+                        last_wrong_at = ?
+                    WHERE user_id = ? AND question_id = ?
+                    """,
+                    (answer_text, created_at, user_id, question_id),
+                )
+            items.append(_practice_item(question, answer_text, is_correct, created_at, None))
+        conn.commit()
+        remaining_count = conn.execute(
+            "SELECT COUNT(*) FROM exam_practice_wrong_questions WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()[0]
+        return {
+            "items": items,
+            "resolved_count": resolved_count,
+            "remaining_count": remaining_count,
+        }
+    finally:
+        if should_close:
+            conn.close()
 
 
 def get_attempt_review(attempt_id: int) -> dict | None:

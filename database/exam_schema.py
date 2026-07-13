@@ -110,6 +110,19 @@ def init_exam_schema(conn):
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS exam_practice_wrong_questions (
+            user_id INTEGER NOT NULL,
+            question_id INTEGER NOT NULL,
+            wrong_count INTEGER NOT NULL DEFAULT 1,
+            last_answer_text TEXT NOT NULL DEFAULT '',
+            first_wrong_at TEXT NOT NULL,
+            last_wrong_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, question_id),
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (question_id) REFERENCES exam_questions(id)
+        )
+        """,
     ]
     index_statements = [
         "CREATE INDEX IF NOT EXISTS idx_exam_attempts_user ON exam_attempts(user_id)",
@@ -121,6 +134,7 @@ def init_exam_schema(conn):
         "CREATE INDEX IF NOT EXISTS idx_exam_practice_user ON exam_practice_attempts(user_id)",
         "CREATE INDEX IF NOT EXISTS idx_exam_practice_session ON exam_practice_attempts(user_id, practice_session_id)",
         "CREATE INDEX IF NOT EXISTS idx_exam_practice_drafts_user ON exam_practice_drafts(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_exam_practice_wrong_questions_user ON exam_practice_wrong_questions(user_id, last_wrong_at DESC)",
     ]
 
     for statement in table_statements:
@@ -165,6 +179,8 @@ def init_exam_schema(conn):
             "ALTER TABLE exam_practice_drafts ADD COLUMN updated_at TEXT"
         )
 
+    _backfill_active_wrong_practice_questions(cursor)
+
     for statement in index_statements:
         cursor.execute(statement)
 
@@ -181,6 +197,60 @@ def _require_manual_current_exam_selection(cursor):
     cursor.execute(
         "DELETE FROM exam_settings WHERE key = ?",
         ("current_exam_paper_id",),
+    )
+    cursor.execute(
+        "INSERT INTO exam_settings (key, value) VALUES (?, ?)",
+        (migration_key, "done"),
+    )
+
+
+def _backfill_active_wrong_practice_questions(cursor):
+    migration_key = "wrong_practice_questions_backfill_20260713"
+    migrated = cursor.execute(
+        "SELECT value FROM exam_settings WHERE key = ?",
+        (migration_key,),
+    ).fetchone()
+    if migrated:
+        return
+
+    cursor.execute(
+        """
+        INSERT OR IGNORE INTO exam_practice_wrong_questions (
+            user_id, question_id, wrong_count, last_answer_text,
+            first_wrong_at, last_wrong_at
+        )
+        SELECT pa.user_id,
+               pa.question_id,
+               COUNT(*) AS wrong_count,
+               (
+                   SELECT latest.answer_text
+                   FROM exam_practice_attempts latest
+                   WHERE latest.user_id = pa.user_id
+                     AND latest.question_id = pa.question_id
+                     AND latest.is_correct = 0
+                   ORDER BY latest.created_at DESC, latest.id DESC
+                   LIMIT 1
+               ) AS last_answer_text,
+               MIN(pa.created_at) AS first_wrong_at,
+               MAX(pa.created_at) AS last_wrong_at
+        FROM exam_practice_attempts pa
+        WHERE pa.is_correct = 0
+          AND NOT EXISTS (
+              SELECT 1
+              FROM exam_practice_attempts later_correct
+              WHERE later_correct.user_id = pa.user_id
+                AND later_correct.question_id = pa.question_id
+                AND later_correct.is_correct = 1
+                AND (
+                    later_correct.created_at > pa.created_at
+                    OR (
+                        later_correct.created_at = pa.created_at
+                        AND later_correct.id > pa.id
+                    )
+                )
+          )
+        GROUP BY pa.user_id, pa.question_id
+        """
     )
     cursor.execute(
         "INSERT INTO exam_settings (key, value) VALUES (?, ?)",

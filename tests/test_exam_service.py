@@ -17,6 +17,7 @@ from services.exam_service import (
     list_results,
     list_wrong_practice_questions,
     record_practice_answers,
+    retry_wrong_practice_answers,
     list_user_attempts,
     review_answer,
     start_attempt,
@@ -175,6 +176,31 @@ def test_record_practice_answers_scores_and_lists_history(test_db):
     assert result["items"][0]["is_correct"] is False
     assert history[0]["session_id"] == result["session_id"]
     assert wrong[0]["question_id"] == objective["id"]
+
+
+def test_retrying_a_wrong_practice_question_removes_it_without_changing_daily_checkin(test_db):
+    paper, _, _ = load_exam(test_db)
+    user_id = seed_user(test_db, "wrong_retry", "错题重做", "材料员")
+    question = next(
+        question
+        for question in get_random_practice_questions(limit=20, paper_id=paper["id"])
+        if question["question_type"] in {"single_choice", "true_false"}
+    )
+    wrong_answer = "B" if question["correct_answer"] != "B" else "A"
+
+    record_practice_answers(user_id, {str(question["id"]): wrong_answer})
+    daily_before = get_daily_practice_status(user_id)
+    result = retry_wrong_practice_answers(
+        user_id,
+        {str(question["id"]): question["correct_answer"]},
+    )
+
+    assert result["items"][0]["is_correct"] is True
+    assert result["items"][0]["reference_answer"] == question["reference_answer"]
+    assert result["resolved_count"] == 1
+    assert result["remaining_count"] == 0
+    assert list_wrong_practice_questions(user_id) == []
+    assert get_daily_practice_status(user_id)["answered_count"] == daily_before["answered_count"]
 
 
 def test_multiple_choice_partial_answer_counts_toward_practice_accuracy(test_db):

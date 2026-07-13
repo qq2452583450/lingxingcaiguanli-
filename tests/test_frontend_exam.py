@@ -87,6 +87,17 @@ def test_exam_frontend_supports_practice_feedback_and_history():
     assert "/review" in exam_js
 
 
+def test_exam_frontend_shows_explanations_and_supports_wrong_question_retry():
+    exam_js = read_text("static/js/exam.js")
+    practice_js = read_text("static/js/exam-practice-page.js")
+
+    assert "解析" in exam_js
+    assert "解析" in practice_js
+    assert "/api/exam/practice/wrong/questions" in exam_js
+    assert "/api/exam/practice/wrong/submit" in exam_js
+    assert "startWrongPractice" in exam_js
+
+
 def test_exam_practice_uses_dedicated_mobile_session_page():
     app_py = read_text("app.py")
     exam_js = read_text("static/js/exam.js")
