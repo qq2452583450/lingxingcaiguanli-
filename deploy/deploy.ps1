@@ -55,6 +55,12 @@ function Stop-AppPythonProcesses {
     }
 }
 
+function Invoke-ExamScoreRegrade {
+    Write-Host "Regrading exam scores and normalizing paper totals"
+    & $VenvPython "tools\regrade_practice_attempts.py" --apply --backup
+    if ($LASTEXITCODE -ne 0) { throw "exam score regrade failed" }
+}
+
 $LocalEnv = Join-Path $AppDir "deploy\server.env.ps1"
 if (Test-Path -LiteralPath $LocalEnv) {
     . $LocalEnv
@@ -112,6 +118,7 @@ if ($Service) {
     }
     Stop-AppPythonProcesses
     Stop-PythonListenerOnPort -TargetPort $Port
+    Invoke-ExamScoreRegrade
     Start-Service -Name $ServiceName
     Start-Sleep -Seconds 3
     $Service.Refresh()
@@ -123,6 +130,7 @@ if ($Service) {
     Stop-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue
     Stop-AppPythonProcesses
     Stop-PythonListenerOnPort -TargetPort $Port
+    Invoke-ExamScoreRegrade
     Start-ScheduledTask -TaskName $ServiceName
 } else {
     throw "Auto-start '$ServiceName' is not installed. Run deploy\install-service.ps1 once on the server first."

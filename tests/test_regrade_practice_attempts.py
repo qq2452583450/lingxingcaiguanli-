@@ -2,7 +2,7 @@ import sqlite3
 import subprocess
 import sys
 
-from tools.regrade_practice_attempts import regrade_practice_attempts
+from tools.regrade_practice_attempts import regrade_all_exam_scores, regrade_practice_attempts
 
 
 def build_practice_db():
@@ -17,8 +17,11 @@ def build_practice_db():
         );
         CREATE TABLE exam_questions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            paper_id INTEGER,
             question_type TEXT NOT NULL,
+            order_no INTEGER DEFAULT 0,
             correct_answer TEXT,
+            keywords TEXT,
             score INTEGER NOT NULL
         );
         CREATE TABLE exam_practice_attempts (
@@ -62,6 +65,83 @@ def build_practice_db():
     return conn
 
 
+def build_exam_regrade_db():
+    conn = build_practice_db()
+    conn.executescript(
+        """
+        CREATE TABLE exam_papers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            duration_minutes INTEGER NOT NULL DEFAULT 60,
+            total_score INTEGER NOT NULL DEFAULT 100,
+            source_type TEXT NOT NULL DEFAULT 'exam',
+            create_time TEXT
+        );
+        CREATE TABLE exam_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            paper_id INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            objective_score REAL NOT NULL DEFAULT 0,
+            suggested_subjective_score REAL NOT NULL DEFAULT 0,
+            final_subjective_score REAL,
+            final_score REAL,
+            started_at TEXT,
+            submitted_at TEXT
+        );
+        CREATE TABLE exam_answers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            attempt_id INTEGER NOT NULL,
+            question_id INTEGER NOT NULL,
+            answer_text TEXT NOT NULL DEFAULT '',
+            auto_score REAL NOT NULL DEFAULT 0,
+            suggested_score REAL NOT NULL DEFAULT 0,
+            final_score REAL,
+            UNIQUE (attempt_id, question_id)
+        );
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO exam_papers (
+            title, duration_minutes, total_score, source_type, create_time
+        ) VALUES ('Historical weighted paper', 50, 150, 'exam', '2026-07-13 00:00:00')
+        """
+    )
+    conn.executemany(
+        """
+        INSERT INTO exam_questions (
+            paper_id, question_type, correct_answer, score
+        ) VALUES (1, ?, ?, ?)
+        """,
+        [
+            ("true_false", "正确", 5),
+            ("single_choice", "B", 5),
+        ],
+    )
+    conn.execute(
+        """
+        INSERT INTO exam_attempts (
+            user_id, paper_id, status, objective_score,
+            suggested_subjective_score, final_score, started_at, submitted_at
+        ) VALUES (1, 1, 'completed', 0, 0, 0, '2026-07-13 10:00:00', '2026-07-13 10:10:00')
+        """
+    )
+    conn.executemany(
+        """
+        INSERT INTO exam_answers (
+            attempt_id, question_id, answer_text, auto_score, suggested_score, final_score
+        ) VALUES (1, ?, ?, ?, 0, ?)
+        """,
+        [
+            (2, "√", 0, 0),
+            (3, "A", 0, 0),
+        ],
+    )
+    conn.commit()
+    return conn
+
+
 def test_regrade_practice_attempts_applies_current_multiple_choice_rule():
     conn = build_practice_db()
 
@@ -88,6 +168,32 @@ def test_regrade_practice_attempts_applies_current_multiple_choice_rule():
         {"user_id": 2, "is_correct": 1, "accuracy_credit": 1.0},
         {"user_id": 3, "is_correct": 0, "accuracy_credit": 0.0},
     ]
+
+
+def test_regrade_all_exam_scores_updates_practice_formal_and_paper_totals():
+    conn = build_exam_regrade_db()
+
+    dry_run = regrade_all_exam_scores(conn, apply_changes=False)
+    assert dry_run["formal"]["changed_attempts"] == 1
+    assert dry_run["papers"]["changed_papers"] == 1
+
+    applied = regrade_all_exam_scores(conn, apply_changes=True)
+
+    assert applied["practice"]["changed_attempts"] == 3
+    assert applied["formal"]["changed_answers"] == 1
+    assert applied["formal"]["changed_attempts"] == 1
+    assert applied["papers"]["changed_papers"] == 1
+    assert conn.execute("SELECT total_score FROM exam_papers WHERE id = 1").fetchone()[0] == 100
+    answer = conn.execute(
+        "SELECT auto_score, final_score FROM exam_answers WHERE attempt_id = 1 AND question_id = 2"
+    ).fetchone()
+    attempt = conn.execute(
+        "SELECT objective_score, final_score FROM exam_attempts WHERE id = 1"
+    ).fetchone()
+    assert answer["auto_score"] == 5
+    assert answer["final_score"] == 5
+    assert attempt["objective_score"] == 50
+    assert attempt["final_score"] == 50
 
 
 def test_regrade_script_runs_as_standalone_cli(tmp_path):

@@ -1029,7 +1029,7 @@ def insert_paper(cursor, paper: dict, source_type: str = "exam") -> int:
         (
             paper["title"],
             paper.get("duration_minutes", EXAM_DURATION_MINUTES),
-            paper.get("total_score", 100),
+            100,
             source_type,
             get_now(),
         ),

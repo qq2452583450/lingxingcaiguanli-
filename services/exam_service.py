@@ -9,6 +9,7 @@ from uuid import uuid4
 
 OBJECTIVE_TYPES = {"single_choice", "multiple_choice", "true_false"}
 SUBJECTIVE_TYPES = {"short_answer", "case_analysis"}
+EXAM_TOTAL_SCORE = 100.0
 DAILY_PRACTICE_QUESTION_COUNT = 30
 DAILY_PRACTICE_REQUIRED_ACCURACY = 0.8
 DAILY_PRACTICE_PAPER_TITLES = {
@@ -968,6 +969,13 @@ def _normalize_option_answer(value: str) -> str:
     return "".join(char for char in _normalize_answer(value) if char not in separators)
 
 
+def scale_exam_score(raw_score: float, raw_total: float, total_score: float = EXAM_TOTAL_SCORE) -> float:
+    raw_total = float(raw_total or 0)
+    if raw_total <= 0:
+        return 0.0
+    return round(float(raw_score or 0) * float(total_score) / raw_total, 4)
+
+
 def _normalize_true_false_answer(value: str) -> str:
     normalized = _normalize_option_answer(value)
     truthy = {"√", "正", "正确", "对", "是", "TRUE", "T", "YES", "Y"}
@@ -1016,6 +1024,10 @@ def suggest_subjective_score(
     hits = [keyword for keyword in keywords if keyword in answer_text]
     suggested = round(float(score) * len(hits) / len(keywords), 2)
     return suggested, hits
+
+
+def _raw_paper_score_total(questions: list[dict]) -> float:
+    return sum(float(question.get("score") or 0) for question in questions)
 
 
 def start_attempt(user_id, paper_id) -> int:
@@ -1080,6 +1092,7 @@ def submit_attempt(attempt_id, answers) -> None:
                 (attempt["paper_id"],),
             ).fetchall()
         ]
+        raw_total_score = _raw_paper_score_total(questions)
 
         for question in questions:
             answer_text = _answer_to_text(answer_map.get(str(question["id"]), ""))
@@ -1128,7 +1141,11 @@ def submit_attempt(attempt_id, answers) -> None:
             )
 
         status = "pending_review" if has_subjective else "completed"
-        final_score = None if has_subjective else objective_score
+        scaled_objective_score = scale_exam_score(objective_score, raw_total_score)
+        scaled_suggested_subjective_score = scale_exam_score(
+            suggested_subjective_score, raw_total_score
+        )
+        final_score = None if has_subjective else scaled_objective_score
         conn.execute(
             """
             UPDATE exam_attempts
@@ -1138,8 +1155,8 @@ def submit_attempt(attempt_id, answers) -> None:
             """,
             (
                 status,
-                objective_score,
-                suggested_subjective_score,
+                scaled_objective_score,
+                scaled_suggested_subjective_score,
                 final_score,
                 _now(),
                 attempt_id,
@@ -1262,24 +1279,31 @@ def review_answer(answer_id, reviewer_id, final_score, comment="") -> None:
                 """
                 SELECT
                     COALESCE(SUM(CASE WHEN q.question_type IN ('short_answer', 'case_analysis') THEN ans.final_score ELSE 0 END), 0) AS subjective,
-                    COALESCE(SUM(CASE WHEN q.question_type IN ('single_choice', 'multiple_choice', 'true_false') THEN ans.final_score ELSE 0 END), 0) AS objective
+                    COALESCE(SUM(CASE WHEN q.question_type IN ('single_choice', 'multiple_choice', 'true_false') THEN ans.final_score ELSE 0 END), 0) AS objective,
+                    COALESCE(SUM(q.score), 0) AS raw_total
                 FROM exam_answers ans
                 JOIN exam_questions q ON q.id = ans.question_id
                 WHERE ans.attempt_id = ?
                 """,
                 (answer["attempt_id"],),
             ).fetchone()
-            final_subjective_score = float(totals["subjective"])
-            final_score_total = float(totals["objective"]) + final_subjective_score
+            raw_total = float(totals["raw_total"] or 0)
+            final_subjective_score = scale_exam_score(totals["subjective"], raw_total)
+            objective_score = scale_exam_score(totals["objective"], raw_total)
+            final_score_total = scale_exam_score(
+                float(totals["objective"] or 0) + float(totals["subjective"] or 0),
+                raw_total,
+            )
             conn.execute(
                 """
                 UPDATE exam_attempts
                 SET status = 'completed',
+                    objective_score = ?,
                     final_subjective_score = ?,
                     final_score = ?
                 WHERE id = ?
                 """,
-                (final_subjective_score, final_score_total, answer["attempt_id"]),
+                (objective_score, final_subjective_score, final_score_total, answer["attempt_id"]),
             )
         conn.commit()
     finally:

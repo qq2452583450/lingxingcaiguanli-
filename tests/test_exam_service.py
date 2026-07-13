@@ -451,6 +451,39 @@ def test_submit_attempt_scores_objective_and_leaves_subjective_pending_review(te
     assert missing_subjective_answer["final_score"] is None
 
 
+def test_submit_attempt_scales_weighted_paper_scores_to_one_hundred(test_db):
+    user_id = seed_user(test_db, "weighted_clerk", "\u6743\u91cd\u6750\u6599\u5458", "\u6750\u6599\u5458")
+    cursor = test_db.cursor()
+    cursor.execute(
+        """
+        INSERT INTO exam_papers (title, duration_minutes, total_score, source_type, create_time)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("Weighted objective paper", 30, 150, "exam", "2026-07-13 00:00:00"),
+    )
+    paper_id = cursor.lastrowid
+    cursor.executemany(
+        """
+        INSERT INTO exam_questions (
+            paper_id, question_type, order_no, stem, correct_answer, score
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (paper_id, "true_false", 1, "判断题", "正确", 5),
+            (paper_id, "single_choice", 2, "单选题", "B", 5),
+        ],
+    )
+    test_db.commit()
+    attempt_id = start_attempt(user_id, paper_id)
+
+    submit_attempt(attempt_id, {"1": "\u221a", "2": "A"})
+
+    attempt = get_attempt(attempt_id)
+    assert attempt["status"] == "completed"
+    assert attempt["objective_score"] == 50
+    assert attempt["final_score"] == 50
+
+
 def test_review_answer_completes_attempt_and_results_scope_by_viewer(test_db):
     paper, objective, subjective = load_exam(test_db)
     clerk_id = seed_user(test_db, "clerk", "\u5f20\u6750\u6599", "\u6750\u6599\u5458")
