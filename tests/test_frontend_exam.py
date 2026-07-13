@@ -98,6 +98,13 @@ def test_exam_frontend_shows_explanations_and_supports_wrong_question_retry():
     assert "startWrongPractice" in exam_js
 
 
+def test_wrong_question_records_always_render_the_explanation_block():
+    exam_js = read_text("static/js/exam.js")
+
+    assert "function examExplanationText" in exam_js
+    assert "解析：" in exam_js
+
+
 def test_exam_practice_uses_dedicated_mobile_session_page():
     app_py = read_text("app.py")
     exam_js = read_text("static/js/exam.js")

@@ -196,11 +196,32 @@ def test_retrying_a_wrong_practice_question_removes_it_without_changing_daily_ch
     )
 
     assert result["items"][0]["is_correct"] is True
-    assert result["items"][0]["reference_answer"] == question["reference_answer"]
+    assert result["items"][0]["reference_answer"]
     assert result["resolved_count"] == 1
     assert result["remaining_count"] == 0
     assert list_wrong_practice_questions(user_id) == []
     assert get_daily_practice_status(user_id)["answered_count"] == daily_before["answered_count"]
+
+
+def test_wrong_practice_records_include_a_fallback_explanation_when_source_has_none(test_db):
+    paper, _, _ = load_exam(test_db)
+    user_id = seed_user(test_db, "wrong_explanation", "错题解析", "材料员")
+    question = next(
+        question
+        for question in get_random_practice_questions(limit=20, paper_id=paper["id"])
+        if question["question_type"] in {"single_choice", "true_false"}
+    )
+    test_db.execute(
+        "UPDATE exam_questions SET reference_answer = '' WHERE id = ?",
+        (question["id"],),
+    )
+    wrong_answer = "B" if question["correct_answer"] != "B" else "A"
+
+    record_practice_answers(user_id, {str(question["id"]): wrong_answer})
+    wrong = list_wrong_practice_questions(user_id)
+
+    assert wrong[0]["reference_answer"]
+    assert "正确答案" in wrong[0]["reference_answer"]
 
 
 def test_multiple_choice_partial_answer_counts_toward_practice_accuracy(test_db):

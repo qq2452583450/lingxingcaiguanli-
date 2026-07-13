@@ -231,6 +231,12 @@ function answerTextFromOptions(item, value) {
     return labels.join('，') || value;
 }
 
+function examExplanationText(item) {
+    const explanation = String(item.reference_answer || '').trim();
+    if (explanation) return explanation;
+    return `题库暂未配置详细解析，正确答案为：${answerTextFromOptions(item, item.correct_answer)}`;
+}
+
 function renderPracticeResult(result) {
     const list = document.getElementById('examPracticeList') || examContent();
     if (!list) return;
@@ -244,7 +250,7 @@ function renderPracticeResult(result) {
             <div class="exam-question-paper">${examEscape(item.paper_title || '')}</div>
             <p><strong>你的答案：</strong>${examEscape(answerTextFromOptions(item, item.answer_text))}</p>
             <p><strong>正确答案：</strong>${examEscape(answerTextFromOptions(item, item.correct_answer))}</p>
-            ${item.reference_answer ? `<p><strong>解析：</strong>${examEscape(item.reference_answer)}</p>` : ''}
+            <p><strong>解析：</strong>${examEscape(examExplanationText(item))}</p>
         </div>`).join('');
     list.innerHTML = `
         <div class="exam-toolbar">
@@ -297,7 +303,7 @@ function renderPracticeRecordList(records, emptyText, options = {}) {
             <div class="exam-question-paper">${examEscape(item.paper_title || '')}</div>
             <p><strong>你的答案：</strong>${examEscape(answerTextFromOptions(item, item.answer_text))}</p>
             <p><strong>正确答案：</strong>${examEscape(answerTextFromOptions(item, item.correct_answer))}</p>
-            ${item.reference_answer ? `<p><strong>解析：</strong>${examEscape(item.reference_answer)}</p>` : ''}
+            <p><strong>解析：</strong>${examEscape(examExplanationText(item))}</p>
             <p><strong>结果：</strong>${item.is_correct ? '正确' : '错误'}</p>
         </div>`).join('');
     list.innerHTML = `
@@ -369,7 +375,7 @@ function renderWrongPracticeResult(result) {
             <div class="exam-question-paper">${examEscape(item.paper_title || '')}</div>
             <p><strong>你的答案：</strong>${examEscape(answerTextFromOptions(item, item.answer_text))}</p>
             <p><strong>正确答案：</strong>${examEscape(answerTextFromOptions(item, item.correct_answer))}</p>
-            ${item.reference_answer ? `<p><strong>解析：</strong>${examEscape(item.reference_answer)}</p>` : ''}
+            <p><strong>解析：</strong>${examEscape(examExplanationText(item))}</p>
         </div>`).join('');
     list.innerHTML = `
         <div class="exam-toolbar">

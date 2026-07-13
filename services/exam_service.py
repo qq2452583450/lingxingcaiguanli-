@@ -313,6 +313,14 @@ def _practice_item(
     credit = 1.0 if is_correct else 0.0
     if accuracy_credit is not None:
         credit = round(float(accuracy_credit), 4)
+    reference_answer = str(question.get("reference_answer") or "").strip()
+    if not reference_answer:
+        correct_answer = str(question.get("correct_answer") or "").strip()
+        reference_answer = (
+            f"题库暂未配置详细解析，正确答案为：{correct_answer}。"
+            if correct_answer
+            else "题库暂未配置详细解析。"
+        )
     return {
         "session_id": session_id,
         "question_id": question["id"],
@@ -324,7 +332,7 @@ def _practice_item(
         "options": question.get("options", []),
         "answer_text": answer_text,
         "correct_answer": question["correct_answer"],
-        "reference_answer": question.get("reference_answer"),
+        "reference_answer": reference_answer,
         "is_correct": bool(is_correct),
         "accuracy_credit": credit,
         "score": question["score"],
