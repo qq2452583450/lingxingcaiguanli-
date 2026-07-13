@@ -59,6 +59,10 @@ function Invoke-ExamScoreRegrade {
     Write-Host "Regrading exam scores and normalizing paper totals"
     & $VenvPython "tools\regrade_practice_attempts.py" --apply --backup
     if ($LASTEXITCODE -ne 0) { throw "exam score regrade failed" }
+
+    Write-Host "Applying one-time exam data fixes"
+    & $VenvPython "tools\apply_exam_data_fixes.py" --apply
+    if ($LASTEXITCODE -ne 0) { throw "exam data fixes failed" }
 }
 
 $LocalEnv = Join-Path $AppDir "deploy\server.env.ps1"
