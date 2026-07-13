@@ -171,7 +171,12 @@ def parse_literature_question_bank_docx(path: Path) -> dict:
             continue
         if _is_literature_section_heading(line):
             flush()
-            current_type = "multiple_choice" if "多" in line else "single_choice"
+            if "判断" in line:
+                current_type = "true_false"
+            elif "多" in line:
+                current_type = "multiple_choice"
+            else:
+                current_type = "single_choice"
             continue
 
         answer = _prefixed_text(line, "答案")

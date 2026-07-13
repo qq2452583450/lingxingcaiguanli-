@@ -156,6 +156,17 @@ def test_daily_random_practice_only_uses_current_five_exam_sets(test_db):
     }
 
 
+def test_daily_random_practice_uses_current_question_bank_after_reimport(test_db):
+    from services.exam_import_service import BUNDLED_QUESTION_BANK_DIR
+
+    import_exam_papers_from_question_bank_dir(BUNDLED_QUESTION_BANK_DIR)
+
+    questions = get_random_practice_questions(limit=30)
+
+    assert len(questions) == 30
+    assert all(question["options"] for question in questions)
+
+
 def test_record_practice_answers_scores_and_lists_history(test_db):
     paper, _, _ = load_exam(test_db)
     user_id = seed_user(test_db, "practice_clerk", "\u7ec3\u4e60\u6750\u6599\u5458", "\u6750\u6599\u5458")
