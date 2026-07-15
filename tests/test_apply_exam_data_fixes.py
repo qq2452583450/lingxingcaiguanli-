@@ -100,3 +100,41 @@ def test_daily_practice_data_fix_sets_liuguanghua_to_thirty_questions_at_display
     assert row["correct_count"] == 26
     assert round(row["accuracy_credit"] / row["total_count"] * 100) == 87
     assert conn.execute("SELECT COUNT(*) FROM exam_practice_wrong_questions").fetchone()[0] == 4
+
+
+def test_daily_practice_data_fix_sets_precise_display_accuracy_and_created_at():
+    conn = build_data_fix_db()
+    ensure_data_fix_table(conn)
+    fix = {
+        "id": "2026-07-14-liuguanghua-daily-practice",
+        "type": "daily_practice_status",
+        "user": "liuguanghua",
+        "date": "2026-07-14",
+        "answered_count": 30,
+        "display_accuracy_percent": 89,
+        "created_at": "2026-07-14 19:47",
+    }
+
+    result = apply_fix(conn, fix, apply_changes=True)
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS total_count,
+               SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) AS correct_count,
+               SUM(accuracy_credit) AS accuracy_credit,
+               MAX(created_at) AS latest_practice_at
+        FROM exam_practice_attempts
+        WHERE user_id = 1
+          AND created_at LIKE '2026-07-14%'
+        """
+    ).fetchone()
+
+    assert result["status"] == "applied"
+    assert result["result"]["answered_count"] == 30
+    assert result["result"]["correct_count"] == 26
+    assert result["result"]["accuracy_credit"] == 26.7
+    assert result["result"]["display_accuracy_percent"] == 89
+    assert result["result"]["created_at"] == "2026-07-14 19:47:00"
+    assert row["total_count"] == 30
+    assert row["correct_count"] == 26
+    assert round(row["accuracy_credit"] / row["total_count"] * 100) == 89
+    assert row["latest_practice_at"] == "2026-07-14 19:47:00"

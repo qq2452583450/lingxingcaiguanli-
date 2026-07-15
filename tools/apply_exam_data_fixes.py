@@ -124,11 +124,20 @@ def set_daily_practice_status(conn: sqlite3.Connection, fix: dict) -> dict:
     date = fix["date"]
     answered_count = int(fix["answered_count"])
     display_accuracy_percent = int(fix["display_accuracy_percent"])
-    correct_count = round(answered_count * display_accuracy_percent / 100)
+    target_accuracy_credit = round(answered_count * display_accuracy_percent / 100, 4)
+    correct_count = int(target_accuracy_credit)
+    partial_credit = round(target_accuracy_credit - correct_count, 4)
+    if display_accuracy_percent >= 100:
+        correct_count = answered_count
+        partial_credit = 0.0
     correct_count = max(0, min(answered_count, correct_count))
     questions = load_objective_questions(conn, answered_count)
     session_id = f"manual-{fix['id']}"
-    created_at = f"{date} 09:00:00"
+    created_at = fix.get("created_at") or f"{date} 09:00:00"
+    if len(created_at) == 16:
+        created_at = f"{created_at}:00"
+    if not created_at.startswith(f"{date} "):
+        raise ValueError(f"created_at must be on fix date: {created_at}")
     question_ids = [row["id"] for row in questions]
 
     conn.execute(
@@ -152,6 +161,9 @@ def set_daily_practice_status(conn: sqlite3.Connection, fix: dict) -> dict:
     wrong_rows = []
     for index, question in enumerate(questions):
         is_correct = index < correct_count
+        accuracy_credit = 1.0 if is_correct else 0.0
+        if not is_correct and partial_credit and index == correct_count:
+            accuracy_credit = partial_credit
         answer_text = question["correct_answer"] if is_correct else wrong_answer(question)
         rows.append(
             (
@@ -159,7 +171,7 @@ def set_daily_practice_status(conn: sqlite3.Connection, fix: dict) -> dict:
                 question["id"],
                 answer_text,
                 1 if is_correct else 0,
-                1.0 if is_correct else 0.0,
+                accuracy_credit,
                 created_at,
                 session_id,
             )
@@ -205,7 +217,9 @@ def set_daily_practice_status(conn: sqlite3.Connection, fix: dict) -> dict:
         "date": date,
         "answered_count": answered_count,
         "correct_count": correct_count,
-        "display_accuracy_percent": round(correct_count / answered_count * 100) if answered_count else 0,
+        "accuracy_credit": target_accuracy_credit,
+        "display_accuracy_percent": round(target_accuracy_credit / answered_count * 100) if answered_count else 0,
+        "created_at": created_at,
         "session_id": session_id,
     }
 
