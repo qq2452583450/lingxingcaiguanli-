@@ -123,6 +123,53 @@ def init_exam_schema(conn):
             FOREIGN KEY (question_id) REFERENCES exam_questions(id)
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS exam_retroactive_checkins (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            target_date TEXT NOT NULL,
+            month TEXT NOT NULL,
+            practice_session_id TEXT NOT NULL UNIQUE,
+            total_count INTEGER NOT NULL DEFAULT 0,
+            correct_count INTEGER NOT NULL DEFAULT 0,
+            accuracy REAL NOT NULL DEFAULT 0,
+            passed INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS exam_monthly_checkin_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            month TEXT NOT NULL,
+            expected_days INTEGER NOT NULL DEFAULT 0,
+            actual_days INTEGER NOT NULL DEFAULT 0,
+            missing_days INTEGER NOT NULL DEFAULT 0,
+            retroactive_used INTEGER NOT NULL DEFAULT 0,
+            generated_at TEXT NOT NULL,
+            UNIQUE (user_id, month),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS exam_retake_eligibilities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            paper_id INTEGER NOT NULL,
+            eligibility_type TEXT NOT NULL CHECK (eligibility_type IN ('makeup_absent', 'retake_failed')),
+            status TEXT NOT NULL CHECK (status IN ('open', 'used', 'cancelled')) DEFAULT 'open',
+            source_attempt_id INTEGER,
+            used_attempt_id INTEGER,
+            reason TEXT,
+            created_at TEXT NOT NULL,
+            used_at TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (paper_id) REFERENCES exam_papers(id),
+            FOREIGN KEY (source_attempt_id) REFERENCES exam_attempts(id),
+            FOREIGN KEY (used_attempt_id) REFERENCES exam_attempts(id)
+        )
+        """,
     ]
     index_statements = [
         "CREATE INDEX IF NOT EXISTS idx_exam_attempts_user ON exam_attempts(user_id)",
@@ -135,6 +182,9 @@ def init_exam_schema(conn):
         "CREATE INDEX IF NOT EXISTS idx_exam_practice_session ON exam_practice_attempts(user_id, practice_session_id)",
         "CREATE INDEX IF NOT EXISTS idx_exam_practice_drafts_user ON exam_practice_drafts(user_id)",
         "CREATE INDEX IF NOT EXISTS idx_exam_practice_wrong_questions_user ON exam_practice_wrong_questions(user_id, last_wrong_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_exam_retroactive_user_month ON exam_retroactive_checkins(user_id, month)",
+        "CREATE INDEX IF NOT EXISTS idx_exam_monthly_checkin_reports_month ON exam_monthly_checkin_reports(month)",
+        "CREATE INDEX IF NOT EXISTS idx_exam_retake_user_status ON exam_retake_eligibilities(user_id, status)",
     ]
 
     for statement in table_statements:
@@ -158,6 +208,15 @@ def init_exam_schema(conn):
             SET accuracy_credit = CASE WHEN is_correct = 1 THEN 1 ELSE 0 END
             WHERE accuracy_credit IS NULL OR accuracy_credit = 0
             """
+        )
+
+    attempt_columns = {
+        row[1]
+        for row in cursor.execute("PRAGMA table_info(exam_attempts)")
+    }
+    if "retake_eligibility_id" not in attempt_columns:
+        cursor.execute(
+            "ALTER TABLE exam_attempts ADD COLUMN retake_eligibility_id INTEGER"
         )
 
     _require_manual_current_exam_selection(cursor)

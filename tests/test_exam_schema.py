@@ -19,6 +19,9 @@ def test_exam_schema_creates_required_tables(test_db):
         "exam_subjective_reviews",
         "exam_practice_attempts",
         "exam_settings",
+        "exam_retroactive_checkins",
+        "exam_monthly_checkin_reports",
+        "exam_retake_eligibilities",
     }.issubset(names)
 
 
@@ -29,6 +32,7 @@ def test_exam_attempts_reference_existing_users(test_db):
     assert columns["user_id"][2].upper() == "INTEGER"
     assert columns["paper_id"][2].upper() == "INTEGER"
     assert columns["status"][2].upper() == "TEXT"
+    assert columns["retake_eligibility_id"][2].upper() == "INTEGER"
 
 
 def test_exam_practice_attempts_have_session_id(test_db):

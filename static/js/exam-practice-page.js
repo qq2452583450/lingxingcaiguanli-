@@ -1,6 +1,7 @@
 let csrfToken = '';
 let practiceQuestions = [];
 let practiceDraftUpdatedAt = '';
+const retroactiveDate = new URLSearchParams(window.location.search).get('retroactive_date') || '';
 
 function practiceEscape(value) {
     const text = value === null || value === undefined ? '' : String(value);
@@ -78,7 +79,7 @@ function renderQuestions(savedAnswers = {}, updatedAt = '') {
         <form id="practiceForm" onsubmit="submitPractice(event)">
             <div class="practice-card">
                 <strong>本次共 ${practiceQuestions.length} 题</strong>
-                <div class="practice-meta">正确率达到 80% 视为今日合格打卡，未达标需要继续练习。</div>
+                <div class="practice-meta">${retroactiveDate ? `正在补打卡：${practiceEscape(retroactiveDate)}。` : ''}正确率达到 80% 视为合格打卡，未达标需要继续练习。</div>
                 <div class="practice-meta" id="practiceDraftStatus">${updatedAt ? `已恢复暂存：${practiceEscape(updatedAt)}` : ''}</div>
             </div>
             ${questionCards}
@@ -131,9 +132,13 @@ async function submitPractice(event) {
     const button = event.target.querySelector('button[type="submit"]');
     if (button) button.disabled = true;
     try {
-        const data = await practiceApi('/api/exam/practice/submit', {
+        const url = retroactiveDate ? '/api/exam/attendance/retroactive/submit' : '/api/exam/practice/submit';
+        const payload = retroactiveDate
+            ? { target_date: retroactiveDate, answers: collectAnswers() }
+            : { answers: collectAnswers() };
+        const data = await practiceApi(url, {
             method: 'POST',
-            body: JSON.stringify({ answers: collectAnswers() })
+            body: JSON.stringify(payload)
         });
         renderResult(data.data || {});
         await loadDailyStatus();
@@ -204,7 +209,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
         await loadCsrfToken();
         await loadDailyStatus();
-        const restored = await restorePracticeDraft();
+        const restored = retroactiveDate ? false : await restorePracticeDraft();
         if (!restored) await loadPractice();
     } catch (error) {
         document.getElementById('practiceRoot').innerHTML = `

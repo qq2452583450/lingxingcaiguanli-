@@ -14,6 +14,7 @@ from services.exam_service import (
     delete_exam_attempt,
     get_attempt,
     get_attempt_review,
+    list_attendance_calendar,
     get_current_exam_paper,
     get_daily_practice_status,
     get_exam_paper,
@@ -26,12 +27,16 @@ from services.exam_service import (
     list_papers,
     list_pending_reviews,
     list_results,
+    list_monthly_checkin_reports,
+    list_retake_eligibilities,
     list_wrong_practice_questions,
     record_practice_answers,
     retry_wrong_practice_answers,
     review_answer,
     save_practice_draft,
     start_attempt,
+    start_retake_attempt,
+    submit_retroactive_checkin,
     submit_attempt,
 )
 
@@ -237,6 +242,41 @@ def practice_daily_status():
     return jsonify({"success": True, "data": get_daily_practice_status(user["id"])})
 
 
+@exam_bp.route("/attendance/calendar", methods=["GET"])
+def attendance_calendar():
+    user, denied = _require_exam_user()
+    if denied:
+        return denied
+    if not can_take_exam(user):
+        return _json_error("Permission denied", 403)
+
+    try:
+        data = list_attendance_calendar(user["id"], request.args.get("month") or None)
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+    return jsonify({"success": True, "data": data})
+
+
+@exam_bp.route("/attendance/retroactive/submit", methods=["POST"])
+def submit_retroactive_attendance():
+    user, denied = _require_exam_user()
+    if denied:
+        return denied
+    if not can_take_exam(user):
+        return _json_error("Permission denied", 403)
+
+    data = request.get_json(silent=True) or {}
+    try:
+        result = submit_retroactive_checkin(
+            user["id"],
+            data.get("target_date") or "",
+            data.get("answers") or {},
+        )
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+    return jsonify({"success": True, "data": result})
+
+
 @exam_bp.route("/practice/history", methods=["GET"])
 def practice_history():
     user, denied = _require_exam_user()
@@ -401,6 +441,40 @@ def results():
     return jsonify({"success": True, "data": list_results(filters)})
 
 
+@exam_bp.route("/retake/eligibilities", methods=["GET"])
+def retake_eligibilities():
+    user, denied = _require_exam_user()
+    if denied:
+        return denied
+    if not can_take_exam(user):
+        return _json_error("Permission denied", 403)
+
+    return jsonify(
+        {
+            "success": True,
+            "data": list_retake_eligibilities(user_id=user["id"]),
+        }
+    )
+
+
+@exam_bp.route("/retake/eligibilities/<int:eligibility_id>/start", methods=["POST"])
+def start_retake(eligibility_id):
+    user, denied = _require_exam_user()
+    if denied:
+        return denied
+    if not can_take_exam(user):
+        return _json_error("Permission denied", 403)
+
+    try:
+        attempt_id = start_retake_attempt(user["id"], eligibility_id)
+    except ValueError as exc:
+        status = 403 if str(exc) == "Permission denied" else 400
+        return _json_error(str(exc), status)
+    attempt = get_attempt(attempt_id)
+    attempt["attempt_id"] = attempt_id
+    return jsonify({"success": True, "attempt_id": attempt_id, "data": attempt})
+
+
 @exam_bp.route("/admin/papers", methods=["GET"])
 def admin_papers():
     _, denied = _require_exam_manager()
@@ -468,6 +542,28 @@ def admin_checkins():
 
     target_date = request.args.get("date") or None
     return jsonify({"success": True, "data": list_daily_checkins(target_date)})
+
+
+@exam_bp.route("/admin/checkins/monthly", methods=["GET"])
+def admin_monthly_checkins():
+    _, denied = _require_exam_manager()
+    if denied:
+        return denied
+
+    try:
+        data = list_monthly_checkin_reports(request.args.get("month") or None)
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+    return jsonify({"success": True, "data": data})
+
+
+@exam_bp.route("/admin/retake/eligibilities", methods=["GET"])
+def admin_retake_eligibilities():
+    user, denied = _require_exam_manager()
+    if denied:
+        return denied
+
+    return jsonify({"success": True, "data": list_retake_eligibilities(viewer=user)})
 
 
 @exam_bp.route("/admin/attempts/<int:attempt_id>", methods=["DELETE"])

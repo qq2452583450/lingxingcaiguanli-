@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import date, timedelta
 
 import pytest
 
@@ -8,20 +9,25 @@ from services.exam_service import (
     can_take_exam,
     delete_exam_attempt,
     get_daily_practice_status,
+    list_attendance_calendar,
     get_attempt,
     get_paper_questions,
     get_random_practice_questions,
     list_daily_checkins,
+    list_monthly_checkin_reports,
     list_papers,
     list_practice_history,
     list_pending_reviews,
     list_results,
+    list_retake_eligibilities,
     list_wrong_practice_questions,
     record_practice_answers,
     retry_wrong_practice_answers,
     list_user_attempts,
     review_answer,
     start_attempt,
+    start_retake_attempt,
+    submit_retroactive_checkin,
     submit_attempt,
     grade_objective,
 )
@@ -399,6 +405,104 @@ def test_daily_checkins_include_passed_failed_and_not_practiced_takers(test_db):
     assert by_username["missing_daily"]["practiced"] is False
     assert by_username["missing_daily"]["answered_count"] == 0
     assert by_username["missing_daily"]["latest_practice_at"] is None
+
+
+def test_retroactive_checkin_marks_calendar_day_and_consumes_monthly_quota(test_db):
+    paper, _, _ = load_exam(test_db)
+    user_id = seed_user(test_db, "retro_daily", "\u8865\u6253\u5361", "\u6750\u6599\u5458")
+    questions = get_random_practice_questions(limit=30, paper_id=paper["id"])
+    target_day = date.today() - timedelta(days=1)
+    answers = {}
+    for index, question in enumerate(questions):
+        answers[str(question["id"])] = (
+            question["correct_answer"]
+            if index < 24
+            else definitely_wrong_objective_answer(question)
+        )
+
+    result = submit_retroactive_checkin(user_id, target_day.strftime("%Y-%m-%d"), answers)
+    calendar = list_attendance_calendar(user_id, target_day.strftime("%Y-%m"))
+    day = next(item for item in calendar["days"] if item["date"] == target_day.strftime("%Y-%m-%d"))
+
+    assert result["passed"] is True
+    assert result["retroactive"] is True
+    assert result["target_date"] == target_day.strftime("%Y-%m-%d")
+    assert calendar["retroactive_used"] == 1
+    assert day["status"] == "passed"
+    assert day["retroactive_allowed"] is False
+
+
+def test_retroactive_checkin_limit_is_three_passed_days_per_month(test_db):
+    paper, _, _ = load_exam(test_db)
+    user_id = seed_user(test_db, "retro_limit", "\u8865\u5361\u9650\u989d", "\u6750\u6599\u5458")
+    questions = get_random_practice_questions(limit=30, paper_id=paper["id"])
+    answers = {str(question["id"]): question["correct_answer"] for question in questions}
+
+    for offset in (1, 2, 3):
+        submit_retroactive_checkin(
+            user_id,
+            (date.today() - timedelta(days=offset)).strftime("%Y-%m-%d"),
+            answers,
+        )
+
+    with pytest.raises(ValueError, match="limit"):
+        submit_retroactive_checkin(
+            user_id,
+            (date.today() - timedelta(days=4)).strftime("%Y-%m-%d"),
+            answers,
+        )
+
+
+def test_monthly_checkin_report_compares_actual_and_missing_days(test_db):
+    user_id = seed_user(test_db, "monthly_missing", "\u6708\u62a5", "\u6750\u6599\u5458")
+    month = date.today().strftime("%Y-%m")
+
+    reports = list_monthly_checkin_reports(month)
+    row = next(item for item in reports if item["user_id"] == user_id)
+
+    assert row["month"] == month
+    assert row["expected_days"] >= 1
+    assert row["actual_days"] == 0
+    assert row["missing_days"] == row["expected_days"]
+
+
+def test_retake_eligibilities_separate_absent_makeup_and_failed_retake(test_db):
+    absent_id = seed_user(test_db, "absent_retake", "\u7f3a\u8003", "\u6750\u6599\u5458")
+    failed_id = seed_user(test_db, "failed_retake", "\u4e0d\u5408\u683c", "\u6750\u6599\u5458")
+    cursor = test_db.cursor()
+    cursor.execute(
+        """
+        INSERT INTO exam_papers (title, duration_minutes, total_score, source_type, create_time)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("Retake objective paper", 30, 100, "exam", "2026-07-15 00:00:00"),
+    )
+    paper_id = cursor.lastrowid
+    cursor.executemany(
+        """
+        INSERT INTO exam_questions (
+            paper_id, question_type, order_no, stem, correct_answer, score
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (paper_id, "true_false", 1, "TF", "\u6b63\u786e", 50),
+            (paper_id, "single_choice", 2, "SC", "B", 50),
+        ],
+    )
+    test_db.execute(
+        "INSERT OR REPLACE INTO exam_settings (key, value) VALUES (?, ?)",
+        ("current_exam_paper_id", str(paper_id)),
+    )
+    attempt_id = start_attempt(failed_id, paper_id)
+    submit_attempt(attempt_id, {"1": "\u221a", "2": "A"})
+
+    absent = list_retake_eligibilities(user_id=absent_id)
+    failed = list_retake_eligibilities(user_id=failed_id)
+
+    assert {row["eligibility_type"] for row in absent} == {"makeup_absent"}
+    assert {row["eligibility_type"] for row in failed} == {"retake_failed"}
+    new_attempt_id = start_retake_attempt(failed_id, failed[0]["id"])
+    assert get_attempt(new_attempt_id)["retake_eligibility_id"] == failed[0]["id"]
 
 
 def test_submit_attempt_scores_objective_and_leaves_subjective_pending_review(test_db):

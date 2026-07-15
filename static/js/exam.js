@@ -3,6 +3,7 @@ let examCurrentTab = 'practice';
 let examActiveAttempt = null;
 let examCheckinFilter = 'all';
 let examCheckinRecords = [];
+let examAttendanceMonth = '';
 
 const EXAM_TAKER_ROLES = ['材料员', '材料审批负责人', '基地负责人'];
 const EXAM_MANAGER_ROLES = ['材料审批负责人', '系统管理员'];
@@ -97,7 +98,7 @@ async function loadExamCenter() {
         document.querySelectorAll('.exam-manager-only').forEach(el => {
             el.classList.toggle('hidden', !canManageExam(currentUser));
         });
-        if (!canTakeExam(currentUser) && ['practice', 'exam', 'results'].includes(examCurrentTab)) {
+        if (!canTakeExam(currentUser) && ['practice', 'exam', 'retakes', 'results'].includes(examCurrentTab)) {
             examCurrentTab = 'papers';
         }
         if (!canManageExam(currentUser) && ['papers', 'reviews', 'checkins', 'adminResults'].includes(examCurrentTab)) {
@@ -110,7 +111,7 @@ async function loadExamCenter() {
 }
 
 async function showExamTab(tab) {
-    if (!canTakeExam(currentUser) && ['practice', 'exam', 'results'].includes(tab)) {
+    if (!canTakeExam(currentUser) && ['practice', 'exam', 'retakes', 'results'].includes(tab)) {
         tab = 'papers';
     }
     if (!canManageExam(currentUser) && ['papers', 'reviews', 'checkins', 'adminResults'].includes(tab)) {
@@ -125,6 +126,8 @@ async function showExamTab(tab) {
         renderPracticeShell();
     } else if (tab === 'exam') {
         renderExamStart();
+    } else if (tab === 'retakes') {
+        await loadRetakeEligibilities();
     } else if (tab === 'results') {
         await loadMyExamResults();
     } else if (tab === 'papers') {
@@ -158,9 +161,11 @@ function renderPracticeShell() {
             <div id="examPracticeDailyStatus" class="exam-summary-card">
                 正在加载今日练习打卡状态...
             </div>
+            <div id="examAttendanceCalendar" class="exam-summary-card"></div>
             <div id="examPracticeList" class="exam-question-list"></div>
         </div>`;
     loadPracticeDailyStatus();
+    loadAttendanceCalendar();
 }
 
 async function loadRandomPractice() {
@@ -180,6 +185,48 @@ async function loadPracticeDailyStatus() {
     } catch (e) {
         target.innerHTML = `<span>${examEscape(e.message || '今日打卡状态加载失败')}</span>`;
     }
+}
+
+function examMonthValue(date = new Date()) {
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    return `${date.getFullYear()}-${month}`;
+}
+
+async function loadAttendanceCalendar(monthValue = '') {
+    const target = document.getElementById('examAttendanceCalendar');
+    if (!target) return;
+    const month = monthValue || examAttendanceMonth || examMonthValue();
+    examAttendanceMonth = month;
+    target.innerHTML = '<div class="loading">正在加载打卡日历...</div>';
+    try {
+        const data = await examJson(`/api/exam/attendance/calendar?month=${encodeURIComponent(month)}`);
+        const calendar = data.data || {};
+        const days = (calendar.days || []).map(day => {
+            const className = day.status === 'passed' ? 'completed' : day.status === 'future' ? 'pending_review' : 'in_progress';
+            const click = day.retroactive_allowed ? `onclick="startRetroactivePractice('${examEscape(day.date)}')"` : '';
+            return `<button class="btn btn-sm status ${className}" type="button" ${click} title="${examEscape(day.date)} ${Math.round((day.best_accuracy || 0) * 100)}%">${String(day.date || '').slice(-2)}</button>`;
+        }).join('');
+        target.innerHTML = `
+            <div class="exam-toolbar">
+                <div>
+                    <strong>打卡日历</strong>
+                    <p>绿色为合格，红色为未合格或未打卡；可点击历史红色日期补打卡。</p>
+                </div>
+                <div class="exam-actions">
+                    <input type="month" value="${examEscape(calendar.month || month)}" onchange="loadAttendanceCalendar(this.value)">
+                </div>
+            </div>
+            <div class="exam-actions" style="flex-wrap: wrap; gap: 6px;">${days}</div>
+            <div class="exam-muted">本月合格 ${calendar.actual_days || 0} 天，未合格/未打卡 ${calendar.missing_days || 0} 天，补打卡 ${calendar.retroactive_used || 0}/${calendar.retroactive_limit || 3} 次。</div>
+        `;
+    } catch (e) {
+        target.innerHTML = `<span>${examEscape(e.message || '打卡日历加载失败')}</span>`;
+    }
+    examRefreshIcons();
+}
+
+function startRetroactivePractice(targetDate) {
+    window.location.href = `/exam/practice-session?retroactive_date=${encodeURIComponent(targetDate)}`;
 }
 
 async function loadRandomPracticeInline() {
@@ -542,6 +589,63 @@ async function loadMyExamResults() {
     }
 }
 
+function retakeTypeText(type) {
+    if (type === 'makeup_absent') return '缺考补考';
+    if (type === 'retake_failed') return '不合格重考';
+    return type || '-';
+}
+
+async function loadRetakeEligibilities() {
+    examLoading('正在加载补考/重考资格...');
+    try {
+        const data = await examJson('/api/exam/retake/eligibilities');
+        const rows = data.data || [];
+        const grouped = {
+            makeup_absent: rows.filter(row => row.eligibility_type === 'makeup_absent'),
+            retake_failed: rows.filter(row => row.eligibility_type === 'retake_failed')
+        };
+        const renderGroup = (title, typeRows) => {
+            const body = typeRows.map(row => `
+                <tr>
+                    <td>${examEscape(row.paper_title || '-')}</td>
+                    <td>${examEscape(row.reason || '-')}</td>
+                    <td>${examDate(row.created_at)}</td>
+                    <td><button class="btn btn-primary btn-sm" type="button" onclick="startRetakeEligibility(${Number(row.id)})">开始</button></td>
+                </tr>`).join('');
+            return `
+                <section class="exam-panel">
+                    <div class="exam-toolbar"><h3>${title}</h3></div>
+                    <div class="table-container">
+                        <table>
+                            <thead><tr><th>试卷</th><th>原因</th><th>生成时间</th><th>操作</th></tr></thead>
+                            <tbody>${body || '<tr><td colspan="4" class="empty-message">暂无资格</td></tr>'}</tbody>
+                        </table>
+                    </div>
+                </section>`;
+        };
+        examContent().innerHTML = `
+            ${renderGroup('缺考补考', grouped.makeup_absent)}
+            ${renderGroup('不合格重考', grouped.retake_failed)}
+        `;
+    } catch (e) {
+        examError(e.message || '补考/重考资格加载失败');
+    }
+    examRefreshIcons();
+}
+
+async function startRetakeEligibility(eligibilityId) {
+    try {
+        const result = await examJson(`/api/exam/retake/eligibilities/${eligibilityId}/start`, {
+            method: 'POST',
+            body: JSON.stringify({})
+        });
+        examActiveAttempt = result.data;
+        await renderAttempt(result.attempt_id || result.data?.attempt_id || result.data?.id);
+    } catch (e) {
+        examNotify(e.message || '启动补考/重考失败', 'error');
+    }
+}
+
 async function loadExamPapersAdmin() {
     if (!canManageExam(currentUser)) return;
     examLoading('正在加载题库...');
@@ -684,6 +788,36 @@ async function loadCheckinRecords() {
     }
 }
 
+async function loadMonthlyCheckinReport() {
+    if (!canManageExam(currentUser)) return;
+    const monthValue = document.getElementById('examCheckinMonth')?.value || examMonthValue();
+    const target = document.getElementById('examMonthlyCheckinReport');
+    if (!target) return;
+    target.innerHTML = '<div class="loading">正在加载月度对账...</div>';
+    try {
+        const data = await examJson(`/api/exam/admin/checkins/monthly?month=${encodeURIComponent(monthValue)}`);
+        const rows = (data.data || []).map(row => `
+            <tr>
+                <td>${examEscape(row.real_name || row.username || '-')}</td>
+                <td>${examEscape(row.username || '-')}</td>
+                <td>${examEscape(row.role_name || '-')}</td>
+                <td>${examEscape(row.expected_days || 0)}</td>
+                <td>${examEscape(row.actual_days || 0)}</td>
+                <td>${examEscape(row.missing_days || 0)}</td>
+                <td>${examEscape(row.retroactive_used || 0)}</td>
+            </tr>`).join('');
+        target.innerHTML = `
+            <div class="table-container">
+                <table>
+                    <thead><tr><th>姓名</th><th>账号</th><th>角色</th><th>应打卡</th><th>实际合格</th><th>未合格/未打卡</th><th>补打卡</th></tr></thead>
+                    <tbody>${rows || '<tr><td colspan="7" class="empty-message">暂无月报数据</td></tr>'}</tbody>
+                </table>
+            </div>`;
+    } catch (e) {
+        target.innerHTML = `<div class="error-message">${examEscape(e.message || '月度对账加载失败')}</div>`;
+    }
+}
+
 function setCheckinFilter(filter) {
     examCheckinFilter = filter;
     const dateValue = document.getElementById('examCheckinDate')?.value || todayDateValue();
@@ -738,6 +872,8 @@ function renderCheckinRecords(dateValue) {
                 <button class="btn ${examCheckinFilter === 'passed' ? 'btn-primary' : 'btn-secondary'}" data-checkin-filter="passed" type="button" onclick="setCheckinFilter('passed')">已合格</button>
                 <button class="btn ${examCheckinFilter === 'failed' ? 'btn-primary' : 'btn-secondary'}" data-checkin-filter="failed" type="button" onclick="setCheckinFilter('failed')">已做未合格</button>
                 <button class="btn ${examCheckinFilter === 'missing' ? 'btn-primary' : 'btn-secondary'}" data-checkin-filter="missing" type="button" onclick="setCheckinFilter('missing')">未做题</button>
+                <input id="examCheckinMonth" type="month" value="${examEscape(String(dateValue || todayDateValue()).slice(0, 7))}">
+                <button class="btn btn-secondary" type="button" onclick="loadMonthlyCheckinReport()"><i data-lucide="calendar-days"></i>月度对账</button>
             </div>
             <div class="table-container">
                 <table>
@@ -745,6 +881,7 @@ function renderCheckinRecords(dateValue) {
                     <tbody>${rows || '<tr><td colspan="8" class="empty-message">暂无打卡记录</td></tr>'}</tbody>
                 </table>
             </div>
+            <div id="examMonthlyCheckinReport" class="exam-summary-card"></div>
         </div>`;
     examRefreshIcons();
 }

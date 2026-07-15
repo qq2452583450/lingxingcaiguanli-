@@ -609,6 +609,48 @@ def test_practice_submit_returns_daily_pass_status(client, test_db):
     assert status["data"]["answered_count"] == 30
 
 
+def test_clerk_can_view_attendance_calendar(client, test_db):
+    seed_exam()
+    clerk_id = seed_user(test_db, "calendar_api", "\u65e5\u5386", ROLE_CLERK)
+    login(client, clerk_id, "calendar_api", "\u65e5\u5386", ROLE_CLERK)
+
+    response = client.get("/api/exam/attendance/calendar")
+    data = response.get_json()
+
+    assert response.status_code == 200
+    assert data["success"] is True
+    assert "days" in data["data"]
+    assert data["data"]["retroactive_limit"] == 3
+
+
+def test_manager_can_view_monthly_checkin_report(client, test_db):
+    seed_exam()
+    manager_id = seed_user(test_db, "monthly_manager", "\u6708\u62a5\u7ba1\u7406", ROLE_MANAGER)
+    seed_user(test_db, "monthly_clerk", "\u6708\u62a5\u5458", ROLE_CLERK)
+    login(client, manager_id, "monthly_manager", "\u6708\u62a5\u7ba1\u7406", ROLE_MANAGER)
+
+    response = client.get("/api/exam/admin/checkins/monthly")
+    data = response.get_json()
+
+    assert response.status_code == 200
+    assert data["success"] is True
+    assert any(row["username"] == "monthly_clerk" for row in data["data"])
+
+
+def test_clerk_can_list_retake_eligibilities(client, test_db):
+    seed_exam()
+    select_current_paper(test_db)
+    clerk_id = seed_user(test_db, "retake_absent_api", "\u7f3a\u8003\u63a5\u53e3", ROLE_CLERK)
+    login(client, clerk_id, "retake_absent_api", "\u7f3a\u8003\u63a5\u53e3", ROLE_CLERK)
+
+    response = client.get("/api/exam/retake/eligibilities")
+    data = response.get_json()
+
+    assert response.status_code == 200
+    assert data["success"] is True
+    assert {row["eligibility_type"] for row in data["data"]} == {"makeup_absent"}
+
+
 def test_wrong_practice_endpoint_scopes_to_current_user(client, test_db):
     from services.exam_service import record_practice_answers
 

@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+import calendar
+from datetime import date, datetime, timedelta
 from uuid import uuid4
 
 
 OBJECTIVE_TYPES = {"single_choice", "multiple_choice", "true_false"}
 SUBJECTIVE_TYPES = {"short_answer", "case_analysis"}
 EXAM_TOTAL_SCORE = 100.0
+EXAM_PASSING_SCORE = 80.0
 DAILY_PRACTICE_QUESTION_COUNT = 30
 DAILY_PRACTICE_REQUIRED_ACCURACY = 0.8
+RETROACTIVE_CHECKIN_MONTHLY_LIMIT = 3
 DAILY_PRACTICE_PAPER_TITLES = {
     "第一套（新编实操版）",
     "第二套（新编案例版）",
@@ -70,6 +73,33 @@ def _now() -> str:
 
 def _today_prefix() -> str:
     return datetime.now().strftime("%Y-%m-%d")
+
+
+def _parse_date(value: str) -> date:
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        raise ValueError("Invalid date, expected YYYY-MM-DD")
+
+
+def _parse_month(value: str | None) -> tuple[int, int, str]:
+    raw = value or datetime.now().strftime("%Y-%m")
+    try:
+        parsed = datetime.strptime(raw, "%Y-%m")
+    except (TypeError, ValueError):
+        raise ValueError("Invalid month, expected YYYY-MM")
+    return parsed.year, parsed.month, parsed.strftime("%Y-%m")
+
+
+def _date_time_for_day(day: date) -> str:
+    now = datetime.now()
+    return f"{day.strftime('%Y-%m-%d')} {now.strftime('%H:%M:%S')}"
+
+
+def _month_range(year: int, month: int) -> tuple[date, date]:
+    first = date(year, month, 1)
+    last = date(year, month, calendar.monthrange(year, month)[1])
+    return first, last
 
 
 def _answer_to_text(value) -> str:
@@ -147,6 +177,10 @@ def can_take_exam(user) -> bool:
 
 def can_manage_exam(user) -> bool:
     return (user or {}).get("role_name") in EXAM_MANAGER_ROLES
+
+
+def _role_placeholders(roles) -> str:
+    return ",".join("?" for _ in roles)
 
 
 def list_papers() -> list[dict]:
@@ -385,7 +419,12 @@ def _practice_item(
     }
 
 
-def record_practice_answers(user_id: int, answers: dict) -> dict:
+def _record_practice_answers_for_date(
+    user_id: int,
+    answers: dict,
+    target_day: date | None = None,
+    retroactive: bool = False,
+) -> dict:
     _sync_question_bank_references_once()
     answer_map = {str(key): _answer_to_text(value) for key, value in (answers or {}).items()}
     question_ids = [int(question_id) for question_id in answer_map.keys()]
@@ -393,7 +432,7 @@ def record_practice_answers(user_id: int, answers: dict) -> dict:
     try:
         questions = _load_objective_questions_by_ids(conn, question_ids)
         session_id = uuid4().hex
-        created_at = _now()
+        created_at = _date_time_for_day(target_day) if target_day else _now()
         items = []
         for question_id in question_ids:
             question = questions[question_id]
@@ -443,6 +482,29 @@ def record_practice_answers(user_id: int, answers: dict) -> dict:
             total_count >= DAILY_PRACTICE_QUESTION_COUNT
             and accuracy >= DAILY_PRACTICE_REQUIRED_ACCURACY
         )
+        if retroactive and target_day:
+            target_date = target_day.strftime("%Y-%m-%d")
+            month = target_day.strftime("%Y-%m")
+            if passed:
+                conn.execute(
+                    """
+                    INSERT INTO exam_retroactive_checkins (
+                        user_id, target_date, month, practice_session_id,
+                        total_count, correct_count, accuracy, passed, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        user_id,
+                        target_date,
+                        month,
+                        session_id,
+                        total_count,
+                        correct_count,
+                        accuracy,
+                        1,
+                        _now(),
+                    ),
+                )
         clear_practice_draft(user_id, conn=conn)
         conn.commit()
         return {
@@ -453,11 +515,17 @@ def record_practice_answers(user_id: int, answers: dict) -> dict:
             "accuracy": accuracy,
             "required_accuracy": DAILY_PRACTICE_REQUIRED_ACCURACY,
             "passed": passed,
+            "target_date": target_day.strftime("%Y-%m-%d") if target_day else _today_prefix(),
+            "retroactive": retroactive,
             "daily_status": get_daily_practice_status(user_id, conn=conn),
         }
     finally:
         if should_close:
             conn.close()
+
+
+def record_practice_answers(user_id: int, answers: dict) -> dict:
+    return _record_practice_answers_for_date(user_id, answers)
 
 
 def save_practice_draft(user_id: int, question_ids, answers: dict) -> dict:
@@ -673,6 +741,243 @@ def list_daily_checkins(target_date: str | None = None) -> list[dict]:
                 }
             )
         return report
+    finally:
+        if should_close:
+            conn.close()
+
+
+def _practice_sessions_for_range(conn, user_id: int, start_day: date, end_day: date) -> dict[str, list[dict]]:
+    rows = conn.execute(
+        """
+        SELECT substr(created_at, 1, 10) AS practice_date,
+               COALESCE(practice_session_id, CAST(id AS TEXT)) AS session_id,
+               COUNT(*) AS total_count,
+               SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) AS correct_count,
+               SUM(COALESCE(accuracy_credit, CASE WHEN is_correct = 1 THEN 1 ELSE 0 END)) AS accuracy_credit,
+               MIN(created_at) AS started_at,
+               MAX(created_at) AS latest_at
+        FROM exam_practice_attempts
+        WHERE user_id = ?
+          AND created_at >= ?
+          AND created_at < ?
+        GROUP BY substr(created_at, 1, 10), COALESCE(practice_session_id, CAST(id AS TEXT))
+        """,
+        (
+            user_id,
+            start_day.strftime("%Y-%m-%d 00:00:00"),
+            (end_day + timedelta(days=1)).strftime("%Y-%m-%d 00:00:00"),
+        ),
+    ).fetchall()
+    sessions_by_date: dict[str, list[dict]] = {}
+    for row in rows:
+        total_count = int(row["total_count"] or 0)
+        correct_count = int(row["correct_count"] or 0)
+        accuracy_credit = float(row["accuracy_credit"] or 0)
+        accuracy = round(accuracy_credit / total_count, 4) if total_count else 0.0
+        session = {
+            "session_id": row["session_id"],
+            "total_count": total_count,
+            "correct_count": correct_count,
+            "accuracy": accuracy,
+            "passed": (
+                total_count >= DAILY_PRACTICE_QUESTION_COUNT
+                and accuracy >= DAILY_PRACTICE_REQUIRED_ACCURACY
+            ),
+            "started_at": row["started_at"],
+            "latest_at": row["latest_at"],
+        }
+        sessions_by_date.setdefault(row["practice_date"], []).append(session)
+    return sessions_by_date
+
+
+def _summarize_calendar_days(sessions_by_date: dict[str, list[dict]], start_day: date, end_day: date) -> dict:
+    today = date.today()
+    days = []
+    actual_days = 0
+    missing_days = 0
+    cursor_day = start_day
+    while cursor_day <= end_day:
+        day_key = cursor_day.strftime("%Y-%m-%d")
+        sessions = sessions_by_date.get(day_key, [])
+        passed = any(session["passed"] for session in sessions)
+        practiced = bool(sessions)
+        if cursor_day > today:
+            status = "future"
+        elif passed:
+            status = "passed"
+            actual_days += 1
+        else:
+            status = "failed" if practiced else "missing"
+            missing_days += 1
+        best_accuracy = max((session["accuracy"] for session in sessions), default=0.0)
+        latest_at = max((session["latest_at"] for session in sessions if session["latest_at"]), default=None)
+        days.append(
+            {
+                "date": day_key,
+                "status": status,
+                "passed": passed,
+                "practiced": practiced,
+                "retroactive_allowed": cursor_day < today and not passed,
+                "answered_count": sum(session["total_count"] for session in sessions),
+                "session_count": len(sessions),
+                "best_accuracy": best_accuracy,
+                "latest_practice_at": latest_at,
+            }
+        )
+        cursor_day += timedelta(days=1)
+    return {
+        "days": days,
+        "actual_days": actual_days,
+        "missing_days": missing_days,
+    }
+
+
+def list_attendance_calendar(user_id: int, month: str | None = None) -> dict:
+    year, month_number, month_key = _parse_month(month)
+    start_day, end_day = _month_range(year, month_number)
+    conn, should_close = _connection()
+    try:
+        sessions_by_date = _practice_sessions_for_range(conn, user_id, start_day, end_day)
+        summary = _summarize_calendar_days(sessions_by_date, start_day, end_day)
+        retroactive_used = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM exam_retroactive_checkins
+            WHERE user_id = ?
+              AND month = ?
+              AND passed = 1
+            """,
+            (user_id, month_key),
+        ).fetchone()[0]
+        return {
+            "month": month_key,
+            "days": summary["days"],
+            "actual_days": summary["actual_days"],
+            "missing_days": summary["missing_days"],
+            "retroactive_used": int(retroactive_used or 0),
+            "retroactive_limit": RETROACTIVE_CHECKIN_MONTHLY_LIMIT,
+            "required_accuracy": DAILY_PRACTICE_REQUIRED_ACCURACY,
+            "required_question_count": DAILY_PRACTICE_QUESTION_COUNT,
+        }
+    finally:
+        if should_close:
+            conn.close()
+
+
+def _has_passed_practice_on_date(conn, user_id: int, target_day: date) -> bool:
+    sessions = _practice_sessions_for_range(conn, user_id, target_day, target_day)
+    return any(session["passed"] for session in sessions.get(target_day.strftime("%Y-%m-%d"), []))
+
+
+def submit_retroactive_checkin(user_id: int, target_date: str, answers: dict) -> dict:
+    target_day = _parse_date(target_date)
+    today = date.today()
+    if target_day >= today:
+        raise ValueError("Retroactive check-in is only available for past dates")
+    month_key = target_day.strftime("%Y-%m")
+    conn, should_close = _connection()
+    try:
+        if _has_passed_practice_on_date(conn, user_id, target_day):
+            raise ValueError("This date already has a qualified check-in")
+        used = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM exam_retroactive_checkins
+            WHERE user_id = ?
+              AND month = ?
+              AND passed = 1
+            """,
+            (user_id, month_key),
+        ).fetchone()[0]
+        if int(used or 0) >= RETROACTIVE_CHECKIN_MONTHLY_LIMIT:
+            raise ValueError("Monthly retroactive check-in limit has been reached")
+    finally:
+        if should_close:
+            conn.close()
+
+    result = _record_practice_answers_for_date(
+        user_id,
+        answers,
+        target_day=target_day,
+        retroactive=True,
+    )
+    result["attendance_calendar"] = list_attendance_calendar(user_id, month_key)
+    return result
+
+
+def list_monthly_checkin_reports(month: str | None = None) -> list[dict]:
+    year, month_number, month_key = _parse_month(month)
+    start_day, end_day = _month_range(year, month_number)
+    completed_month = end_day < date.today()
+    conn, should_close = _connection()
+    try:
+        roles = sorted(EXAM_TAKER_ROLES)
+        users = conn.execute(
+            f"""
+            SELECT u.id, u.username, u.real_name, r.role_name
+            FROM users u
+            JOIN roles r ON r.id = u.role_id
+            WHERE COALESCE(u.is_active, 1) = 1
+              AND r.role_name IN ({_role_placeholders(roles)})
+            ORDER BY r.role_name, u.real_name, u.username
+            """,
+            roles,
+        ).fetchall()
+        reports = []
+        for user in users:
+            sessions_by_date = _practice_sessions_for_range(conn, user["id"], start_day, end_day)
+            summary = _summarize_calendar_days(sessions_by_date, start_day, end_day)
+            expected_days = sum(1 for item in summary["days"] if item["status"] != "future")
+            retroactive_used = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM exam_retroactive_checkins
+                WHERE user_id = ?
+                  AND month = ?
+                  AND passed = 1
+                """,
+                (user["id"], month_key),
+            ).fetchone()[0]
+            row = {
+                "user_id": user["id"],
+                "username": user["username"],
+                "real_name": user["real_name"],
+                "role_name": user["role_name"],
+                "month": month_key,
+                "expected_days": expected_days,
+                "actual_days": summary["actual_days"],
+                "missing_days": summary["missing_days"],
+                "retroactive_used": int(retroactive_used or 0),
+                "generated": completed_month,
+            }
+            if completed_month:
+                conn.execute(
+                    """
+                    INSERT INTO exam_monthly_checkin_reports (
+                        user_id, month, expected_days, actual_days,
+                        missing_days, retroactive_used, generated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(user_id, month) DO UPDATE SET
+                        expected_days = excluded.expected_days,
+                        actual_days = excluded.actual_days,
+                        missing_days = excluded.missing_days,
+                        retroactive_used = excluded.retroactive_used,
+                        generated_at = excluded.generated_at
+                    """,
+                    (
+                        user["id"],
+                        month_key,
+                        expected_days,
+                        summary["actual_days"],
+                        summary["missing_days"],
+                        int(retroactive_used or 0),
+                        _now(),
+                    ),
+                )
+            reports.append(row)
+        if completed_month:
+            conn.commit()
+        return reports
     finally:
         if should_close:
             conn.close()
@@ -1030,16 +1335,42 @@ def _raw_paper_score_total(questions: list[dict]) -> float:
     return sum(float(question.get("score") or 0) for question in questions)
 
 
-def start_attempt(user_id, paper_id) -> int:
+def start_attempt(user_id, paper_id, retake_eligibility_id: int | None = None) -> int:
     conn, should_close = _connection()
     try:
+        if retake_eligibility_id is not None:
+            eligibility = conn.execute(
+                """
+                SELECT id, user_id, paper_id, status
+                FROM exam_retake_eligibilities
+                WHERE id = ?
+                """,
+                (retake_eligibility_id,),
+            ).fetchone()
+            if (
+                not eligibility
+                or eligibility["status"] != "open"
+                or int(eligibility["user_id"]) != int(user_id)
+                or int(eligibility["paper_id"]) != int(paper_id)
+            ):
+                raise ValueError("Retake eligibility is not available")
         cursor = conn.execute(
             """
-            INSERT INTO exam_attempts (user_id, paper_id, status, started_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO exam_attempts (
+                user_id, paper_id, status, started_at, retake_eligibility_id
+            ) VALUES (?, ?, ?, ?, ?)
             """,
-            (user_id, paper_id, "in_progress", _now()),
+            (user_id, paper_id, "in_progress", _now(), retake_eligibility_id),
         )
+        if retake_eligibility_id is not None:
+            conn.execute(
+                """
+                UPDATE exam_retake_eligibilities
+                SET status = 'used', used_attempt_id = ?, used_at = ?
+                WHERE id = ?
+                """,
+                (cursor.lastrowid, _now(), retake_eligibility_id),
+            )
         conn.commit()
         return cursor.lastrowid
     finally:
@@ -1054,7 +1385,7 @@ def get_attempt(attempt_id) -> dict | None:
             """
             SELECT id, user_id, paper_id, status, objective_score,
                    suggested_subjective_score, final_subjective_score,
-                   final_score, started_at, submitted_at
+                   final_score, started_at, submitted_at, retake_eligibility_id
             FROM exam_attempts
             WHERE id = ?
             """,
@@ -1185,6 +1516,196 @@ def list_user_attempts(user_id) -> list[dict]:
             (user_id,),
         ).fetchall()
         return [dict(row) for row in rows]
+    finally:
+        if should_close:
+            conn.close()
+
+
+def _active_exam_takers(conn) -> list[dict]:
+    roles = sorted(EXAM_TAKER_ROLES)
+    return [
+        dict(row)
+        for row in conn.execute(
+            f"""
+            SELECT u.id, u.username, u.real_name, r.role_name
+            FROM users u
+            JOIN roles r ON r.id = u.role_id
+            WHERE COALESCE(u.is_active, 1) = 1
+              AND r.role_name IN ({_role_placeholders(roles)})
+            ORDER BY r.role_name, u.real_name, u.username
+            """,
+            roles,
+        ).fetchall()
+    ]
+
+
+def refresh_retake_eligibilities(conn=None) -> None:
+    should_close = False
+    if conn is None:
+        conn, should_close = _connection()
+    try:
+        now = _now()
+        failed_rows = conn.execute(
+            """
+            SELECT att.id AS attempt_id, att.user_id, att.paper_id, att.final_score,
+                   p.title AS paper_title
+            FROM exam_attempts att
+            JOIN exam_papers p ON p.id = att.paper_id
+            WHERE att.status = 'completed'
+              AND COALESCE(att.final_score, 0) < ?
+              AND p.source_type = 'exam'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM exam_attempts passed
+                  WHERE passed.user_id = att.user_id
+                    AND passed.paper_id = att.paper_id
+                    AND passed.status = 'completed'
+                    AND COALESCE(passed.final_score, 0) >= ?
+              )
+            """,
+            (EXAM_PASSING_SCORE, EXAM_PASSING_SCORE),
+        ).fetchall()
+        for row in failed_rows:
+            exists = conn.execute(
+                """
+                SELECT 1
+                FROM exam_retake_eligibilities
+                WHERE user_id = ?
+                  AND paper_id = ?
+                  AND eligibility_type = 'retake_failed'
+                  AND status = 'open'
+                LIMIT 1
+                """,
+                (row["user_id"], row["paper_id"]),
+            ).fetchone()
+            if exists:
+                continue
+            conn.execute(
+                """
+                INSERT INTO exam_retake_eligibilities (
+                    user_id, paper_id, eligibility_type, status,
+                    source_attempt_id, reason, created_at
+                ) VALUES (?, ?, 'retake_failed', 'open', ?, ?, ?)
+                """,
+                (
+                    row["user_id"],
+                    row["paper_id"],
+                    row["attempt_id"],
+                    f"Score below {EXAM_PASSING_SCORE:g}",
+                    now,
+                ),
+            )
+
+        current_paper = conn.execute(
+            """
+            SELECT p.id, p.title
+            FROM exam_settings s
+            JOIN exam_papers p ON p.id = CAST(s.value AS INTEGER)
+            WHERE s.key = ?
+              AND p.source_type = 'exam'
+            """,
+            ("current_exam_paper_id",),
+        ).fetchone()
+        if current_paper:
+            for user in _active_exam_takers(conn):
+                has_any_attempt = conn.execute(
+                    """
+                    SELECT 1
+                    FROM exam_attempts
+                    WHERE user_id = ?
+                      AND paper_id = ?
+                    LIMIT 1
+                    """,
+                    (user["id"], current_paper["id"]),
+                ).fetchone()
+                if not has_any_attempt:
+                    exists = conn.execute(
+                        """
+                        SELECT 1
+                        FROM exam_retake_eligibilities
+                        WHERE user_id = ?
+                          AND paper_id = ?
+                          AND eligibility_type = 'makeup_absent'
+                          AND status = 'open'
+                        LIMIT 1
+                        """,
+                        (user["id"], current_paper["id"]),
+                    ).fetchone()
+                    if exists:
+                        continue
+                    conn.execute(
+                        """
+                        INSERT INTO exam_retake_eligibilities (
+                            user_id, paper_id, eligibility_type, status,
+                            reason, created_at
+                        ) VALUES (?, ?, 'makeup_absent', 'open', ?, ?)
+                        """,
+                        (
+                            user["id"],
+                            current_paper["id"],
+                            "No attempt record for current exam paper",
+                            now,
+                        ),
+                    )
+        if should_close:
+            conn.commit()
+    finally:
+        if should_close:
+            conn.close()
+
+
+def list_retake_eligibilities(user_id: int | None = None, viewer=None) -> list[dict]:
+    conn, should_close = _connection()
+    try:
+        refresh_retake_eligibilities(conn=conn)
+        where = ["e.status = 'open'"]
+        params = []
+        if user_id is not None:
+            where.append("e.user_id = ?")
+            params.append(user_id)
+        elif viewer and not can_manage_exam(viewer):
+            where.append("e.user_id = ?")
+            params.append(viewer.get("id"))
+        rows = conn.execute(
+            f"""
+            SELECT e.id, e.user_id, u.username, u.real_name, r.role_name,
+                   e.paper_id, p.title AS paper_title, e.eligibility_type,
+                   e.status, e.source_attempt_id, e.used_attempt_id,
+                   e.reason, e.created_at, e.used_at
+            FROM exam_retake_eligibilities e
+            JOIN users u ON u.id = e.user_id
+            LEFT JOIN roles r ON r.id = u.role_id
+            JOIN exam_papers p ON p.id = e.paper_id
+            WHERE {" AND ".join(where)}
+            ORDER BY e.eligibility_type, e.created_at DESC, e.id DESC
+            """,
+            params,
+        ).fetchall()
+        conn.commit()
+        return [dict(row) for row in rows]
+    finally:
+        if should_close:
+            conn.close()
+
+
+def start_retake_attempt(user_id: int, eligibility_id: int) -> int:
+    conn, should_close = _connection()
+    try:
+        refresh_retake_eligibilities(conn=conn)
+        eligibility = conn.execute(
+            """
+            SELECT id, user_id, paper_id, status
+            FROM exam_retake_eligibilities
+            WHERE id = ?
+            """,
+            (eligibility_id,),
+        ).fetchone()
+        if not eligibility or eligibility["status"] != "open":
+            raise ValueError("Retake eligibility is not available")
+        if int(eligibility["user_id"]) != int(user_id):
+            raise ValueError("Permission denied")
+        conn.commit()
+        return start_attempt(user_id, eligibility["paper_id"], eligibility_id)
     finally:
         if should_close:
             conn.close()
