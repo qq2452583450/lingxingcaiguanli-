@@ -69,10 +69,10 @@ def parse_available_docx(path: Path) -> tuple[list[dict], str]:
 def get_question_bank_dir(path: Path | None = None) -> Path:
     if path is not None:
         return Path(path)
-    for candidate in (DESKTOP_QUESTION_BANK_DIR, BUNDLED_QUESTION_BANK_DIR):
+    for candidate in (BUNDLED_QUESTION_BANK_DIR, DESKTOP_QUESTION_BANK_DIR):
         if candidate.exists() and list(candidate.glob("*.docx")):
             return candidate
-    return DESKTOP_QUESTION_BANK_DIR
+    return BUNDLED_QUESTION_BANK_DIR
 
 
 def parse_question_bank_docx(path: Path) -> dict:

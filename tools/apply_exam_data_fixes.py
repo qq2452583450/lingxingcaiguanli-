@@ -8,6 +8,7 @@ import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
+from zipfile import BadZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -224,13 +225,58 @@ def set_daily_practice_status(conn: sqlite3.Connection, fix: dict) -> dict:
     }
 
 
+def reimport_question_bank(conn: sqlite3.Connection, fix: dict) -> dict:
+    from services.exam_import_service import (
+        BUNDLED_QUESTION_BANK_DIR,
+        _archive_existing_exam_papers,
+        _clear_current_exam_setting,
+        insert_paper,
+        parse_literature_question_bank_docx,
+    )
+
+    source_dir = Path(fix.get("source_dir") or BUNDLED_QUESTION_BANK_DIR)
+    docx_files = sorted(source_dir.glob("*.docx"))
+    if not docx_files:
+        raise FileNotFoundError(f"No question bank .docx files found in {source_dir}")
+
+    papers = []
+    for docx_path in docx_files:
+        try:
+            papers.append(parse_literature_question_bank_docx(docx_path))
+        except BadZipFile:
+            continue
+    if not papers:
+        raise ValueError(f"No valid question bank .docx files found in {source_dir}")
+
+    cursor = conn.cursor()
+    existing_rows = cursor.execute(
+        "SELECT id FROM exam_papers WHERE source_type = ?",
+        ("exam",),
+    ).fetchall()
+    existing_ids = [row["id"] for row in existing_rows]
+    _archive_existing_exam_papers(cursor, existing_ids)
+    _clear_current_exam_setting(cursor)
+    inserted_ids = [insert_paper(cursor, paper, source_type="exam") for paper in papers]
+    return {
+        "source_dir": str(source_dir),
+        "inserted": len(inserted_ids),
+        "archived": len(existing_ids),
+        "question_count": sum(len(paper.get("questions", [])) for paper in papers),
+        "paper_titles": [paper["title"] for paper in papers],
+    }
+
+
 def apply_fix(conn: sqlite3.Connection, fix: dict, apply_changes: bool) -> dict:
     fix_id = fix["id"]
     if has_applied(conn, fix_id):
         return {"id": fix_id, "status": "skipped"}
-    if fix.get("type") != "daily_practice_status":
+    fix_type = fix.get("type")
+    if fix_type == "daily_practice_status":
+        result = set_daily_practice_status(conn, fix)
+    elif fix_type == "question_bank_reimport":
+        result = reimport_question_bank(conn, fix)
+    else:
         raise ValueError(f"Unsupported data fix type: {fix.get('type')}")
-    result = set_daily_practice_status(conn, fix)
     if apply_changes:
         mark_applied(conn, fix_id)
         conn.commit()

@@ -1,6 +1,8 @@
 from pathlib import Path
 import importlib
 
+import pytest
+
 from services.exam_import_service import (
     DESKTOP_QUESTION_BANK_DIR,
     ensure_exam_sources_imported,

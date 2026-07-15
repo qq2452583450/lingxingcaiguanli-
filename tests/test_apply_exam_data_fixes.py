@@ -138,3 +138,70 @@ def test_daily_practice_data_fix_sets_precise_display_accuracy_and_created_at():
     assert row["correct_count"] == 26
     assert round(row["accuracy_credit"] / row["total_count"] * 100) == 89
     assert row["latest_practice_at"] == "2026-07-14 19:47:00"
+
+
+def test_question_bank_reimport_data_fix_replaces_active_exam_papers():
+    from database.exam_schema import init_exam_schema
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT)")
+    init_exam_schema(conn)
+    ensure_data_fix_table(conn)
+    conn.execute(
+        """
+        INSERT INTO exam_papers (title, duration_minutes, total_score, source_type, create_time)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("Old exam paper", 30, 100, "exam", "2026-07-01 00:00:00"),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO exam_settings (key, value) VALUES (?, ?)",
+        ("current_exam_paper_id", "1"),
+    )
+    conn.commit()
+
+    result = apply_fix(
+        conn,
+        {
+            "id": "2026-07-15-reimport-modified-question-bank",
+            "type": "question_bank_reimport",
+        },
+        apply_changes=True,
+    )
+    skipped = apply_fix(
+        conn,
+        {
+            "id": "2026-07-15-reimport-modified-question-bank",
+            "type": "question_bank_reimport",
+        },
+        apply_changes=True,
+    )
+
+    active_count = conn.execute(
+        "SELECT COUNT(*) FROM exam_papers WHERE source_type = 'exam'"
+    ).fetchone()[0]
+    archived_count = conn.execute(
+        "SELECT COUNT(*) FROM exam_papers WHERE source_type = 'archived_exam'"
+    ).fetchone()[0]
+    question_count = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM exam_questions q
+        JOIN exam_papers p ON p.id = q.paper_id
+        WHERE p.source_type = 'exam'
+        """
+    ).fetchone()[0]
+
+    assert result["status"] == "applied"
+    assert result["result"]["inserted"] == 5
+    assert result["result"]["archived"] == 1
+    assert result["result"]["question_count"] == 251
+    assert active_count == 5
+    assert archived_count == 1
+    assert question_count == 251
+    assert conn.execute(
+        "SELECT value FROM exam_settings WHERE key = ?",
+        ("current_exam_paper_id",),
+    ).fetchone() is None
+    assert skipped["status"] == "skipped"
