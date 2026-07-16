@@ -48,6 +48,7 @@ jobs:
           script: |
             powershell -NoProfile -Command "& { $r = Invoke-WebRequest -Uri 'http://127.0.0.1:5000' -UseBasicParsing -TimeoutSec 10; if ([int]$r.StatusCode -ne 200) { throw 'HTTP health check failed' }; $r = Invoke-WebRequest -Uri 'http://127.0.0.1:5000/api/petty-cash/usages/1' -Method Options -UseBasicParsing -TimeoutSec 10; $allow = [string]$r.Headers['Allow']; if ($allow -notmatch 'PUT') { throw ('Petty cash usage PUT route not loaded. Allow=' + $allow) }; $r = Invoke-WebRequest -Uri 'http://127.0.0.1:5000/api/exam/admin/current-paper' -Method Options -UseBasicParsing -TimeoutSec 10; $allow = [string]$r.Headers['Allow']; Write-Output ('current_exam_allow=' + $allow); if ($allow -notmatch 'DELETE') { throw ('Current exam paper DELETE route not loaded. Allow=' + $allow) } }"
       - name: Read production diagnostics
+        continue-on-error: true
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.PROD_SSH_HOST }}
