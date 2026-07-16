@@ -1,6 +1,8 @@
 from pathlib import Path
+from io import BytesIO
 
 import pytest
+from openpyxl import load_workbook
 
 from services.exam_import_service import import_exam_papers_from_docx
 from services.exam_service import get_paper_questions
@@ -186,12 +188,14 @@ def test_manager_can_view_daily_checkin_records(client, test_db):
     seed_exam()
     manager_id = seed_user(test_db, "checkin_manager", "\u6253\u5361\u7ba1\u7406", ROLE_MANAGER)
     passed_id = seed_user(test_db, "checkin_passed", "\u5df2\u6253\u5361", ROLE_CLERK)
-    missing_id = seed_user(test_db, "checkin_missing", "\u672a\u505a\u9898", ROLE_APPROVAL_OWNER)
+    seed_user(test_db, "checkin_missing", "\u672a\u505a\u9898", ROLE_CLERK)
+    approval_id = seed_user(test_db, "checkin_approval", "\u5ba1\u6279\u5df2\u505a", ROLE_APPROVAL_OWNER)
     question = next(
         q for q in get_paper_questions(papers(test_db)[0]["id"])
         if q["question_type"] in {"single_choice", "true_false"}
     )
     record_practice_answers(passed_id, {str(question["id"]): question["correct_answer"]})
+    record_practice_answers(approval_id, {str(question["id"]): question["correct_answer"]})
     login(client, manager_id, "checkin_manager", "\u6253\u5361\u7ba1\u7406", ROLE_MANAGER)
 
     response = client.get("/api/exam/admin/checkins")
@@ -200,7 +204,7 @@ def test_manager_can_view_daily_checkin_records(client, test_db):
 
     assert response.status_code == 200
     assert data["success"] is True
-    assert {"checkin_passed", "checkin_missing"}.issubset(by_username)
+    assert set(by_username) == {"checkin_passed", "checkin_missing"}
     assert by_username["checkin_passed"]["practiced"] is True
     assert by_username["checkin_missing"]["practiced"] is False
 
@@ -627,14 +631,34 @@ def test_manager_can_view_monthly_checkin_report(client, test_db):
     seed_exam()
     manager_id = seed_user(test_db, "monthly_manager", "\u6708\u62a5\u7ba1\u7406", ROLE_MANAGER)
     seed_user(test_db, "monthly_clerk", "\u6708\u62a5\u5458", ROLE_CLERK)
+    seed_user(test_db, "monthly_approval", "\u6708\u62a5\u5ba1\u6279", ROLE_APPROVAL_OWNER)
     login(client, manager_id, "monthly_manager", "\u6708\u62a5\u7ba1\u7406", ROLE_MANAGER)
 
+    json_response = client.get("/api/exam/admin/checkins/monthly?format=json")
+    json_data = json_response.get_json()
     response = client.get("/api/exam/admin/checkins/monthly")
-    data = response.get_json()
+    workbook = load_workbook(BytesIO(response.data))
+    rows = list(workbook.active.iter_rows(values_only=True))
 
     assert response.status_code == 200
-    assert data["success"] is True
-    assert any(row["username"] == "monthly_clerk" for row in data["data"])
+    assert response.mimetype == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert "attachment;" in response.headers["Content-Disposition"]
+    assert json_response.status_code == 200
+    assert json_data["success"] is True
+    assert {row["username"] for row in json_data["data"]} == {"monthly_clerk"}
+    assert json_data["data"][0]["expected_days"] == 22
+    assert rows[0] == (
+        "姓名",
+        "账号",
+        "角色",
+        "月份",
+        "满勤标准天数",
+        "实际合格天数",
+        "缺勤天数",
+        "补打卡次数",
+        "是否满勤",
+    )
+    assert rows[1][1] == "monthly_clerk"
 
 
 def test_clerk_can_list_retake_eligibilities(client, test_db):

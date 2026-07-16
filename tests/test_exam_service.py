@@ -374,11 +374,13 @@ def test_daily_practice_status_requires_continued_practice_below_eighty_percent(
     assert status["answered_count"] == 30
 
 
-def test_daily_checkins_include_passed_failed_and_not_practiced_takers(test_db):
+def test_daily_checkins_only_include_material_clerks(test_db):
     paper, _, _ = load_exam(test_db)
     passed_id = seed_user(test_db, "passed_daily", "\u5df2\u5408\u683c", "\u6750\u6599\u5458")
-    failed_id = seed_user(test_db, "failed_daily", "\u672a\u5408\u683c", "\u57fa\u5730\u8d1f\u8d23\u4eba")
-    missing_id = seed_user(test_db, "missing_daily", "\u672a\u505a\u9898", "\u6750\u6599\u5ba1\u6279\u8d1f\u8d23\u4eba")
+    failed_id = seed_user(test_db, "failed_daily", "\u672a\u5408\u683c", "\u6750\u6599\u5458")
+    missing_id = seed_user(test_db, "missing_daily", "\u672a\u505a\u9898", "\u6750\u6599\u5458")
+    approval_id = seed_user(test_db, "approval_daily", "\u5ba1\u6279\u4eba", "\u6750\u6599\u5ba1\u6279\u8d1f\u8d23\u4eba")
+    base_id = seed_user(test_db, "base_daily", "\u57fa\u5730\u8d1f\u8d23\u4eba", "\u57fa\u5730\u8d1f\u8d23\u4eba")
     seed_user(test_db, "supplier_daily", "\u4f9b\u5e94\u5546", "\u4f9b\u5e94\u5546")
     questions = get_random_practice_questions(limit=30, paper_id=paper["id"])
     passed_answers = {}
@@ -389,6 +391,8 @@ def test_daily_checkins_include_passed_failed_and_not_practiced_takers(test_db):
         failed_answers[str(question["id"])] = question["correct_answer"] if index < 10 else wrong
     record_practice_answers(passed_id, passed_answers)
     record_practice_answers(failed_id, failed_answers)
+    record_practice_answers(approval_id, passed_answers)
+    record_practice_answers(base_id, passed_answers)
 
     rows = list_daily_checkins()
     by_username = {row["username"]: row for row in rows}
@@ -455,15 +459,18 @@ def test_retroactive_checkin_limit_is_three_passed_days_per_month(test_db):
 
 def test_monthly_checkin_report_compares_actual_and_missing_days(test_db):
     user_id = seed_user(test_db, "monthly_missing", "\u6708\u62a5", "\u6750\u6599\u5458")
+    seed_user(test_db, "monthly_approval", "\u6708\u62a5\u5ba1\u6279", "\u6750\u6599\u5ba1\u6279\u8d1f\u8d23\u4eba")
     month = date.today().strftime("%Y-%m")
 
     reports = list_monthly_checkin_reports(month)
     row = next(item for item in reports if item["user_id"] == user_id)
 
+    assert {item["username"] for item in reports} == {"monthly_missing"}
     assert row["month"] == month
-    assert row["expected_days"] >= 1
+    assert row["expected_days"] == 22
     assert row["actual_days"] == 0
-    assert row["missing_days"] == row["expected_days"]
+    assert row["missing_days"] == 22
+    assert row["full_attendance"] is False
 
 
 def test_retake_eligibilities_separate_absent_makeup_and_failed_retake(test_db):

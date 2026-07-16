@@ -791,31 +791,7 @@ async function loadCheckinRecords() {
 async function loadMonthlyCheckinReport() {
     if (!canManageExam(currentUser)) return;
     const monthValue = document.getElementById('examCheckinMonth')?.value || examMonthValue();
-    const target = document.getElementById('examMonthlyCheckinReport');
-    if (!target) return;
-    target.innerHTML = '<div class="loading">正在加载月度对账...</div>';
-    try {
-        const data = await examJson(`/api/exam/admin/checkins/monthly?month=${encodeURIComponent(monthValue)}`);
-        const rows = (data.data || []).map(row => `
-            <tr>
-                <td>${examEscape(row.real_name || row.username || '-')}</td>
-                <td>${examEscape(row.username || '-')}</td>
-                <td>${examEscape(row.role_name || '-')}</td>
-                <td>${examEscape(row.expected_days || 0)}</td>
-                <td>${examEscape(row.actual_days || 0)}</td>
-                <td>${examEscape(row.missing_days || 0)}</td>
-                <td>${examEscape(row.retroactive_used || 0)}</td>
-            </tr>`).join('');
-        target.innerHTML = `
-            <div class="table-container">
-                <table>
-                    <thead><tr><th>姓名</th><th>账号</th><th>角色</th><th>应打卡</th><th>实际合格</th><th>未合格/未打卡</th><th>补打卡</th></tr></thead>
-                    <tbody>${rows || '<tr><td colspan="7" class="empty-message">暂无月报数据</td></tr>'}</tbody>
-                </table>
-            </div>`;
-    } catch (e) {
-        target.innerHTML = `<div class="error-message">${examEscape(e.message || '月度对账加载失败')}</div>`;
-    }
+    window.location.href = `/api/exam/admin/checkins/monthly?month=${encodeURIComponent(monthValue)}`;
 }
 
 function setCheckinFilter(filter) {
@@ -873,7 +849,7 @@ function renderCheckinRecords(dateValue) {
                 <button class="btn ${examCheckinFilter === 'failed' ? 'btn-primary' : 'btn-secondary'}" data-checkin-filter="failed" type="button" onclick="setCheckinFilter('failed')">已做未合格</button>
                 <button class="btn ${examCheckinFilter === 'missing' ? 'btn-primary' : 'btn-secondary'}" data-checkin-filter="missing" type="button" onclick="setCheckinFilter('missing')">未做题</button>
                 <input id="examCheckinMonth" type="month" value="${examEscape(String(dateValue || todayDateValue()).slice(0, 7))}">
-                <button class="btn btn-secondary" type="button" onclick="loadMonthlyCheckinReport()"><i data-lucide="calendar-days"></i>月度对账</button>
+                <button class="btn btn-secondary" type="button" onclick="loadMonthlyCheckinReport()"><i data-lucide="download"></i>下载月度对账</button>
             </div>
             <div class="table-container">
                 <table>
@@ -881,7 +857,6 @@ function renderCheckinRecords(dateValue) {
                     <tbody>${rows || '<tr><td colspan="8" class="empty-message">暂无打卡记录</td></tr>'}</tbody>
                 </table>
             </div>
-            <div id="examMonthlyCheckinReport" class="exam-summary-card"></div>
         </div>`;
     examRefreshIcons();
 }

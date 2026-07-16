@@ -2,8 +2,9 @@
 
 import sqlite3
 import time
+from io import BytesIO
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, jsonify, request, send_file, session
 
 from helpers import get_db
 from services.exam_service import (
@@ -132,6 +133,58 @@ def _filters_from_request():
     if keyword:
         filters["keyword"] = keyword
     return filters
+
+
+def _monthly_checkins_workbook(rows, month):
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "月度打卡对账"
+    headers = [
+        "姓名",
+        "账号",
+        "角色",
+        "月份",
+        "满勤标准天数",
+        "实际合格天数",
+        "缺勤天数",
+        "补打卡次数",
+        "是否满勤",
+    ]
+    sheet.append(headers)
+    for cell in sheet[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="4472C4")
+        cell.alignment = Alignment(horizontal="center")
+
+    for row in rows:
+        sheet.append(
+            [
+                row.get("real_name") or row.get("username") or "",
+                row.get("username") or "",
+                row.get("role_name") or "",
+                row.get("month") or month,
+                row.get("expected_days") or 0,
+                row.get("actual_days") or 0,
+                row.get("missing_days") or 0,
+                row.get("retroactive_used") or 0,
+                "是" if row.get("full_attendance") else "否",
+            ]
+        )
+
+    widths = [16, 18, 18, 12, 14, 14, 12, 12, 12]
+    for index, width in enumerate(widths, start=1):
+        sheet.column_dimensions[sheet.cell(row=1, column=index).column_letter].width = width
+    for row in sheet.iter_rows():
+        for cell in row:
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
 
 
 @exam_bp.route("/summary", methods=["GET"])
@@ -550,11 +603,23 @@ def admin_monthly_checkins():
     if denied:
         return denied
 
+    month = request.args.get("month") or None
     try:
-        data = list_monthly_checkin_reports(request.args.get("month") or None)
+        data = list_monthly_checkin_reports(month)
     except ValueError as exc:
         return _json_error(str(exc), 400)
-    return jsonify({"success": True, "data": data})
+    if request.args.get("format") == "json":
+        return jsonify({"success": True, "data": data})
+
+    export_month = month or (data[0]["month"] if data else "")
+    output = _monthly_checkins_workbook(data, export_month)
+    filename = f"monthly-checkins-{export_month or 'current'}.xlsx"
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 @exam_bp.route("/admin/retake/eligibilities", methods=["GET"])

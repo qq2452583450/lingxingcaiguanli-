@@ -14,6 +14,7 @@ EXAM_TOTAL_SCORE = 100.0
 EXAM_PASSING_SCORE = 80.0
 DAILY_PRACTICE_QUESTION_COUNT = 30
 DAILY_PRACTICE_REQUIRED_ACCURACY = 0.8
+MONTHLY_ATTENDANCE_REQUIRED_DAYS = 22
 RETROACTIVE_CHECKIN_MONTHLY_LIMIT = 3
 DAILY_PRACTICE_PAPER_TITLES = {
     "第一套（新编实操版）",
@@ -24,6 +25,7 @@ DAILY_PRACTICE_PAPER_TITLES = {
 }
 EXAM_TAKER_ROLES = {"材料员", "材料审批负责人", "基地负责人"}
 EXAM_MANAGER_ROLES = {"系统管理员", "材料审批负责人"}
+ATTENDANCE_REQUIRED_ROLES = {"材料员"}
 _QUESTION_BANK_REFERENCE_SYNCED_FOR = None
 
 
@@ -666,15 +668,17 @@ def list_daily_checkins(target_date: str | None = None) -> list[dict]:
     date_prefix = target_date or _today_prefix()
     conn, should_close = _connection()
     try:
+        roles = sorted(ATTENDANCE_REQUIRED_ROLES)
         users = conn.execute(
-            """
+            f"""
             SELECT u.id, u.username, u.real_name, r.role_name
             FROM users u
             JOIN roles r ON r.id = u.role_id
             WHERE COALESCE(u.is_active, 1) = 1
-              AND r.role_name IN ('材料员', '材料审批负责人', '基地负责人')
+              AND r.role_name IN ({_role_placeholders(roles)})
             ORDER BY r.role_name, u.real_name, u.username
-            """
+            """,
+            roles,
         ).fetchall()
         rows = conn.execute(
             """
@@ -911,7 +915,7 @@ def list_monthly_checkin_reports(month: str | None = None) -> list[dict]:
     completed_month = end_day < date.today()
     conn, should_close = _connection()
     try:
-        roles = sorted(EXAM_TAKER_ROLES)
+        roles = sorted(ATTENDANCE_REQUIRED_ROLES)
         users = conn.execute(
             f"""
             SELECT u.id, u.username, u.real_name, r.role_name
@@ -927,7 +931,9 @@ def list_monthly_checkin_reports(month: str | None = None) -> list[dict]:
         for user in users:
             sessions_by_date = _practice_sessions_for_range(conn, user["id"], start_day, end_day)
             summary = _summarize_calendar_days(sessions_by_date, start_day, end_day)
-            expected_days = sum(1 for item in summary["days"] if item["status"] != "future")
+            expected_days = MONTHLY_ATTENDANCE_REQUIRED_DAYS
+            actual_days = summary["actual_days"]
+            missing_days = max(expected_days - actual_days, 0)
             retroactive_used = conn.execute(
                 """
                 SELECT COUNT(*)
@@ -945,9 +951,10 @@ def list_monthly_checkin_reports(month: str | None = None) -> list[dict]:
                 "role_name": user["role_name"],
                 "month": month_key,
                 "expected_days": expected_days,
-                "actual_days": summary["actual_days"],
-                "missing_days": summary["missing_days"],
+                "actual_days": actual_days,
+                "missing_days": missing_days,
                 "retroactive_used": int(retroactive_used or 0),
+                "full_attendance": actual_days >= expected_days,
                 "generated": completed_month,
             }
             if completed_month:
@@ -968,8 +975,8 @@ def list_monthly_checkin_reports(month: str | None = None) -> list[dict]:
                         user["id"],
                         month_key,
                         expected_days,
-                        summary["actual_days"],
-                        summary["missing_days"],
+                        actual_days,
+                        missing_days,
                         int(retroactive_used or 0),
                         _now(),
                     ),
