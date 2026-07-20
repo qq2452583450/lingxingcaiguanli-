@@ -8,6 +8,8 @@ let suppliers = [];
 let units = [];
 let inquiryItems = [];
 let editingInquiryId = null; // 编辑模式下的询价单ID
+let inquirySupplierFreights = {};
+let selectedInquirySupplierId = null;
 let stockInDetails = [];
 let warehouses = [];
 let inventoryCache = [];
@@ -1952,6 +1954,8 @@ async function editInquiry(id) {
 
         const inquiry = data.data;
         const items = data.items || [];
+        inquirySupplierFreights = Object.fromEntries((data.supplier_freights || []).map(f => [f.supplier_id, f]));
+        selectedInquirySupplierId = inquiry.selected_supplier_id || null;
 
         // 设置编辑模式
         editingInquiryId = id;
@@ -4119,6 +4123,11 @@ function updateLowestFlag(itemIndex) {
 
 function selectQuote(itemIndex, quoteIndex) {
     const item = inquiryItems[itemIndex];
+    const quote = item && item.quotes && item.quotes[quoteIndex];
+    if (quote && quote.supplier_id) {
+        selectInquirySupplier(quote.supplier_id);
+        return;
+    }
 
     // 重置所有选中状态
     item.quotes.forEach(q => q.is_selected = false);
@@ -4641,10 +4650,73 @@ function renderInquiryItems() {
                 <button type="button" class="add-quote-btn" onclick="addQuoteToItem(${itemIndex})">+ 添加供应商报价</button>
             </div>
         </div>
-    `).join('');
+    `).join('') + renderInquirySupplierSummary();
+}
+
+function getInquirySupplierSummaries() {
+    const summaries = {};
+    inquiryItems.forEach(item => (item.quotes || []).forEach(quote => {
+        if (!quote.supplier_id) return;
+        const id = String(quote.supplier_id);
+        if (!summaries[id]) summaries[id] = {
+            supplier_id: quote.supplier_id,
+            supplier_name: quote.supplier_name || `供应商${quote.supplier_id}`,
+            goods_amount: 0,
+            complete: true
+        };
+        summaries[id].goods_amount += (Number(quote.tax_price) || 0) * (Number(item.quantity) || 1);
+    }));
+    Object.values(summaries).forEach(summary => {
+        summary.complete = inquiryItems.every(item => (item.quotes || []).some(q =>
+            String(q.supplier_id) === String(summary.supplier_id) && Number(q.tax_price) > 0));
+        const freight = inquirySupplierFreights[summary.supplier_id] || {};
+        summary.tax_freight = Number(freight.tax_freight) || 0;
+        summary.tax_rate = Number(freight.tax_rate) || 0.13;
+        summary.landed_total = summary.goods_amount + summary.tax_freight;
+    });
+    return Object.values(summaries).sort((a, b) => a.landed_total - b.landed_total);
+}
+
+function renderInquirySupplierSummary() {
+    const summaries = getInquirySupplierSummaries();
+    if (!summaries.length) return '';
+    return `<div class="inquiry-item-card" style="margin-top:14px;">
+        <div class="item-header"><strong>供应商整单报价汇总</strong><span class="text-muted">货款加一笔运费作为到货总价</span></div>
+        <div class="table-container"><table class="data-table"><thead><tr><th>供应商</th><th>材料货款</th><th>含税运费</th><th>到货总价</th><th>拟定</th></tr></thead><tbody>
+        ${summaries.map(summary => `<tr>
+            <td>${escapeHtml(summary.supplier_name)}</td>
+            <td>¥${summary.goods_amount.toFixed(2)}</td>
+            <td><input type="number" min="0" step="0.01" value="${summary.tax_freight || ''}" onchange="updateInquiryFreight(${summary.supplier_id}, this.value)"></td>
+            <td><strong>¥${summary.landed_total.toFixed(2)}</strong></td>
+            <td><button type="button" class="btn ${String(selectedInquirySupplierId) === String(summary.supplier_id) ? 'btn-primary' : 'btn-outline'}" ${summary.complete ? '' : 'disabled'} onclick="selectInquirySupplier(${summary.supplier_id})">${String(selectedInquirySupplierId) === String(summary.supplier_id) ? '已拟定' : '设为拟定'}</button></td>
+        </tr>`).join('')}
+        </tbody></table></div></div>`;
+}
+
+function updateInquiryFreight(supplierId, value) {
+    const existing = inquirySupplierFreights[supplierId] || { supplier_id: supplierId, tax_rate: 0.13, remark: '' };
+    inquirySupplierFreights[supplierId] = { ...existing, tax_freight: Math.max(0, parseFloat(value) || 0) };
+    renderInquiryItems();
+    updateInquiryTotal();
+}
+
+function selectInquirySupplier(supplierId) {
+    selectedInquirySupplierId = supplierId;
+    inquiryItems.forEach(item => {
+        item.selected_quote_id = supplierId;
+        (item.quotes || []).forEach(quote => quote.is_selected = String(quote.supplier_id) === String(supplierId));
+    });
+    renderInquiryItems();
+    updateInquiryTotal();
 }
 
 function updateInquiryTotal() {
+    if (selectedInquirySupplierId) {
+        const summary = getInquirySupplierSummaries().find(item => String(item.supplier_id) === String(selectedInquirySupplierId));
+        const el = document.getElementById('inquiryTotal');
+        if (el) el.textContent = (summary ? summary.landed_total : 0).toFixed(2);
+        return;
+    }
     let total = 0;
     (inquiryItems || []).forEach(item => {
         (item.quotes || []).forEach(quote => {
@@ -4674,6 +4746,8 @@ function openInquiryWithItems(items) {
 
     // 先确保供应商数据已加载，再构建默认报价（防止供应商未加载导致不显示）
     const _buildItems = () => {
+        inquirySupplierFreights = {};
+        selectedInquirySupplierId = null;
         inquiryItems = items.map(item => ({
             material_id: item.material_id,
             material_name: item.material_name || '',
@@ -4931,7 +5005,9 @@ async function submitInquiryForm() {
         inquiry_date: document.getElementById('inquiryDate')?.value || '',
         project_id: document.getElementById('inquiryProject')?.value || null,
         remark: document.getElementById('inquiryRemark')?.value || '',
-        items: items
+        items: items,
+        selected_supplier_id: selectedInquirySupplierId,
+        supplier_freights: Object.values(inquirySupplierFreights)
     };
 
     console.log('Sending requestData:', JSON.stringify(requestData));
@@ -5008,7 +5084,9 @@ async function saveInquiryDraft() {
         inquiry_date: document.getElementById('inquiryDate')?.value || '',
         project_id: document.getElementById('inquiryProject')?.value || null,
         remark: document.getElementById('inquiryRemark')?.value || '',
-        items: rawItems
+        items: rawItems,
+        selected_supplier_id: selectedInquirySupplierId,
+        supplier_freights: Object.values(inquirySupplierFreights)
     };
 
     try {
@@ -5114,6 +5192,8 @@ async function importDraftQuoteSheet(id) {
 }
 
 function applyImportedQuoteItems(items) {
+    inquirySupplierFreights = {};
+    selectedInquirySupplierId = null;
     inquiryItems = (items || []).map(item => {
         // 过滤掉价格为0的供应商报价
         let quotes = (item.quotes || []).filter(q => q.tax_price > 0);

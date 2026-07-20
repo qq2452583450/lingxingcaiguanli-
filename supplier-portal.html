@@ -157,6 +157,11 @@
                         <tbody id="quoteTableBody"></tbody>
                     </table>
                 </div>
+                <div id="quoteFreight" class="inquiry-info" style="margin-top:16px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:end;">
+                    <label>整单运费（含税）<input id="quoteFreightTax" type="number" min="0" step="0.01"></label>
+                    <label>运费税率<input id="quoteFreightRate" type="number" min="0" max="1" step="0.01" value="0.13"></label>
+                    <label>运费说明<input id="quoteFreightRemark" type="text" placeholder="例如：整车配送"></label>
+                </div>
                 <div class="quote-actions" id="quoteActions"></div>
             </div>
         </div>

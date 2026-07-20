@@ -24,6 +24,118 @@ inquiry_bp = Blueprint('inquiries', __name__, url_prefix='/api')
 SPECIAL_APPROVER_USERNAMES = ('leikefeng', 'tanxiang')
 
 
+def _ensure_inquiry_supplier_freight_table(cursor):
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS purchase_inquiry_supplier_freights (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inquiry_id INTEGER NOT NULL,
+            supplier_id INTEGER NOT NULL,
+            tax_freight REAL DEFAULT 0,
+            tax_exempt_freight REAL DEFAULT 0,
+            tax_rate REAL DEFAULT 0.13,
+            remark TEXT,
+            create_time TEXT,
+            updated_at TEXT,
+            UNIQUE(inquiry_id, supplier_id)
+        )
+    """)
+
+
+def _get_inquiry_supplier_freights(cursor, inquiry_id):
+    _ensure_inquiry_supplier_freight_table(cursor)
+    cursor.execute("""
+        SELECT supplier_id, tax_freight, tax_exempt_freight, tax_rate, remark
+        FROM purchase_inquiry_supplier_freights
+        WHERE inquiry_id = ?
+        ORDER BY supplier_id
+    """, (inquiry_id,))
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def _get_inquiry_supplier_summaries(cursor, inquiry_id):
+    _ensure_inquiry_supplier_freight_table(cursor)
+    cursor.execute("""
+        SELECT q.supplier_id,
+               s.supplier_name,
+               ROUND(SUM(COALESCE(q.total_amount, 0)), 2) AS goods_amount,
+               COALESCE(f.tax_freight, 0) AS tax_freight,
+               COALESCE(f.tax_exempt_freight, 0) AS tax_exempt_freight,
+               COALESCE(f.tax_rate, 0.13) AS freight_tax_rate,
+               ROUND(SUM(COALESCE(q.total_amount, 0)) + COALESCE(f.tax_freight, 0), 2) AS landed_total
+        FROM purchase_inquiry_quotes q
+        JOIN purchase_inquiry_items i ON i.id = q.item_id
+        LEFT JOIN suppliers s ON s.id = q.supplier_id
+        LEFT JOIN purchase_inquiry_supplier_freights f
+          ON f.inquiry_id = i.inquiry_id AND f.supplier_id = q.supplier_id
+        WHERE i.inquiry_id = ?
+        GROUP BY q.supplier_id, s.supplier_name, f.tax_freight,
+                 f.tax_exempt_freight, f.tax_rate
+        ORDER BY landed_total, q.supplier_id
+    """, (inquiry_id,))
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def _normalize_supplier_freights(supplier_freights):
+    normalized = {}
+    for freight in supplier_freights or []:
+        supplier_id = freight.get('supplier_id')
+        if not supplier_id:
+            continue
+        tax_freight = float(freight.get('tax_freight', 0) or 0)
+        tax_rate = float(freight.get('tax_rate', 0.13) or 0.13)
+        if tax_freight < 0 or not 0 <= tax_rate <= 1:
+            raise ValueError('运费或运费税率不合法')
+        normalized[int(supplier_id)] = {
+            'tax_freight': round(tax_freight, 2),
+            'tax_rate': tax_rate,
+            'remark': (freight.get('remark') or '').strip(),
+        }
+    return normalized
+
+
+def _save_inquiry_supplier_freights(cursor, inquiry_id, supplier_freights, now):
+    _ensure_inquiry_supplier_freight_table(cursor)
+    cursor.execute("DELETE FROM purchase_inquiry_supplier_freights WHERE inquiry_id = ?", (inquiry_id,))
+    for supplier_id, freight in _normalize_supplier_freights(supplier_freights).items():
+        tax_freight = freight['tax_freight']
+        tax_rate = freight['tax_rate']
+        tax_exempt_freight = round(tax_freight / (1 + tax_rate), 2) if tax_rate else tax_freight
+        cursor.execute("""
+            INSERT INTO purchase_inquiry_supplier_freights (
+                inquiry_id, supplier_id, tax_freight, tax_exempt_freight,
+                tax_rate, remark, create_time, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (inquiry_id, supplier_id, tax_freight, tax_exempt_freight,
+              tax_rate, escape(freight['remark']), now, now))
+
+
+def _calculate_selected_supplier_total(items_data, selected_supplier_id, supplier_freights):
+    selected_supplier_id = int(selected_supplier_id) if selected_supplier_id else None
+    if not selected_supplier_id:
+        return None
+    goods_amount = 0
+    for item in items_data:
+        quantity = float(item.get('quantity', 1) or 1)
+        selected_quote = next(
+            (quote for quote in item.get('quotes', [])
+             if str(quote.get('supplier_id')) == str(selected_supplier_id)
+             and float(quote.get('tax_price', 0) or 0) > 0),
+            None,
+        )
+        if not selected_quote:
+            raise ValueError('拟定供应商必须完成全部材料报价')
+        goods_amount += float(selected_quote.get('tax_price', 0) or 0) * quantity
+    freight = _normalize_supplier_freights(supplier_freights).get(selected_supplier_id, {})
+    return round(goods_amount + freight.get('tax_freight', 0), 2)
+
+
+def _apply_selected_supplier(items_data, selected_supplier_id):
+    if not selected_supplier_id:
+        return
+    for item in items_data:
+        item['selected_quote_id'] = selected_supplier_id
+
+
 def _get_supplier_id_for_user(cursor, user_id):
     cursor.execute("SELECT id FROM suppliers WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
@@ -319,11 +431,27 @@ def get_inquiry(inquiry_id):
             {legacy_supplier_filter}
         """, legacy_params)
         details = [dict(row) for row in cursor.fetchall()]
+        supplier_freights = _get_inquiry_supplier_freights(cursor, inquiry_id)
         conn.close()
-        return jsonify({'success': True, 'data': inquiry, 'details': details, 'legacy': True})
+        return jsonify({
+            'success': True,
+            'data': inquiry,
+            'details': details,
+            'legacy': True,
+            'supplier_freights': supplier_freights,
+            'supplier_summaries': [],
+        })
 
+    supplier_freights = _get_inquiry_supplier_freights(cursor, inquiry_id)
+    supplier_summaries = _get_inquiry_supplier_summaries(cursor, inquiry_id)
     conn.close()
-    return jsonify({'success': True, 'data': inquiry, 'items': items})
+    return jsonify({
+        'success': True,
+        'data': inquiry,
+        'items': items,
+        'supplier_freights': supplier_freights,
+        'supplier_summaries': supplier_summaries,
+    })
 
 
 @inquiry_bp.route('/purchase-inquiries', methods=['POST'])
@@ -366,6 +494,9 @@ def create_inquiry():
             return jsonify({'success': False, 'message': '请添加询价材料（明细不能为空）'})
 
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        selected_supplier_id = data.get('selected_supplier_id')
+        supplier_freights = data.get('supplier_freights', [])
+        _apply_selected_supplier(items_data, selected_supplier_id)
 
         # 计算总金额（仅计算选定报价）
         total_amount = 0
@@ -380,6 +511,15 @@ def create_inquiry():
                 # 如果没有选定，计入最低价
                 elif not selected_id and quote.get('is_lowest'):
                     total_amount += tax_price * quantity
+
+        if selected_supplier_id:
+            try:
+                total_amount = _calculate_selected_supplier_total(
+                    items_data, selected_supplier_id, supplier_freights
+                )
+            except ValueError as error:
+                conn.close()
+                return jsonify({'success': False, 'message': str(error)})
 
         # 判断是否低于库内价
         is_below = 0
@@ -456,6 +596,12 @@ def create_inquiry():
             conn.close()
             return jsonify({'success': False, 'message': '无法生成唯一单号，请稍后重试'})
 
+        if selected_supplier_id:
+            cursor.execute(
+                "UPDATE purchase_inquiries SET selected_supplier_id = ? WHERE id = ?",
+                (selected_supplier_id, inquiry_id),
+            )
+
         # 写入 items + quotes
         try:
             for item in items_data:
@@ -524,6 +670,8 @@ def create_inquiry():
                             1 if selected_quote_id and quote.get('supplier_id') == selected_quote_id else 0,
                             q_status, now
                         ))
+
+            _save_inquiry_supplier_freights(cursor, inquiry_id, supplier_freights, now)
 
             # 记录提交审批操作
             cursor.execute("""
@@ -778,6 +926,8 @@ def delete_inquiry(inquiry_id):
         # 2. 删除询价单明细和报价（含旧版 purchase_inquiry_details 表）
         cursor.execute("DELETE FROM purchase_inquiry_quotes WHERE item_id IN (SELECT id FROM purchase_inquiry_items WHERE inquiry_id = ?)", (inquiry_id,))
         cursor.execute("DELETE FROM purchase_inquiry_items WHERE inquiry_id = ?", (inquiry_id,))
+        _ensure_inquiry_supplier_freight_table(cursor)
+        cursor.execute("DELETE FROM purchase_inquiry_supplier_freights WHERE inquiry_id = ?", (inquiry_id,))
         cursor.execute("DELETE FROM purchase_inquiry_details WHERE inquiry_id = ?", (inquiry_id,))
         cursor.execute("DELETE FROM approval_records WHERE order_type = 'purchase_inquiry' AND order_id = ?", (inquiry_id,))
         cursor.execute("DELETE FROM purchase_inquiries WHERE id = ?", (inquiry_id,))
@@ -829,6 +979,9 @@ def update_inquiry(inquiry_id):
 
     # 解析新明细数据
     items_data = data.get('items', [])
+    selected_supplier_id = data.get('selected_supplier_id')
+    supplier_freights = data.get('supplier_freights', [])
+    _apply_selected_supplier(items_data, selected_supplier_id)
     if not items_data:
         conn.close()
         return jsonify({'success': False, 'message': '明细不能为空'})
@@ -860,6 +1013,11 @@ def update_inquiry(inquiry_id):
                 if library_price > 0 and tp < library_price:
                     is_below = 1
                     break
+
+        if selected_supplier_id:
+            total_amount = _calculate_selected_supplier_total(
+                items_data, selected_supplier_id, supplier_freights
+            )
 
         # 写入新 items + quotes
         for item in items_data:
@@ -928,15 +1086,18 @@ def update_inquiry(inquiry_id):
             SET inquiry_date = ?, project_id = ?, total_amount = ?,
                 is_below_library_price = ?, approval_status = '待审批',
                 approver_id = NULL, approve_time = NULL, approval_remark = NULL,
-                remark = ?
+                remark = ?, selected_supplier_id = ?
             WHERE id = ?
         """, (
             data.get('inquiry_date', inquiry['inquiry_date']),
             data.get('project_id', inquiry.get('project_id')),
             total_amount, is_below,
             data.get('remark', inquiry.get('remark', '')),
+            selected_supplier_id,
             inquiry_id
         ))
+
+        _save_inquiry_supplier_freights(cursor, inquiry_id, supplier_freights, now)
 
         # 记录重新提交审批
         cursor.execute("""
@@ -2307,6 +2468,16 @@ def export_supplier_orders(inquiry_id):
             item['supplier_name'] = quote.get('supplier_name', '')
             items_with_quotes.append(item)
 
+    _ensure_inquiry_supplier_freight_table(cursor)
+    cursor.execute("""
+        SELECT supplier_id, tax_freight
+        FROM purchase_inquiry_supplier_freights
+        WHERE inquiry_id = ?
+    """, (inquiry_id,))
+    freight_by_supplier = {
+        row['supplier_id']: float(row['tax_freight'] or 0)
+        for row in cursor.fetchall()
+    }
     conn.close()
 
     if not items_with_quotes:
@@ -2322,6 +2493,7 @@ def export_supplier_orders(inquiry_id):
         if supplier_id not in supplier_groups:
             supplier_groups[supplier_id] = {
                 'name': supplier_name,
+                'tax_freight': freight_by_supplier.get(supplier_id, 0),
                 'items': []
             }
         supplier_groups[supplier_id]['items'].append(r)
@@ -2411,6 +2583,23 @@ def export_supplier_orders(inquiry_id):
         total_cell.number_format = '#,##0.00'
         total_cell.border = thin_border
 
+        freight_row = total_row + 1
+        freight_amount = group.get('tax_freight', 0)
+        ws.cell(row=freight_row, column=1, value='运费').font = Font(bold=True)
+        ws.merge_cells(start_row=freight_row, start_column=1, end_row=freight_row, end_column=9)
+        freight_cell = ws.cell(row=freight_row, column=10, value=freight_amount)
+        freight_cell.font = Font(bold=True)
+        freight_cell.number_format = '#,##0.00'
+        freight_cell.border = thin_border
+
+        landed_row = freight_row + 1
+        ws.cell(row=landed_row, column=1, value='到货总价').font = Font(bold=True)
+        ws.merge_cells(start_row=landed_row, start_column=1, end_row=landed_row, end_column=9)
+        landed_cell = ws.cell(row=landed_row, column=10, value=total_amount + freight_amount)
+        landed_cell.font = Font(bold=True)
+        landed_cell.number_format = '#,##0.00'
+        landed_cell.border = thin_border
+
         # 设置列宽
         ws.column_dimensions['A'].width = 8
         ws.column_dimensions['B'].width = 15
@@ -2467,6 +2656,9 @@ def save_draft():
 
     draft_id = data.get('draft_id')  # 如果有 draft_id 则是覆盖已有草稿
     items_data = data.get('items', [])
+    selected_supplier_id = data.get('selected_supplier_id')
+    supplier_freights = data.get('supplier_freights', [])
+    _apply_selected_supplier(items_data, selected_supplier_id)
     project_id = data.get('project_id')
     inquiry_date = data.get('inquiry_date', now[:10])
     remark = data.get('remark', '')
@@ -2597,6 +2789,11 @@ def save_draft():
                     now
                 ))
 
+        _save_inquiry_supplier_freights(cursor, inquiry_id, supplier_freights, now)
+        cursor.execute(
+            "UPDATE purchase_inquiries SET selected_supplier_id = ? WHERE id = ?",
+            (selected_supplier_id, inquiry_id),
+        )
         conn.commit()
         return jsonify({
             'success': True,
@@ -3250,6 +3447,9 @@ def submit_draft(draft_id):
 
     # 复用 create_inquiry 的校验逻辑
     items_data = data.get('items', [])
+    selected_supplier_id = data.get('selected_supplier_id')
+    supplier_freights = data.get('supplier_freights', [])
+    _apply_selected_supplier(items_data, selected_supplier_id)
     if not items_data:
         conn.close()
         return jsonify({'success': False, 'message': '请添加询价材料'})
@@ -3282,6 +3482,11 @@ def submit_draft(draft_id):
                     is_below = 1
                     break
 
+        if selected_supplier_id:
+            total_amount = _calculate_selected_supplier_total(
+                items_data, selected_supplier_id, supplier_freights
+            )
+
         # 更新主表
         project_id = data.get('project_id', draft.get('project_id'))
         inquiry_date = data.get('inquiry_date', draft.get('inquiry_date', now[:10]))
@@ -3292,10 +3497,10 @@ def submit_draft(draft_id):
             UPDATE purchase_inquiries
             SET inquiry_no = ?, inquiry_date = ?, project_id = ?, total_amount = ?,
                 is_below_library_price = ?, approval_status = '待审批',
-                remark = ?, create_time = ?
+                remark = ?, create_time = ?, selected_supplier_id = ?
             WHERE id = ?
         """, (inquiry_no, inquiry_date, project_id, total_amount, is_below,
-              data.get('remark', draft.get('remark', '')), now, draft_id))
+              data.get('remark', draft.get('remark', '')), now, selected_supplier_id, draft_id))
 
         # 写入新 items + quotes
         for item in items_data:
@@ -3356,6 +3561,8 @@ def submit_draft(draft_id):
                         1 if selected_quote_id and str(quote.get('supplier_id')) == str(selected_quote_id) else 0,
                         q_status, now
                     ))
+
+        _save_inquiry_supplier_freights(cursor, draft_id, supplier_freights, now)
 
         # 记录提交审批
         cursor.execute("""

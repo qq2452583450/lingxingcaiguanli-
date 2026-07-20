@@ -42,6 +42,25 @@ def create_inquiry_delete_tables(cursor):
     )
 
 
+def create_inquiry_supplier_freight_table(cursor):
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS purchase_inquiry_supplier_freights (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inquiry_id INTEGER NOT NULL,
+            supplier_id INTEGER NOT NULL,
+            tax_freight REAL DEFAULT 0,
+            tax_exempt_freight REAL DEFAULT 0,
+            tax_rate REAL DEFAULT 0.13,
+            remark TEXT,
+            create_time TEXT,
+            updated_at TEXT,
+            UNIQUE(inquiry_id, supplier_id)
+        )
+        """
+    )
+
+
 def ensure_project_id_column(cursor):
     columns = [row[1] for row in cursor.execute("PRAGMA table_info(purchase_inquiries)").fetchall()]
     if "project_id" not in columns:
@@ -110,6 +129,126 @@ def set_session_user(client, user_id, username, real_name, role_name):
             "real_name": real_name,
             "role_name": role_name,
         }
+
+
+def test_inquiry_detail_returns_supplier_freight_and_landed_total(client, test_db):
+    cursor = test_db.cursor()
+    create_inquiry_delete_tables(cursor)
+    create_inquiry_supplier_freight_table(cursor)
+    clerk_id = seed_role_user(cursor, "材料员", "freight_clerk", "材料员")
+    cursor.execute("INSERT INTO suppliers (supplier_name) VALUES (?)", ("运费供应商",))
+    supplier_id = cursor.lastrowid
+    cursor.execute("INSERT INTO units (unit_name) VALUES (?)", ("个",))
+    unit_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO materials (material_code, material_name, specification, unit_id)
+        VALUES (?, ?, ?, ?)
+        """,
+        ("FREIGHT-001", "运费测试材料", "DN25", unit_id),
+    )
+    material_id = cursor.lastrowid
+    inquiry_id = seed_inquiry(cursor, "XJ-FREIGHT-DETAIL", clerk_id)
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiry_items (inquiry_id, material_id, quantity, create_time)
+        VALUES (?, ?, ?, ?)
+        """,
+        (inquiry_id, material_id, 10, "2026-07-20 10:00:00"),
+    )
+    item_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiry_quotes (
+            item_id, supplier_id, tax_price, tax_exempt_price, tax_rate,
+            total_amount, is_lowest, is_selected, create_time
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (item_id, supplier_id, 15, 13.27, 0.13, 150, 1, 1, "2026-07-20 10:00:00"),
+    )
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiry_supplier_freights (
+            inquiry_id, supplier_id, tax_freight, tax_exempt_freight,
+            tax_rate, remark, create_time, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (inquiry_id, supplier_id, 20, 17.7, 0.13, "整车配送", "2026-07-20 10:00:00", "2026-07-20 10:00:00"),
+    )
+    test_db.commit()
+    set_session_user(client, clerk_id, "freight_clerk", "材料员", "材料员")
+
+    response = client.get(f"/api/purchase-inquiries/{inquiry_id}")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["supplier_freights"] == [
+        {
+            "supplier_id": supplier_id,
+            "tax_freight": 20,
+            "tax_exempt_freight": 17.7,
+            "tax_rate": 0.13,
+            "remark": "整车配送",
+        }
+    ]
+    summary = payload["supplier_summaries"][0]
+    assert summary["supplier_id"] == supplier_id
+    assert summary["supplier_name"] == "运费供应商"
+    assert summary["goods_amount"] == 150
+    assert summary["tax_freight"] == 20
+    assert summary["landed_total"] == 170
+
+
+def test_create_inquiry_uses_selected_supplier_landed_total(client, test_db):
+    cursor = test_db.cursor()
+    create_inquiry_delete_tables(cursor)
+    clerk_id = seed_role_user(cursor, "材料员", "freight_submitter", "材料员")
+    cursor.execute("INSERT INTO suppliers (supplier_name) VALUES (?)", ("整单供应商",))
+    supplier_id = cursor.lastrowid
+    cursor.execute("INSERT INTO units (unit_name) VALUES (?)", ("个",))
+    unit_id = cursor.lastrowid
+    cursor.execute(
+        "INSERT INTO materials (material_code, material_name, unit_id) VALUES (?, ?, ?)",
+        ("FREIGHT-002", "整单运费材料", unit_id),
+    )
+    material_id = cursor.lastrowid
+    test_db.commit()
+    set_session_user(client, clerk_id, "freight_submitter", "材料员", "材料员")
+
+    response = client.post(
+        "/api/purchase-inquiries",
+        json={
+            "inquiry_date": "2026-07-20",
+            "selected_supplier_id": supplier_id,
+            "supplier_freights": [
+                {"supplier_id": supplier_id, "tax_freight": 20, "tax_rate": 0.13, "remark": "整车配送"}
+            ],
+            "items": [
+                {
+                    "material_id": material_id,
+                    "quantity": 10,
+                    "library_price": 14,
+                    "selected_quote_id": supplier_id,
+                    "quotes": [{"supplier_id": supplier_id, "tax_price": 15, "tax_rate": 0.13}],
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["success"] is True
+    inquiry = test_db.execute(
+        "SELECT total_amount, selected_supplier_id FROM purchase_inquiries WHERE id = ?",
+        (payload["id"],),
+    ).fetchone()
+    assert inquiry["total_amount"] == 170
+    assert inquiry["selected_supplier_id"] == supplier_id
+    freight = test_db.execute(
+        "SELECT tax_freight, tax_exempt_freight, remark FROM purchase_inquiry_supplier_freights WHERE inquiry_id = ?",
+        (payload["id"],),
+    ).fetchone()
+    assert dict(freight) == {"tax_freight": 20, "tax_exempt_freight": 17.7, "remark": "整车配送"}
 
 
 def test_purchase_inquiries_support_list_filters(client, test_db):

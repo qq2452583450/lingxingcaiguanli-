@@ -16,6 +16,23 @@ MAX_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
 
 
+def _ensure_inquiry_supplier_freight_table(cursor):
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS purchase_inquiry_supplier_freights (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inquiry_id INTEGER NOT NULL,
+            supplier_id INTEGER NOT NULL,
+            tax_freight REAL DEFAULT 0,
+            tax_exempt_freight REAL DEFAULT 0,
+            tax_rate REAL DEFAULT 0.13,
+            remark TEXT,
+            create_time TEXT,
+            updated_at TEXT,
+            UNIQUE(inquiry_id, supplier_id)
+        )
+    """)
+
+
 def _check_rate_limit(key):
     with _attempts_lock:
         if key in _login_attempts:
@@ -406,9 +423,86 @@ def get_quote_request_detail(inquiry_id):
         ORDER BY pii.id
     """, (inquiry_id, user['supplier_id']))
     quotes = [dict(row) for row in cursor.fetchall()]
+    _ensure_inquiry_supplier_freight_table(cursor)
+    cursor.execute("""
+        SELECT tax_freight, tax_exempt_freight, tax_rate, remark
+        FROM purchase_inquiry_supplier_freights
+        WHERE inquiry_id = ? AND supplier_id = ?
+    """, (inquiry_id, user['supplier_id']))
+    freight_row = cursor.fetchone()
+    freight = dict(freight_row) if freight_row else {
+        'tax_freight': 0,
+        'tax_exempt_freight': 0,
+        'tax_rate': 0.13,
+        'remark': '',
+    }
     conn.close()
 
-    return jsonify({'success': True, 'inquiry': inquiry_data, 'quotes': quotes})
+    return jsonify({'success': True, 'inquiry': inquiry_data, 'quotes': quotes, 'freight': freight})
+
+
+@supplier_bp.route('/quote-requests/<int:inquiry_id>/freight', methods=['PUT'])
+def save_inquiry_freight(inquiry_id):
+    user = _current_supplier()
+    if not user:
+        return jsonify({'success': False, 'message': '未登录'})
+
+    data = request.json or {}
+    try:
+        tax_freight = float(data.get('tax_freight', 0) or 0)
+        tax_rate = float(data.get('tax_rate', 0.13) or 0.13)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'message': '请填写有效的运费和税率'})
+    if tax_freight < 0 or not 0 <= tax_rate <= 1:
+        return jsonify({'success': False, 'message': '运费或运费税率不合法'})
+
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT pi.quote_status, pi.quote_deadline
+        FROM purchase_inquiries pi
+        WHERE pi.id = ? AND EXISTS (
+            SELECT 1
+            FROM purchase_inquiry_quotes piq
+            JOIN purchase_inquiry_items pii ON pii.id = piq.item_id
+            WHERE pii.inquiry_id = pi.id AND piq.supplier_id = ?
+        )
+    """, (inquiry_id, user['supplier_id']))
+    inquiry = cursor.fetchone()
+    if not inquiry:
+        conn.close()
+        return jsonify({'success': False, 'message': '未找到相关报价任务'})
+    inquiry = dict(inquiry)
+    if inquiry['quote_status'] == 'locked':
+        conn.close()
+        return jsonify({'success': False, 'message': '报价已锁定，无法修改'})
+    if inquiry['quote_deadline']:
+        try:
+            if datetime.now() > datetime.strptime(inquiry['quote_deadline'], '%Y-%m-%d %H:%M:%S'):
+                conn.close()
+                return jsonify({'success': False, 'message': '已超过报价截止时间'})
+        except ValueError:
+            pass
+
+    _ensure_inquiry_supplier_freight_table(cursor)
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    tax_exempt_freight = round(tax_freight / (1 + tax_rate), 2) if tax_rate else tax_freight
+    cursor.execute("""
+        INSERT INTO purchase_inquiry_supplier_freights (
+            inquiry_id, supplier_id, tax_freight, tax_exempt_freight,
+            tax_rate, remark, create_time, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(inquiry_id, supplier_id) DO UPDATE SET
+            tax_freight = excluded.tax_freight,
+            tax_exempt_freight = excluded.tax_exempt_freight,
+            tax_rate = excluded.tax_rate,
+            remark = excluded.remark,
+            updated_at = excluded.updated_at
+    """, (inquiry_id, user['supplier_id'], tax_freight, tax_exempt_freight,
+          tax_rate, escape((data.get('remark') or '').strip()), now, now))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'message': '整单运费已保存'})
 
 
 # ==================== 保存报价 ====================
