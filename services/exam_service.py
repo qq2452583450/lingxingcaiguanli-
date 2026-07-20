@@ -282,7 +282,10 @@ def get_random_practice_questions(limit=10, paper_id=None) -> list[dict]:
         if paper_id is not None:
             where_parts.append("q.paper_id = ?")
             params.append(paper_id)
-        where_parts.append("p.source_type = 'exam'")
+        else:
+            title_placeholders = ",".join("?" for _ in DAILY_PRACTICE_PAPER_TITLES)
+            where_parts.append(f"p.title IN ({title_placeholders})")
+            params.extend(sorted(DAILY_PRACTICE_PAPER_TITLES))
         where = "WHERE " + " AND ".join(where_parts)
         params.append(limit)
         question_rows = conn.execute(

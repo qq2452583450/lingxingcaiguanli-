@@ -120,7 +120,7 @@ def list_eligible_practice_questions(conn: sqlite3.Connection) -> dict:
     ]
     return {
         "papers": papers,
-        "total_count": sum(row["question_count"] for row in papers if row["source_type"] == "exam"),
+        "total_count": sum(row["question_count"] for row in papers),
     }
 
 
@@ -153,8 +153,7 @@ def create_missing_practice_records(
         SELECT q.id, q.correct_answer
         FROM exam_questions q
         JOIN exam_papers p ON p.id = q.paper_id
-        WHERE p.source_type = 'exam'
-          AND p.title IN ({title_placeholders})
+        WHERE p.title IN ({title_placeholders})
           AND q.question_type IN ('single_choice', 'multiple_choice', 'true_false')
         ORDER BY q.id
         """,

@@ -5,6 +5,7 @@ import pytest
 
 from services.exam_import_service import import_exam_papers_from_docx, import_exam_papers_from_question_bank_dir
 from services.exam_service import (
+    DAILY_PRACTICE_PAPER_TITLES,
     can_manage_exam,
     can_take_exam,
     delete_exam_attempt,
@@ -162,15 +163,42 @@ def test_daily_random_practice_only_uses_current_five_exam_sets(test_db):
     }
 
 
-def test_daily_random_practice_uses_current_question_bank_after_reimport(test_db):
+def test_daily_random_practice_does_not_use_unrelated_reimported_question_banks(test_db):
     from services.exam_import_service import BUNDLED_QUESTION_BANK_DIR
 
     import_exam_papers_from_question_bank_dir(BUNDLED_QUESTION_BANK_DIR)
 
     questions = get_random_practice_questions(limit=30)
 
+    assert questions == []
+
+
+def test_daily_random_practice_uses_allowed_papers_when_they_are_archived(test_db):
+    cursor = test_db.cursor()
+    for paper_index, title in enumerate(sorted(DAILY_PRACTICE_PAPER_TITLES), start=1):
+        cursor.execute(
+            """
+            INSERT INTO exam_papers (title, duration_minutes, total_score, source_type, create_time)
+            VALUES (?, 60, 100, 'archived_exam', '2026-07-20 09:00:00')
+            """,
+            (title,),
+        )
+        paper_id = cursor.lastrowid
+        for order_no in range(1, 7):
+            cursor.execute(
+                """
+                INSERT INTO exam_questions (
+                    paper_id, question_type, order_no, stem, correct_answer, score
+                ) VALUES (?, 'single_choice', ?, ?, 'A', 1)
+                """,
+                (paper_id, order_no, f"归档题库{paper_index}-{order_no}"),
+            )
+    test_db.commit()
+
+    questions = get_random_practice_questions(limit=30)
+
     assert len(questions) == 30
-    assert all(question["options"] for question in questions)
+    assert {question["paper_title"] for question in questions} <= DAILY_PRACTICE_PAPER_TITLES
 
 
 def test_record_practice_answers_scores_and_lists_history(test_db):
