@@ -1,7 +1,7 @@
 import sqlite3
 from datetime import datetime
 
-from tools.adjust_practice_records import adjust_practice_records
+from tools.adjust_practice_records import adjust_practice_records, list_practice_sessions
 
 
 def build_practice_db():
@@ -102,3 +102,23 @@ def test_adjust_practice_records_only_changes_targeted_sessions():
         "SELECT answer_text, is_correct, accuracy_credit, created_at FROM exam_practice_attempts WHERE user_id = 2"
     ).fetchone()
     assert tuple(other) == ("B", 0, 0.0, "2026-07-18 08:00:00")
+
+
+def test_list_practice_sessions_reports_all_dates_without_modifying_answers():
+    conn = build_practice_db()
+
+    report = list_practice_sessions(conn, real_name="刘光华")
+
+    assert report["user"]["username"] == "liu"
+    assert [session["date"] for session in report["sessions"]] == [
+        "2026-07-16",
+        "2026-07-17",
+        "2026-07-18",
+        "2026-07-19",
+        "2026-07-20",
+    ]
+    assert all(session["total_count"] == 30 for session in report["sessions"])
+    unchanged = conn.execute(
+        "SELECT COUNT(*) FROM exam_practice_attempts WHERE user_id = 1 AND answer_text = 'B'"
+    ).fetchone()[0]
+    assert unchanged == 150

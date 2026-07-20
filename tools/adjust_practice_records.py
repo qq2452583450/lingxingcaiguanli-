@@ -48,6 +48,48 @@ def _regraded_values(row: sqlite3.Row) -> tuple[int, float]:
     return (1 if credit == 1.0 else 0, credit)
 
 
+def list_practice_sessions(conn: sqlite3.Connection, *, real_name: str) -> dict:
+    """Return all saved daily-practice sessions for one exact user name."""
+    conn.row_factory = sqlite3.Row
+    users = conn.execute(
+        "SELECT id, username, real_name FROM users WHERE real_name = ? ORDER BY id", (real_name,)
+    ).fetchall()
+    if len(users) != 1:
+        raise ValueError(f"姓名 {real_name} 匹配到 {len(users)} 位用户，拒绝执行")
+    user = users[0]
+    rows = conn.execute(
+        """
+        SELECT COALESCE(practice_session_id, CAST(id AS TEXT)) AS session_id,
+               COUNT(*) AS total_count,
+               SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) AS correct_count,
+               SUM(COALESCE(accuracy_credit, CASE WHEN is_correct = 1 THEN 1 ELSE 0 END)) AS accuracy_credit,
+               MIN(created_at) AS started_at,
+               MAX(created_at) AS latest_at
+        FROM exam_practice_attempts
+        WHERE user_id = ?
+        GROUP BY COALESCE(practice_session_id, CAST(id AS TEXT))
+        ORDER BY started_at, session_id
+        """,
+        (user["id"],),
+    ).fetchall()
+    sessions = []
+    for row in rows:
+        total_count = int(row["total_count"] or 0)
+        accuracy_credit = float(row["accuracy_credit"] or 0)
+        sessions.append(
+            {
+                "session_id": row["session_id"],
+                "date": row["started_at"][:10],
+                "total_count": total_count,
+                "correct_count": int(row["correct_count"] or 0),
+                "accuracy": round(accuracy_credit / total_count, 4) if total_count else 0.0,
+                "started_at": row["started_at"],
+                "latest_at": row["latest_at"],
+            }
+        )
+    return {"user": dict(user), "sessions": sessions}
+
+
 def adjust_practice_records(
     conn: sqlite3.Connection,
     *,
@@ -150,8 +192,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", required=True, help="SQLite database path")
     parser.add_argument("--real-name", required=True)
-    parser.add_argument("--start-date", required=True)
-    parser.add_argument("--end-date", required=True)
+    parser.add_argument("--start-date")
+    parser.add_argument("--end-date")
+    parser.add_argument("--list-sessions", action="store_true", help="List sessions without changing data")
     parser.add_argument("--apply", action="store_true", help="Persist the changes")
     parser.add_argument("--backup", action="store_true", help="Back up the database before applying")
     parser.add_argument("--seed", type=int, help="Optional deterministic random seed")
@@ -160,17 +203,23 @@ def main() -> int:
     db_path = Path(args.db).resolve()
     if not db_path.exists():
         raise SystemExit(f"Database not found: {db_path}")
-    backup_path = _backup_database(db_path) if args.apply and args.backup else None
     conn = sqlite3.connect(db_path)
     try:
-        report = adjust_practice_records(
-            conn,
-            real_name=args.real_name,
-            start_date=args.start_date,
-            end_date=args.end_date,
-            apply_changes=args.apply,
-            rng_seed=args.seed,
-        )
+        if args.list_sessions:
+            report = list_practice_sessions(conn, real_name=args.real_name)
+            backup_path = None
+        else:
+            if not args.start_date or not args.end_date:
+                parser.error("--start-date and --end-date are required unless --list-sessions is used")
+            backup_path = _backup_database(db_path) if args.apply and args.backup else None
+            report = adjust_practice_records(
+                conn,
+                real_name=args.real_name,
+                start_date=args.start_date,
+                end_date=args.end_date,
+                apply_changes=args.apply,
+                rng_seed=args.seed,
+            )
     finally:
         conn.close()
     if backup_path:

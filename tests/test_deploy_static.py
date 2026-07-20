@@ -47,3 +47,13 @@ def test_liu_adjustment_workflow_is_scoped_to_the_approved_operation():
     assert "'2026-07-16'" in workflow
     assert "'2026-07-20'" in workflow
     assert "--apply --backup" in workflow
+
+
+def test_liu_inspection_workflow_is_read_only():
+    workflow = (ROOT / ".github" / "workflows" / "inspect-liu-practice.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "workflow_dispatch" in workflow
+    assert "--list-sessions" in workflow
+    assert "--apply" not in workflow
