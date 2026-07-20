@@ -56,6 +56,7 @@ def test_liu_inspection_workflow_is_read_only():
 
     assert "workflow_dispatch" in workflow
     assert "--list-sessions" in workflow
+    assert "--list-eligible" in workflow
     assert "--apply" not in workflow
 
 

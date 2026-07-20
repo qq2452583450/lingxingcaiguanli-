@@ -91,6 +91,39 @@ def list_practice_sessions(conn: sqlite3.Connection, *, real_name: str) -> dict:
     return {"user": dict(user), "sessions": sessions}
 
 
+def list_eligible_practice_questions(conn: sqlite3.Connection) -> dict:
+    """Summarize objective questions available to the daily-practice picker."""
+    conn.row_factory = sqlite3.Row
+    paper_titles = sorted(DAILY_PRACTICE_PAPER_TITLES)
+    title_placeholders = ",".join("?" for _ in paper_titles)
+    rows = conn.execute(
+        f"""
+        SELECT p.id, p.title, p.source_type, COUNT(q.id) AS question_count
+        FROM exam_papers p
+        LEFT JOIN exam_questions q
+          ON q.paper_id = p.id
+         AND q.question_type IN ('single_choice', 'multiple_choice', 'true_false')
+        WHERE p.title IN ({title_placeholders})
+        GROUP BY p.id, p.title, p.source_type
+        ORDER BY p.id
+        """,
+        paper_titles,
+    ).fetchall()
+    papers = [
+        {
+            "id": row["id"],
+            "title": row["title"],
+            "source_type": row["source_type"],
+            "question_count": int(row["question_count"] or 0),
+        }
+        for row in rows
+    ]
+    return {
+        "papers": papers,
+        "total_count": sum(row["question_count"] for row in papers if row["source_type"] == "exam"),
+    }
+
+
 def create_missing_practice_records(
     conn: sqlite3.Connection,
     *,
@@ -321,6 +354,7 @@ def main() -> int:
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--list-sessions", action="store_true", help="List sessions without changing data")
+    parser.add_argument("--list-eligible", action="store_true", help="List daily-practice eligible questions")
     parser.add_argument("--create-missing", action="store_true", help="Create one passing session for each missing day")
     parser.add_argument("--apply", action="store_true", help="Persist the changes")
     parser.add_argument("--backup", action="store_true", help="Back up the database before applying")
@@ -330,12 +364,15 @@ def main() -> int:
     db_path = Path(args.db).resolve()
     if not db_path.exists():
         raise SystemExit(f"Database not found: {db_path}")
-    if args.list_sessions and args.create_missing:
-        parser.error("--list-sessions and --create-missing cannot be used together")
+    if sum((args.list_sessions, args.list_eligible, args.create_missing)) > 1:
+        parser.error("only one inspection or creation mode can be used at a time")
     conn = sqlite3.connect(db_path)
     try:
         if args.list_sessions:
             report = list_practice_sessions(conn, real_name=args.real_name)
+            backup_path = None
+        elif args.list_eligible:
+            report = list_eligible_practice_questions(conn)
             backup_path = None
         else:
             if not args.start_date or not args.end_date:

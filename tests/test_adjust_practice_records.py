@@ -4,6 +4,7 @@ from datetime import datetime
 from tools.adjust_practice_records import (
     adjust_practice_records,
     create_missing_practice_records,
+    list_eligible_practice_questions,
     list_practice_sessions,
 )
 
@@ -166,6 +167,10 @@ def test_create_missing_practice_records_uses_daily_question_bank_and_work_hours
         "INSERT INTO exam_questions VALUES (?, ?, 'single_choice', 'A', 1)",
         [(question_id, (question_id - 1) % 5 + 1) for question_id in range(1, 151)],
     )
+
+    eligible = list_eligible_practice_questions(conn)
+    assert eligible["total_count"] == 150
+    assert {row["title"] for row in eligible["papers"]} == set(titles)
 
     report = create_missing_practice_records(
         conn,
