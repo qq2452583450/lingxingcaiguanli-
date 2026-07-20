@@ -33,6 +33,11 @@ def test_export_supplier_orders_includes_detail_spec_between_spec_and_brand(clie
             total_amount, is_selected, create_time
         ) VALUES (?, ?, ?, ?, ?, ?, 1, ?)
     """, (item_id, supplier_id, 12.5, 11.06, 0.13, 37.5, now))
+    cursor.execute("""
+        INSERT INTO purchase_inquiry_supplier_freights (
+            inquiry_id, supplier_id, tax_freight, tax_exempt_freight, tax_rate, remark, create_time, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (inquiry_id, supplier_id, 20, 17.7, 0.13, '整车配送', now, now))
     test_db.commit()
 
     response = client.get(f'/api/purchase-inquiries/{inquiry_id}/export-supplier-orders')
@@ -48,3 +53,7 @@ def test_export_supplier_orders_includes_detail_spec_between_spec_and_brand(clie
     assert sheet.cell(row=7, column=6).value == '询价品牌'
     assert sheet.cell(row=7, column=10).value == 37.5
     assert sheet.cell(row=8, column=10).value == 37.5
+    assert sheet.cell(row=9, column=1).value == '运费'
+    assert sheet.cell(row=9, column=10).value == 20
+    assert sheet.cell(row=10, column=1).value == '到货总价'
+    assert sheet.cell(row=10, column=10).value == 57.5

@@ -216,6 +216,7 @@ def test_db():
             library_price_updated INTEGER DEFAULT 0,
             quote_status TEXT DEFAULT 'draft',
             quote_deadline TEXT,
+            selected_supplier_id INTEGER,
             create_time TEXT,
             remark TEXT
         )
@@ -536,6 +537,21 @@ def test_db():
             create_time TEXT,
             FOREIGN KEY (item_id) REFERENCES purchase_inquiry_items(id) ON DELETE CASCADE,
             FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE purchase_inquiry_supplier_freights (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inquiry_id INTEGER NOT NULL,
+            supplier_id INTEGER NOT NULL,
+            tax_freight REAL DEFAULT 0,
+            tax_exempt_freight REAL DEFAULT 0,
+            tax_rate REAL DEFAULT 0.13,
+            remark TEXT,
+            create_time TEXT,
+            updated_at TEXT,
+            UNIQUE(inquiry_id, supplier_id)
         )
     """)
 

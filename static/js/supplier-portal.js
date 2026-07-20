@@ -5,6 +5,7 @@
     let currentUser = null;
     let currentInquiryId = null;
     let currentQuotes = [];
+    let currentFreight = { tax_freight: 0, tax_rate: 0.13, remark: '' };
     let quoteDeadline = null;
     let csrfToken = '';
 
@@ -259,6 +260,10 @@
         `;
 
         currentQuotes = res.quotes;
+        currentFreight = res.freight || { tax_freight: 0, tax_rate: 0.13, remark: '' };
+        document.getElementById('quoteFreightTax').value = currentFreight.tax_freight || '';
+        document.getElementById('quoteFreightRate').value = currentFreight.tax_rate ?? 0.13;
+        document.getElementById('quoteFreightRemark').value = currentFreight.remark || '';
         renderQuoteTable();
     };
 
@@ -300,7 +305,9 @@
         const actions = document.getElementById('quoteActions');
         if (!canEdit) {
             actions.innerHTML = '<span class="text-muted">报价已锁定，无法修改</span>';
+            document.querySelectorAll('#quoteFreight input').forEach(input => input.disabled = true);
         } else {
+            document.querySelectorAll('#quoteFreight input').forEach(input => input.disabled = false);
             actions.innerHTML = `
                 <button class="btn-save" onclick="saveAllQuotes()">保存草稿</button>
                 <button class="btn-submit" onclick="submitAllQuotes()">提交报价</button>
@@ -343,10 +350,24 @@
             if (res.success) saved++;
             else toast(res.message, 'error');
         }
+        const freightSaved = await saveInquiryFreight();
+        if (!freightSaved) return;
         toast(`已保存 ${saved} 条报价`, 'success');
         // Reload detail
         openQuoteDetail(currentInquiryId);
     };
+
+    async function saveInquiryFreight() {
+        const taxFreight = parseFloat(document.getElementById('quoteFreightTax').value) || 0;
+        const taxRate = parseFloat(document.getElementById('quoteFreightRate').value) || 0;
+        const remark = document.getElementById('quoteFreightRemark').value || '';
+        const res = await api(`/api/supplier/quote-requests/${currentInquiryId}/freight`, {
+            method: 'PUT',
+            body: JSON.stringify({ tax_freight: taxFreight, tax_rate: taxRate, remark })
+        });
+        if (!res.success) toast(res.message, 'error');
+        return !!res.success;
+    }
 
     window.submitAllQuotes = async function () {
         // Validate all have price > 0
@@ -372,6 +393,8 @@
             if (res.success) submitted++;
             else toast(res.message, 'error');
         }
+        const freightSaved = await saveInquiryFreight();
+        if (!freightSaved) return;
         toast(`已提交 ${submitted} 条报价`, 'success');
         openQuoteDetail(currentInquiryId);
     };

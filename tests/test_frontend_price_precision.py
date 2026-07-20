@@ -66,3 +66,13 @@ def test_manual_quote_input_formats_float_tail_for_display():
     render_body = _function_body(source, "renderInquiryItems")
 
     assert 'value="${formatManualQuoteInputValue(quote.tax_price)}"' in render_body
+
+
+def test_inquiry_form_uses_one_supplier_freight_and_landed_total():
+    source = Path("static/js/app.js").read_text(encoding="utf-8")
+    submit_body = _function_body(source, "submitInquiryForm")
+
+    assert "renderInquirySupplierSummary" in source
+    assert "selectedInquirySupplierId" in source
+    assert "supplier_freights" in submit_body
+    assert "selected_supplier_id" in submit_body

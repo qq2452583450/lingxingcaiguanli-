@@ -3,7 +3,17 @@
 """
 import pytest
 import json
+from pathlib import Path
 from helpers import hash_password, verify_password
+
+
+def test_supplier_portal_renders_and_saves_inquiry_freight_controls():
+    page = Path('supplier-portal.html').read_text(encoding='utf-8')
+    script = Path('static/js/supplier-portal.js').read_text(encoding='utf-8')
+
+    assert 'quoteFreight' in page
+    assert 'saveInquiryFreight' in script
+    assert '/freight' in script
 
 
 class TestSupplierAuth:
@@ -465,6 +475,34 @@ class TestSupplierQuotes:
         assert data['success'] is True
         assert len(data['quotes']) == 1
         assert data['quotes'][0]['quote_id'] == ids['quote_a_id']
+
+    def test_supplier_can_save_one_inquiry_freight(self, client, test_db):
+        ids = self._setup_inquiry_with_quotes(test_db)
+        self._login_supplier(client, 'sup_a')
+
+        resp = client.put(
+            f'/api/supplier/quote-requests/{ids["inquiry_id"]}/freight',
+            data=json.dumps({'tax_freight': 88, 'tax_rate': 0.13, 'remark': '整车配送'}),
+            content_type='application/json',
+        )
+
+        data = json.loads(resp.data)
+        assert data['success'] is True
+        cursor = test_db.cursor()
+        freight = cursor.execute(
+            """
+            SELECT supplier_id, tax_freight, tax_exempt_freight, remark
+            FROM purchase_inquiry_supplier_freights
+            WHERE inquiry_id = ?
+            """,
+            (ids['inquiry_id'],),
+        ).fetchone()
+        assert dict(freight) == {
+            'supplier_id': ids['sup_a_id'],
+            'tax_freight': 88,
+            'tax_exempt_freight': 77.88,
+            'remark': '整车配送',
+        }
 
     def test_supplier_cannot_see_other_quotes(self, client, test_db):
         """供应商A不能查看供应商B的报价"""
