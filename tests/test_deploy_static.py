@@ -32,3 +32,18 @@ def test_practice_regrade_workflow_backs_up_database_and_runs_script():
     assert "workflow_dispatch" in workflow
     assert "tools\\regrade_practice_attempts.py" in workflow
     assert "--apply --backup" in workflow
+
+
+def test_liu_adjustment_workflow_is_scoped_to_the_approved_operation():
+    workflow = (ROOT / ".github" / "workflows" / "adjust-liu-practice.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "workflow_dispatch" in workflow
+    assert "tools\\adjust_practice_records.py" in workflow
+    assert "0x5218" in workflow
+    assert "0x5149" in workflow
+    assert "0x534E" in workflow
+    assert "'2026-07-16'" in workflow
+    assert "'2026-07-20'" in workflow
+    assert "--apply --backup" in workflow
