@@ -57,3 +57,13 @@ def test_liu_inspection_workflow_is_read_only():
     assert "workflow_dispatch" in workflow
     assert "--list-sessions" in workflow
     assert "--apply" not in workflow
+
+
+def test_liu_creation_workflow_previews_and_backs_up_before_writing():
+    workflow = (ROOT / ".github" / "workflows" / "create-liu-practice.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--create-missing" in workflow
+    assert "dry_run:" in workflow
+    assert "--apply --backup" in workflow

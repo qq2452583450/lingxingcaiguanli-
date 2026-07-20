@@ -1,7 +1,11 @@
 import sqlite3
 from datetime import datetime
 
-from tools.adjust_practice_records import adjust_practice_records, list_practice_sessions
+from tools.adjust_practice_records import (
+    adjust_practice_records,
+    create_missing_practice_records,
+    list_practice_sessions,
+)
 
 
 def build_practice_db():
@@ -122,3 +126,77 @@ def test_list_practice_sessions_reports_all_dates_without_modifying_answers():
         "SELECT COUNT(*) FROM exam_practice_attempts WHERE user_id = 1 AND answer_text = 'B'"
     ).fetchone()[0]
     assert unchanged == 150
+
+
+def test_create_missing_practice_records_uses_daily_question_bank_and_work_hours():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, real_name TEXT);
+        CREATE TABLE exam_papers (id INTEGER PRIMARY KEY, title TEXT, source_type TEXT);
+        CREATE TABLE exam_questions (
+            id INTEGER PRIMARY KEY, paper_id INTEGER, question_type TEXT,
+            correct_answer TEXT, score INTEGER
+        );
+        CREATE TABLE exam_practice_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, question_id INTEGER,
+            answer_text TEXT, is_correct INTEGER, accuracy_credit REAL,
+            created_at TEXT, practice_session_id TEXT
+        );
+        CREATE TABLE exam_practice_wrong_questions (
+            user_id INTEGER, question_id INTEGER, wrong_count INTEGER,
+            last_answer_text TEXT, first_wrong_at TEXT, last_wrong_at TEXT,
+            PRIMARY KEY (user_id, question_id)
+        );
+        """
+    )
+    conn.execute("INSERT INTO users VALUES (1, 'liu', '刘光华')")
+    titles = [
+        "第一套（新编实操版）",
+        "第二套（新编案例版）",
+        "第三套（新编内控版）",
+        "第四套（新编实操易错版）",
+        "第五套（新编综合押题版）",
+    ]
+    conn.executemany(
+        "INSERT INTO exam_papers VALUES (?, ?, 'exam')", enumerate(titles, start=1)
+    )
+    conn.executemany(
+        "INSERT INTO exam_questions VALUES (?, ?, 'single_choice', 'A', 1)",
+        [(question_id, (question_id - 1) % 5 + 1) for question_id in range(1, 151)],
+    )
+
+    report = create_missing_practice_records(
+        conn,
+        real_name="刘光华",
+        start_date="2026-07-16",
+        end_date="2026-07-20",
+        rng_seed=7,
+    )
+
+    assert report["created_dates"] == [
+        "2026-07-16",
+        "2026-07-17",
+        "2026-07-18",
+        "2026-07-19",
+        "2026-07-20",
+    ]
+    rows = conn.execute(
+        """
+        SELECT substr(created_at, 1, 10) AS practice_date, COUNT(*) AS total_count,
+               SUM(is_correct) AS correct_count, SUM(accuracy_credit) AS accuracy_credit,
+               MIN(created_at) AS started_at, MAX(created_at) AS latest_at
+        FROM exam_practice_attempts
+        GROUP BY practice_date ORDER BY practice_date
+        """
+    ).fetchall()
+    assert len(rows) == 5
+    for row in rows:
+        assert row["total_count"] == 30
+        assert row["correct_count"] in {25, 26, 27, 28}
+        assert row["accuracy_credit"] > 24
+        started = datetime.fromisoformat(row["started_at"])
+        latest = datetime.fromisoformat(row["latest_at"])
+        assert (started.hour, started.minute) >= (9, 0)
+        assert (latest.hour, latest.minute) <= (17, 30)

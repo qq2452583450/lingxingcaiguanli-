@@ -10,12 +10,13 @@ import sqlite3
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from services.exam_service import grade_objective
+from services.exam_service import DAILY_PRACTICE_PAPER_TITLES, grade_objective
 
 
 def _parse_date(value: str) -> date:
@@ -88,6 +89,131 @@ def list_practice_sessions(conn: sqlite3.Connection, *, real_name: str) -> dict:
             }
         )
     return {"user": dict(user), "sessions": sessions}
+
+
+def create_missing_practice_records(
+    conn: sqlite3.Connection,
+    *,
+    real_name: str,
+    start_date: str,
+    end_date: str,
+    apply_changes: bool = True,
+    rng_seed: int | None = None,
+) -> dict:
+    """Create one passing 30-question practice session for each missing day."""
+    start = _parse_date(start_date)
+    end = _parse_date(end_date)
+    if end < start:
+        raise ValueError("结束日期不能早于开始日期")
+
+    conn.row_factory = sqlite3.Row
+    users = conn.execute(
+        "SELECT id, username, real_name FROM users WHERE real_name = ? ORDER BY id", (real_name,)
+    ).fetchall()
+    if len(users) != 1:
+        raise ValueError(f"姓名 {real_name} 匹配到 {len(users)} 位用户，拒绝执行")
+    user = users[0]
+    paper_titles = sorted(DAILY_PRACTICE_PAPER_TITLES)
+    title_placeholders = ",".join("?" for _ in paper_titles)
+    questions = conn.execute(
+        f"""
+        SELECT q.id, q.correct_answer
+        FROM exam_questions q
+        JOIN exam_papers p ON p.id = q.paper_id
+        WHERE p.source_type = 'exam'
+          AND p.title IN ({title_placeholders})
+          AND q.question_type IN ('single_choice', 'multiple_choice', 'true_false')
+        ORDER BY q.id
+        """,
+        paper_titles,
+    ).fetchall()
+    if len(questions) < 30:
+        raise ValueError("打卡题库不足 30 道客观题，拒绝补建记录")
+
+    rng = random.Random(rng_seed)
+    created_dates = []
+    skipped_dates = []
+    sessions = []
+    day = start
+    while day <= end:
+        day_text = day.isoformat()
+        existing = conn.execute(
+            """
+            SELECT 1 FROM exam_practice_attempts
+            WHERE user_id = ? AND created_at >= ? AND created_at < ?
+            LIMIT 1
+            """,
+            (user["id"], day_text, (day + timedelta(days=1)).isoformat()),
+        ).fetchone()
+        if existing:
+            skipped_dates.append(day_text)
+            day += timedelta(days=1)
+            continue
+
+        selected_questions = rng.sample(questions, 30)
+        correct_count = _target_correct_count(30, rng)
+        correct_ids = {row["id"] for row in selected_questions[:correct_count]}
+        latest_at = _latest_work_time(day_text, rng)
+        first_at = latest_at - timedelta(minutes=29)
+        session_id = f"manual-{day_text}-{user['username']}-daily-practice-{uuid4().hex[:8]}"
+        for offset, question in enumerate(selected_questions):
+            is_correct = question["id"] in correct_ids
+            answer_text = question["correct_answer"] if is_correct else ""
+            created_at = (first_at + timedelta(minutes=offset)).strftime("%Y-%m-%d %H:%M:%S")
+            if apply_changes:
+                conn.execute(
+                    """
+                    INSERT INTO exam_practice_attempts (
+                        user_id, question_id, answer_text, is_correct,
+                        accuracy_credit, created_at, practice_session_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        user["id"], question["id"], answer_text, 1 if is_correct else 0,
+                        1.0 if is_correct else 0.0, created_at, session_id,
+                    ),
+                )
+                if is_correct:
+                    conn.execute(
+                        "DELETE FROM exam_practice_wrong_questions WHERE user_id = ? AND question_id = ?",
+                        (user["id"], question["id"]),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO exam_practice_wrong_questions (
+                            user_id, question_id, wrong_count, last_answer_text,
+                            first_wrong_at, last_wrong_at
+                        ) VALUES (?, ?, 1, ?, ?, ?)
+                        ON CONFLICT(user_id, question_id) DO UPDATE SET
+                            wrong_count = exam_practice_wrong_questions.wrong_count + 1,
+                            last_answer_text = excluded.last_answer_text,
+                            last_wrong_at = excluded.last_wrong_at
+                        """,
+                        (user["id"], question["id"], answer_text, created_at, created_at),
+                    )
+        created_dates.append(day_text)
+        sessions.append(
+            {
+                "session_id": session_id,
+                "date": day_text,
+                "total_count": 30,
+                "correct_count": correct_count,
+                "accuracy": round(correct_count / 30, 4),
+                "latest_at": latest_at.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        )
+        day += timedelta(days=1)
+
+    if apply_changes:
+        conn.commit()
+    return {
+        "mode": "apply" if apply_changes else "dry-run",
+        "user": dict(user),
+        "created_dates": created_dates,
+        "skipped_dates": skipped_dates,
+        "sessions": sessions,
+    }
 
 
 def adjust_practice_records(
@@ -195,6 +321,7 @@ def main() -> int:
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--list-sessions", action="store_true", help="List sessions without changing data")
+    parser.add_argument("--create-missing", action="store_true", help="Create one passing session for each missing day")
     parser.add_argument("--apply", action="store_true", help="Persist the changes")
     parser.add_argument("--backup", action="store_true", help="Back up the database before applying")
     parser.add_argument("--seed", type=int, help="Optional deterministic random seed")
@@ -203,6 +330,8 @@ def main() -> int:
     db_path = Path(args.db).resolve()
     if not db_path.exists():
         raise SystemExit(f"Database not found: {db_path}")
+    if args.list_sessions and args.create_missing:
+        parser.error("--list-sessions and --create-missing cannot be used together")
     conn = sqlite3.connect(db_path)
     try:
         if args.list_sessions:
@@ -212,14 +341,24 @@ def main() -> int:
             if not args.start_date or not args.end_date:
                 parser.error("--start-date and --end-date are required unless --list-sessions is used")
             backup_path = _backup_database(db_path) if args.apply and args.backup else None
-            report = adjust_practice_records(
-                conn,
-                real_name=args.real_name,
-                start_date=args.start_date,
-                end_date=args.end_date,
-                apply_changes=args.apply,
-                rng_seed=args.seed,
-            )
+            if args.create_missing:
+                report = create_missing_practice_records(
+                    conn,
+                    real_name=args.real_name,
+                    start_date=args.start_date,
+                    end_date=args.end_date,
+                    apply_changes=args.apply,
+                    rng_seed=args.seed,
+                )
+            else:
+                report = adjust_practice_records(
+                    conn,
+                    real_name=args.real_name,
+                    start_date=args.start_date,
+                    end_date=args.end_date,
+                    apply_changes=args.apply,
+                    rng_seed=args.seed,
+                )
     finally:
         conn.close()
     if backup_path:

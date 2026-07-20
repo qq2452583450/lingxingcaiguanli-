@@ -1,0 +1,24 @@
+name: Create Liu Guanghua practice records
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: lxclgl-create-liu-practice
+  cancel-in-progress: false
+
+jobs:
+  create:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create approved Liu Guanghua practice records
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_SSH_PORT || 22 }}
+          script_stop: true
+          command_timeout: 10m
+          script: |
+            powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& { $AppDir = 'C:\wwwroot\lxclgl'; $Python = Join-Path $AppDir '.venv\Scripts\python.exe'; $Db = (Get-ChildItem -LiteralPath $AppDir -Filter '*.db' -File | Select-Object -First 1).FullName; if (-not $Db) { throw 'Production database not found' }; Set-Location -LiteralPath $AppDir; $RealName = ([char]0x5218).ToString() + ([char]0x5149).ToString() + ([char]0x534E).ToString(); $Args = @('--db', $Db, '--real-name', $RealName, '--start-date', '2026-07-16', '--end-date', '2026-07-20', '--create-missing', '--seed', '20260721'); Write-Output 'dry_run:'; & $Python tools\adjust_practice_records.py @Args; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; Write-Output 'apply:'; & $Python tools\adjust_practice_records.py @Args --apply --backup; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }"
