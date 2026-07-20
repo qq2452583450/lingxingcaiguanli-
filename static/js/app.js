@@ -824,7 +824,7 @@ function formatNationalStandard(val) {
 function codeToRegion(code) {
     if (!code) return '-';
     const prefix = (code.substring(0, 2) || '').toUpperCase();
-    const map = { 'AN': '安宁', 'KM': '昆明', 'BN': '版纳', 'DL': '大理', 'YX': '玉溪', 'CD': '成都', 'GX': '广西' };
+    const map = { 'AN': '安宁', 'KM': '昆明', 'BN': '版纳', 'DL': '大理', 'YX': '玉溪', 'CD': '成都', 'GX': '广西', 'QJ': '\u66f2\u9756' };
     return map[prefix] || '-';
 }
 

@@ -29,6 +29,35 @@ def seed_project(cursor, project_code, project_name="测试项目"):
     return cursor.lastrowid
 
 
+def test_qjtxyj_uses_qujing_display_and_region_prefix():
+    from helpers.material_regions import (
+        format_project_display,
+        get_region_name,
+        resolve_material_region_code,
+    )
+
+    assert get_region_name("QJTXYJ") == "\u66f2\u9756"
+    assert resolve_material_region_code("QJTXYJ") == "QJ"
+    assert (
+        format_project_display("QJTXYJ", "\u901a\u7384\u4e91\u749f")
+        == "\u66f2\u9756 / QJTXYJ / \u901a\u7384\u4e91\u749f"
+    )
+
+
+def test_next_material_code_uses_qj_prefix_for_qjtxyj_project(client, test_db):
+    cursor = test_db.cursor()
+    user_id = seed_material_clerk(cursor)
+    project_id = seed_project(cursor, "QJTXYJ", "\u901a\u7384\u4e91\u749f")
+    test_db.commit()
+    set_session_user(client, user_id, "clerk", "材料员")
+
+    response = client.get(f"/api/next-material-code?project_id={project_id}")
+    data = response.get_json()
+
+    assert data["success"] is True
+    assert data["material_code"] == "QJLX00001"
+
+
 def test_next_material_code_uses_gx_prefix_for_gx_project(client, test_db):
     cursor = test_db.cursor()
     user_id = seed_material_clerk(cursor)

@@ -6,6 +6,7 @@ REGION_NAMES = {
     'YX': '玉溪',
     'CD': '成都',
     'GX': '广西',
+    'QJ': '\u66f2\u9756',
 }
 
 GUANGXI_USERNAMES = {'linxiaoyin', 'wanglihua', 'leikefeng', 'tanxiang'}
