@@ -4449,25 +4449,6 @@ function selectSupplierOption(option, itemIndex, quoteIndex) {
         updateInquiryTotal();
     }
 
-    // 超过5个材料时，修改第一个材料的供应商同步到其他材料
-    if (inquiryItems.length > 5 && itemIndex === 0) {
-        for (let i = 1; i < inquiryItems.length; i++) {
-            const targetQuote = inquiryItems[i]?.quotes[quoteIndex];
-            if (targetQuote) {
-                targetQuote.supplier_id = supplierId;
-                targetQuote.supplier_name = supplierName;
-            }
-            // 更新对应DOM
-            const targetRow = document.querySelector(`.supplier-combobox[data-item="${i}"][data-quote="${quoteIndex}"]`);
-            if (targetRow) {
-                const targetInput = targetRow.querySelector('.supplier-combo-input');
-                const targetHiddenId = targetRow.querySelector('.supplier-combo-id');
-                if (targetInput) targetInput.value = supplierName;
-                if (targetHiddenId) targetHiddenId.value = supplierId;
-            }
-            updateLowestFlag(i);
-        }
-    }
 }
 
 function toggleSupplierDropdown(input) {
