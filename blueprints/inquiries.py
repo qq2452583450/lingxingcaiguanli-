@@ -129,6 +129,20 @@ def _calculate_selected_supplier_total(items_data, selected_supplier_id, supplie
     return round(goods_amount + freight.get('tax_freight', 0), 2)
 
 
+def _calculate_selected_item_freight_total(items_data, supplier_freights):
+    selected_supplier_ids = {
+        int(item['selected_quote_id'])
+        for item in items_data
+        if item.get('selected_quote_id')
+    }
+    normalized_freights = _normalize_supplier_freights(supplier_freights)
+    return round(sum(
+        freight['tax_freight']
+        for supplier_id, freight in normalized_freights.items()
+        if supplier_id in selected_supplier_ids
+    ), 2)
+
+
 def _apply_selected_supplier(items_data, selected_supplier_id):
     if not selected_supplier_id:
         return
@@ -520,6 +534,8 @@ def create_inquiry():
             except ValueError as error:
                 conn.close()
                 return jsonify({'success': False, 'message': str(error)})
+        else:
+            total_amount += _calculate_selected_item_freight_total(items_data, supplier_freights)
 
         # 判断是否低于库内价
         is_below = 0
@@ -1018,6 +1034,8 @@ def update_inquiry(inquiry_id):
             total_amount = _calculate_selected_supplier_total(
                 items_data, selected_supplier_id, supplier_freights
             )
+        else:
+            total_amount += _calculate_selected_item_freight_total(items_data, supplier_freights)
 
         # 写入新 items + quotes
         for item in items_data:
@@ -3486,6 +3504,8 @@ def submit_draft(draft_id):
             total_amount = _calculate_selected_supplier_total(
                 items_data, selected_supplier_id, supplier_freights
             )
+        else:
+            total_amount += _calculate_selected_item_freight_total(items_data, supplier_freights)
 
         # 更新主表
         project_id = data.get('project_id', draft.get('project_id'))

@@ -251,6 +251,79 @@ def test_create_inquiry_uses_selected_supplier_landed_total(client, test_db):
     assert dict(freight) == {"tax_freight": 20, "tax_exempt_freight": 17.7, "remark": "整车配送"}
 
 
+def test_create_inquiry_keeps_selected_suppliers_and_freights_per_material(client, test_db):
+    cursor = test_db.cursor()
+    create_inquiry_delete_tables(cursor)
+    clerk_id = seed_role_user(cursor, "材料员", "multi_supplier_clerk", "材料员")
+    cursor.execute("INSERT INTO suppliers (supplier_name) VALUES (?)", ("供应商甲",))
+    supplier_a = cursor.lastrowid
+    cursor.execute("INSERT INTO suppliers (supplier_name) VALUES (?)", ("供应商乙",))
+    supplier_b = cursor.lastrowid
+    cursor.execute("INSERT INTO units (unit_name) VALUES (?)", ("个",))
+    unit_id = cursor.lastrowid
+    cursor.execute(
+        "INSERT INTO materials (material_code, material_name, unit_id) VALUES (?, ?, ?)",
+        ("MULTI-001", "材料甲", unit_id),
+    )
+    material_a = cursor.lastrowid
+    cursor.execute(
+        "INSERT INTO materials (material_code, material_name, unit_id) VALUES (?, ?, ?)",
+        ("MULTI-002", "材料乙", unit_id),
+    )
+    material_b = cursor.lastrowid
+    test_db.commit()
+    set_session_user(client, clerk_id, "multi_supplier_clerk", "材料员", "材料员")
+
+    response = client.post(
+        "/api/purchase-inquiries",
+        json={
+            "inquiry_date": "2026-07-21",
+            "supplier_freights": [
+                {"supplier_id": supplier_a, "tax_freight": 12, "tax_rate": 0.13},
+                {"supplier_id": supplier_b, "tax_freight": 8, "tax_rate": 0.13},
+            ],
+            "items": [
+                {
+                    "material_id": material_a,
+                    "quantity": 10,
+                    "selected_quote_id": supplier_a,
+                    "quotes": [{"supplier_id": supplier_a, "tax_price": 10, "tax_rate": 0.13}],
+                },
+                {
+                    "material_id": material_b,
+                    "quantity": 2,
+                    "selected_quote_id": supplier_b,
+                    "quotes": [{"supplier_id": supplier_b, "tax_price": 20, "tax_rate": 0.13}],
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["success"] is True
+    inquiry = test_db.execute(
+        "SELECT total_amount, selected_supplier_id FROM purchase_inquiries WHERE id = ?",
+        (payload["id"],),
+    ).fetchone()
+    assert inquiry["total_amount"] == 160
+    assert inquiry["selected_supplier_id"] is None
+    selected = test_db.execute(
+        """
+        SELECT i.material_id, q.supplier_id
+        FROM purchase_inquiry_items i
+        JOIN purchase_inquiry_quotes q ON q.item_id = i.id
+        WHERE i.inquiry_id = ? AND q.is_selected = 1
+        ORDER BY i.material_id
+        """,
+        (payload["id"],),
+    ).fetchall()
+    assert [(row["material_id"], row["supplier_id"]) for row in selected] == [
+        (material_a, supplier_a),
+        (material_b, supplier_b),
+    ]
+
+
 def test_purchase_inquiries_support_list_filters(client, test_db):
     cursor = test_db.cursor()
     cursor.execute("INSERT INTO roles (role_name, permissions) VALUES (?, ?)", ("系统管理员", ""))
