@@ -1,3 +1,4 @@
+import calendar
 from pathlib import Path
 from io import BytesIO
 
@@ -647,18 +648,16 @@ def test_manager_can_view_monthly_checkin_report(client, test_db):
     assert json_data["success"] is True
     assert {row["username"] for row in json_data["data"]} == {"monthly_clerk"}
     assert json_data["data"][0]["expected_days"] == 22
-    assert rows[0] == (
-        "姓名",
-        "账号",
-        "角色",
-        "月份",
-        "满勤标准天数",
-        "实际合格天数",
-        "缺勤天数",
-        "补打卡次数",
-        "是否满勤",
-    )
-    assert rows[1][1] == "monthly_clerk"
+    assert len(json_data["data"][0]["days"]) == calendar.monthrange(
+        *map(int, json_data["data"][0]["month"].split("-"))
+    )[1]
+    assert workbook.active.title == "月度打卡对账"
+    assert workbook.active["A1"].value == "考试中心月度打卡对账单"
+    assert workbook.active["A5"].value == "姓名"
+    assert workbook.active["B5"].value == "账号"
+    assert workbook.active["D5"].value == 1
+    assert workbook.active["D6"].value in {"打卡", "补卡", "未打卡", "未达标", "未来"}
+    assert workbook.active["B6"].value == "monthly_clerk"
 
 
 def test_clerk_can_list_retake_eligibilities(client, test_db):

@@ -136,50 +136,158 @@ def _filters_from_request():
 
 
 def _monthly_checkins_workbook(rows, month):
+    from calendar import monthrange
+    from datetime import datetime
     from openpyxl import Workbook
-    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
 
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "月度打卡对账"
-    headers = [
-        "姓名",
-        "账号",
-        "角色",
-        "月份",
-        "满勤标准天数",
-        "实际合格天数",
-        "缺勤天数",
-        "补打卡次数",
-        "是否满勤",
+    sheet.sheet_view.showGridLines = False
+
+    try:
+        year, month_number = map(int, (month or datetime.now().strftime("%Y-%m")).split("-"))
+    except ValueError:
+        year, month_number = datetime.now().year, datetime.now().month
+    days_in_month = monthrange(year, month_number)[1]
+    day_start_column = 4
+    summary_headers = ["合格打卡", "补卡", "缺勤", "满勤标准", "满勤状态"]
+    summary_start_column = day_start_column + days_in_month
+    last_column = summary_start_column + len(summary_headers) - 1
+    last_column_letter = get_column_letter(last_column)
+    data_start_row = 6
+    data_end_row = data_start_row + max(len(rows), 1) - 1
+
+    navy_fill = PatternFill("solid", fgColor="1F4E78")
+    blue_fill = PatternFill("solid", fgColor="D9EAF7")
+    green_fill = PatternFill("solid", fgColor="C6E0B4")
+    amber_fill = PatternFill("solid", fgColor="FFE699")
+    red_fill = PatternFill("solid", fgColor="F4CCCC")
+    gray_fill = PatternFill("solid", fgColor="E7E6E6")
+    thin_border = Border(
+        left=Side(style="thin", color="D9E2F3"),
+        right=Side(style="thin", color="D9E2F3"),
+        top=Side(style="thin", color="D9E2F3"),
+        bottom=Side(style="thin", color="D9E2F3"),
+    )
+    centered = Alignment(horizontal="center", vertical="center")
+
+    sheet.merge_cells(f"A1:{last_column_letter}1")
+    sheet["A1"] = "考试中心月度打卡对账单"
+    sheet["A1"].font = Font(name="等线", size=16, bold=True, color="FFFFFF")
+    sheet["A1"].fill = navy_fill
+    sheet["A1"].alignment = centered
+    sheet.row_dimensions[1].height = 26
+
+    summary_values = [
+        ("A2", "对账月份"), ("B2", f"{year:04d}-{month_number:02d}"),
+        ("D2", "材料员人数"), ("E2", f"=COUNTA(A{data_start_row}:A{data_end_row})"),
+        ("G2", "满勤人数"), ("H2", f'=COUNTIF({get_column_letter(summary_start_column + 4)}{data_start_row}:{get_column_letter(summary_start_column + 4)}{data_end_row},"满勤")'),
+        ("J2", "补卡总次数"), ("K2", f"=SUM({get_column_letter(summary_start_column + 1)}{data_start_row}:{get_column_letter(summary_start_column + 1)}{data_end_row})"),
+        ("M2", "生成时间"), ("N2", datetime.now().strftime("%Y-%m-%d %H:%M")),
     ]
-    sheet.append(headers)
-    for cell in sheet[1]:
+    for cell_ref, value in summary_values:
+        cell = sheet[cell_ref]
+        cell.value = value
+        cell.alignment = centered
+        cell.border = thin_border
+        if cell_ref[0] in {"A", "D", "G", "J", "M"}:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = navy_fill
+        else:
+            cell.fill = blue_fill
+
+    sheet.merge_cells(start_row=4, start_column=1, end_row=4, end_column=3)
+    sheet.cell(row=4, column=1, value="人员信息")
+    sheet.merge_cells(start_row=4, start_column=day_start_column, end_row=4, end_column=summary_start_column - 1)
+    sheet.cell(row=4, column=day_start_column, value="日期")
+    sheet.merge_cells(start_row=4, start_column=summary_start_column, end_row=4, end_column=last_column)
+    sheet.cell(row=4, column=summary_start_column, value="月度统计")
+    for cell in sheet[4]:
         cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = PatternFill("solid", fgColor="4472C4")
-        cell.alignment = Alignment(horizontal="center")
+        cell.fill = navy_fill
+        cell.alignment = centered
+        cell.border = thin_border
 
-    for row in rows:
-        sheet.append(
-            [
-                row.get("real_name") or row.get("username") or "",
-                row.get("username") or "",
-                row.get("role_name") or "",
-                row.get("month") or month,
-                row.get("expected_days") or 0,
-                row.get("actual_days") or 0,
-                row.get("missing_days") or 0,
-                row.get("retroactive_used") or 0,
-                "是" if row.get("full_attendance") else "否",
-            ]
-        )
+    headers = ["姓名", "账号", "岗位"] + list(range(1, days_in_month + 1)) + summary_headers
+    for column, header in enumerate(headers, start=1):
+        cell = sheet.cell(row=5, column=column, value=header)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = navy_fill
+        cell.alignment = centered
+        cell.border = thin_border
+    sheet.row_dimensions[5].height = 22
 
-    widths = [16, 18, 18, 12, 14, 14, 12, 12, 12]
-    for index, width in enumerate(widths, start=1):
-        sheet.column_dimensions[sheet.cell(row=1, column=index).column_letter].width = width
-    for row in sheet.iter_rows():
-        for cell in row:
-            cell.alignment = Alignment(horizontal="center", vertical="center")
+    status_styles = {
+        "打卡": green_fill,
+        "补卡": amber_fill,
+        "未打卡": red_fill,
+        "未达标": red_fill,
+        "未来": gray_fill,
+    }
+    for row_index, report in enumerate(rows, start=data_start_row):
+        statuses = []
+        for day in report.get("days", []):
+            if day.get("status") == "passed":
+                statuses.append("补卡" if day.get("retroactive") else "打卡")
+            elif day.get("status") == "failed":
+                statuses.append("未达标")
+            elif day.get("status") == "future":
+                statuses.append("未来")
+            else:
+                statuses.append("未打卡")
+        values = [
+            report.get("real_name") or report.get("username") or "",
+            report.get("username") or "",
+            report.get("role_name") or "",
+            *statuses,
+            report.get("actual_days") or 0,
+            report.get("retroactive_used") or 0,
+            report.get("missing_days") or 0,
+            report.get("expected_days") or 0,
+            "满勤" if report.get("full_attendance") else "未满勤",
+        ]
+        for column, value in enumerate(values, start=1):
+            cell = sheet.cell(row=row_index, column=column, value=value)
+            cell.alignment = centered
+            cell.border = thin_border
+            if day_start_column <= column < summary_start_column:
+                cell.fill = status_styles.get(value, gray_fill)
+            elif column == summary_start_column + 4:
+                cell.fill = green_fill if value == "满勤" else red_fill
+    sheet.auto_filter.ref = f"A5:{last_column_letter}{data_end_row}"
+    sheet.freeze_panes = "D6"
+
+    for column in range(1, last_column + 1):
+        letter = get_column_letter(column)
+        if column == 1:
+            sheet.column_dimensions[letter].width = 12
+        elif column in {2, 3, last_column}:
+            sheet.column_dimensions[letter].width = 16
+        elif day_start_column <= column < summary_start_column:
+            sheet.column_dimensions[letter].width = 9
+        else:
+            sheet.column_dimensions[letter].width = 12
+
+    legend_row = data_end_row + 2
+    sheet.merge_cells(start_row=legend_row, start_column=1, end_row=legend_row, end_column=3)
+    sheet.cell(row=legend_row, column=1, value="状态说明")
+    sheet.cell(row=legend_row, column=1).font = Font(bold=True, color="FFFFFF")
+    sheet.cell(row=legend_row, column=1).fill = navy_fill
+    sheet.cell(row=legend_row, column=1).alignment = centered
+    for offset, label in enumerate(["打卡", "补卡", "未打卡", "未达标", "未来"], start=day_start_column):
+        cell = sheet.cell(row=legend_row, column=offset, value=label)
+        cell.fill = status_styles[label]
+        cell.alignment = centered
+        cell.border = thin_border
+
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+    sheet.print_title_rows = "1:5"
 
     output = BytesIO()
     workbook.save(output)

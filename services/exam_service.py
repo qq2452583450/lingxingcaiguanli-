@@ -934,6 +934,19 @@ def list_monthly_checkin_reports(month: str | None = None) -> list[dict]:
         for user in users:
             sessions_by_date = _practice_sessions_for_range(conn, user["id"], start_day, end_day)
             summary = _summarize_calendar_days(sessions_by_date, start_day, end_day)
+            retroactive_dates = {
+                row["target_date"]
+                for row in conn.execute(
+                    """
+                    SELECT target_date
+                    FROM exam_retroactive_checkins
+                    WHERE user_id = ?
+                      AND month = ?
+                      AND passed = 1
+                    """,
+                    (user["id"], month_key),
+                ).fetchall()
+            }
             expected_days = MONTHLY_ATTENDANCE_REQUIRED_DAYS
             actual_days = summary["actual_days"]
             missing_days = max(expected_days - actual_days, 0)
@@ -959,6 +972,10 @@ def list_monthly_checkin_reports(month: str | None = None) -> list[dict]:
                 "retroactive_used": int(retroactive_used or 0),
                 "full_attendance": actual_days >= expected_days,
                 "generated": completed_month,
+                "days": [
+                    {**day, "retroactive": day["date"] in retroactive_dates}
+                    for day in summary["days"]
+                ],
             }
             if completed_month:
                 conn.execute(
