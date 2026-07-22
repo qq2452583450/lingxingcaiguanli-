@@ -4144,6 +4144,7 @@ function selectQuote(itemIndex, quoteIndex) {
             btn.textContent = q.is_selected ? '已选定' : '设为拟定';
         }
     });
+    renderInquiryItems();
     updateInquiryTotal();
 }
 

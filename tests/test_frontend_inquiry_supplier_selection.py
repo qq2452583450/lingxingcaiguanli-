@@ -21,3 +21,4 @@ def test_quote_selection_does_not_select_the_same_supplier_for_every_material():
     assert "selectInquirySupplier" not in function_source
     assert "item.quotes.forEach(q => q.is_selected = false)" in function_source
     assert "item.quotes[quoteIndex].is_selected = true" in function_source
+    assert "renderInquiryItems();" in function_source
