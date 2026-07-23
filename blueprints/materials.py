@@ -54,10 +54,42 @@ def get_materials():
 
     # 查询分页数据
     sql = f"""
-        SELECT m.*, u.unit_name, s.supplier_name
+        WITH ranked_purchases AS (
+            SELECT
+                pii.material_id,
+                pi.project_id,
+                COALESCE(
+                    NULLIF(pi.approve_time, ''),
+                    NULLIF(pi.inquiry_date, ''),
+                    pi.create_time
+                ) AS purchase_time,
+                ROW_NUMBER() OVER (
+                    PARTITION BY pii.material_id
+                    ORDER BY
+                        COALESCE(
+                            NULLIF(pi.approve_time, ''),
+                            NULLIF(pi.inquiry_date, ''),
+                            pi.create_time
+                        ) DESC,
+                        pi.id DESC,
+                        pii.id DESC
+                ) AS purchase_rank
+            FROM purchase_inquiry_items pii
+            JOIN purchase_inquiries pi ON pi.id = pii.inquiry_id
+            WHERE pi.approval_status = '已同意'
+        )
+        SELECT
+            m.*,
+            u.unit_name,
+            s.supplier_name,
+            COALESCE(lp.project_name, lp.project_code, '') AS last_purchase_project,
+            rp.purchase_time AS last_purchase_time
         FROM materials m
         LEFT JOIN units u ON m.unit_id = u.id
         LEFT JOIN suppliers s ON m.default_supplier_id = s.id
+        LEFT JOIN ranked_purchases rp
+            ON rp.material_id = m.id AND rp.purchase_rank = 1
+        LEFT JOIN projects lp ON lp.id = rp.project_id
         {where_clause}
         ORDER BY m.material_code
         LIMIT ? OFFSET ?

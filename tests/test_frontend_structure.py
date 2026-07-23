@@ -12,3 +12,15 @@ def test_each_nav_module_has_matching_page_container():
     ]
 
     assert missing == []
+
+
+def test_material_table_shows_latest_purchase_columns_before_actions():
+    html = Path("index.html").read_text(encoding="utf-8")
+    source = Path("static/js/app.js").read_text(encoding="utf-8")
+    table = html[html.index('<table id="materialTableEl">'):html.index('<tbody id="materialTable">')]
+
+    assert table.index("供应商") < table.index("最后采购项目")
+    assert table.index("最后采购项目") < table.index("最后采购时间")
+    assert table.index("最后采购时间") < table.index("操作")
+    assert "m.last_purchase_project" in source
+    assert "m.last_purchase_time" in source

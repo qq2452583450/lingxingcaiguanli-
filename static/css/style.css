@@ -372,8 +372,9 @@ tbody tr:hover { background: #eff6ff; }
 #materialTableEl { width: 100%; table-layout: fixed; border-collapse: collapse; min-width: 1000px; }
 #materialTableEl th, #materialTableEl td { padding: 10px 8px; border-bottom: 1px solid var(--bdr); vertical-align: middle; }
 #materialTableEl thead th { background: #f8fafc; font-weight: 600; text-align: center; border-bottom: 2px solid var(--bdr); white-space: nowrap; position: sticky; top: 0; z-index: 10; }
-#materialTableEl .col-code, #materialTableEl .col-name, #materialTableEl .col-spec, #materialTableEl .col-unit, #materialTableEl .col-rate, #materialTableEl .col-price, #materialTableEl .col-no-tax, #materialTableEl .col-supplier, #materialTableEl .col-actions { text-align: center; }
+#materialTableEl .col-code, #materialTableEl .col-name, #materialTableEl .col-spec, #materialTableEl .col-unit, #materialTableEl .col-rate, #materialTableEl .col-price, #materialTableEl .col-no-tax, #materialTableEl .col-supplier, #materialTableEl .col-last-purchase-project, #materialTableEl .col-last-purchase-time, #materialTableEl .col-actions { text-align: center; }
 #materialTableEl .col-actions { overflow: visible !important; white-space: nowrap !important; }
+#materialTableEl .col-last-purchase-time { white-space: nowrap; }
 .material-row td { text-align: center; overflow: hidden; text-overflow: ellipsis; }
 .material-row .col-name, .material-row .col-spec, .material-row .col-detail-spec { white-space: normal; word-break: break-word; }
 .material-row:nth-child(even) td { background: #f8fafc; }

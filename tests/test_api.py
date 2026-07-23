@@ -141,3 +141,54 @@ class TestMaterialAPI:
         data = json.loads(response.data)
         assert data['success'] is True
         assert isinstance(data['data'], list)
+
+    def test_materials_list_includes_latest_approved_purchase_project_and_time(self, client, test_db):
+        cursor = test_db.cursor()
+        cursor.execute(
+            "INSERT INTO materials (material_code, material_name, create_time) VALUES (?, ?, ?)",
+            ("KMLX-LATEST", "采购历史测试材料", "2026-01-01 09:00:00"),
+        )
+        material_id = cursor.lastrowid
+        cursor.execute(
+            "INSERT INTO projects (project_code, project_name, create_time) VALUES (?, ?, ?)",
+            ("KM-OLD", "旧采购项目", "2026-01-01 09:00:00"),
+        )
+        old_project_id = cursor.lastrowid
+        cursor.execute(
+            "INSERT INTO projects (project_code, project_name, create_time) VALUES (?, ?, ?)",
+            ("KM-NEW", "最新采购项目", "2026-01-01 09:00:00"),
+        )
+        new_project_id = cursor.lastrowid
+
+        inquiries = [
+            ("XJ-LATEST-OLD", old_project_id, "已同意", "2026-06-01 10:00:00"),
+            ("XJ-LATEST-NEW", new_project_id, "已同意", "2026-07-20 15:30:00"),
+            ("XJ-LATEST-DRAFT", old_project_id, "草稿", "2026-07-22 16:00:00"),
+        ]
+        for inquiry_no, project_id, status, approve_time in inquiries:
+            cursor.execute(
+                """
+                INSERT INTO purchase_inquiries (
+                    inquiry_no, inquiry_date, project_id, approval_status,
+                    approve_time, create_time
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (inquiry_no, approve_time[:10], project_id, status, approve_time, approve_time),
+            )
+            cursor.execute(
+                """
+                INSERT INTO purchase_inquiry_items (
+                    inquiry_id, material_id, quantity, create_time
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (cursor.lastrowid, material_id, 1, approve_time),
+            )
+        test_db.commit()
+
+        response = client.get('/api/materials')
+        data = response.get_json()
+
+        assert response.status_code == 200
+        material = next(row for row in data['data'] if row['id'] == material_id)
+        assert material['last_purchase_project'] == '最新采购项目'
+        assert material['last_purchase_time'] == '2026-07-20 15:30:00'

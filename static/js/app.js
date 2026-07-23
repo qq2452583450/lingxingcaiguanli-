@@ -945,7 +945,7 @@ async function loadMaterials() {
     // 保留原有DOM结构和CSS类名，只更新加载状态
     const tbody = document.getElementById('materialTable');
     if (tbody) {
-        tbody.innerHTML = '<tr class="loading-row"><td colspan="15"><div class="loading-spinner">加载中...</div></td></tr>';
+        tbody.innerHTML = '<tr class="loading-row"><td colspan="17"><div class="loading-spinner">加载中...</div></td></tr>';
     }
 
     const params = new URLSearchParams({page: '1', page_size: String(MATERIAL_PAGE_SIZE)});
@@ -969,7 +969,7 @@ async function loadMaterials() {
     } catch (e) {
         console.error('加载材料失败', e);
         if (tbody) {
-            tbody.innerHTML = '<tr class="error-row"><td colspan="15"><div class="error-message">加载失败，请重试</div></td></tr>';
+            tbody.innerHTML = '<tr class="error-row"><td colspan="17"><div class="error-message">加载失败，请重试</div></td></tr>';
         }
     }
 }
@@ -1001,7 +1001,7 @@ async function loadMoreMaterials() {
         // 移除之前的"加载更多"提示行
         const existingLoadMore = tbody.querySelector('.load-more-row');
         if (existingLoadMore) {
-            existingLoadMore.innerHTML = '<td colspan="15"><div class="loading-spinner">加载中...</div></td>';
+            existingLoadMore.innerHTML = '<td colspan="17"><div class="loading-spinner">加载中...</div></td>';
         }
     }
 
@@ -1032,7 +1032,7 @@ async function loadMoreMaterials() {
         if (tbody) {
             const existingLoadMore = tbody.querySelector('.load-more-row');
             if (existingLoadMore) {
-                existingLoadMore.innerHTML = '<td colspan="15"><div class="error-message">加载失败，请滚动重试</div></td>';
+                existingLoadMore.innerHTML = '<td colspan="17"><div class="error-message">加载失败，请滚动重试</div></td>';
             }
         }
     } finally {
@@ -1046,7 +1046,7 @@ function renderMaterialTable() {
 
     // 空数据状态 - 引导用户创建第一条材料
     if (materials.length === 0) {
-        tbody.innerHTML = '<tr class="empty-row"><td colspan="15"><div class="empty-state"><svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.3;margin-bottom:12px"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg><p style="font-size:15px;color:var(--text-primary);margin-bottom:6px">还没有材料</p><p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">点击下方按钮添加第一条材料</p><button class="btn btn-primary" style="margin:0" onclick="openMaterialModal()">新建材料</button></div></td></tr>';
+        tbody.innerHTML = '<tr class="empty-row"><td colspan="17"><div class="empty-state"><svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.3;margin-bottom:12px"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg><p style="font-size:15px;color:var(--text-primary);margin-bottom:6px">还没有材料</p><p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">点击下方按钮添加第一条材料</p><button class="btn btn-primary" style="margin:0" onclick="openMaterialModal()">新建材料</button></div></td></tr>';
         return;
     }
 
@@ -1070,6 +1070,8 @@ function renderMaterialTable() {
             <td class="col-no-tax">¥${safeNum(m.cash_price)}</td>
             <td class="col-price">¥${safeNum(m.cash_tax_price)}</td>
             <td class="col-supplier">${escapeHtml(m.supplier_name) || '-'}</td>
+            <td class="col-last-purchase-project" title="${escapeHtml(m.last_purchase_project) || '-'}">${escapeHtml(m.last_purchase_project) || '-'}</td>
+            <td class="col-last-purchase-time">${escapeHtml(m.last_purchase_time) || '-'}</td>
             <td class="col-actions">
                 ${(isAdmin() || isMaterialClerk()) ? `<button class="btn btn-secondary" onclick="editMaterial(${m.id})">编辑</button>` : ''}
                 ${isAdmin() ? `<button class="btn btn-danger" onclick="deleteMaterial(${m.id})">删除</button>` : ''}
@@ -1083,7 +1085,7 @@ function renderMaterialTable() {
     if (!materialState.allLoaded) {
         const loadMoreTr = document.createElement('tr');
         loadMoreTr.className = 'load-more-row';
-        loadMoreTr.innerHTML = '<td colspan="15"><div class="load-more-message">滚动加载更多...</div></td>';
+        loadMoreTr.innerHTML = '<td colspan="17"><div class="load-more-message">滚动加载更多...</div></td>';
         fragment.appendChild(loadMoreTr);
     }
 
