@@ -53,8 +53,8 @@ def test_export_supplier_orders_includes_detail_spec_between_spec_and_brand(clie
     assert sheet.cell(row=7, column=6).value == '询价品牌'
     assert sheet.cell(row=7, column=9).value == 0.7345
     assert sheet.cell(row=7, column=10).value == 2.2035
-    assert sheet.cell(row=7, column=8).number_format == '#,##0.####'
-    assert sheet.cell(row=7, column=9).number_format == '#,##0.####'
+    assert sheet.cell(row=7, column=8).number_format == 'General'
+    assert sheet.cell(row=7, column=9).number_format == '#,##0.00'
     assert sheet.cell(row=7, column=10).number_format == '#,##0.00'
     assert sheet.cell(row=8, column=10).value == 2.2035
     assert sheet.cell(row=9, column=1).value == '运费'

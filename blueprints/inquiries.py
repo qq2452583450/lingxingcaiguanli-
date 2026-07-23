@@ -2586,8 +2586,11 @@ def export_supplier_orders(inquiry_id):
             for col, value in enumerate(row_data, 1):
                 cell = ws.cell(row=6 + idx, column=col, value=value)
                 cell.border = thin_border
-                if col in (8, 9):
-                    cell.number_format = '#,##0.####'
+                if col == 8:
+                    cell.number_format = 'General'
+                    cell.alignment = right_align
+                elif col == 9:
+                    cell.number_format = '#,##0.00'
                     cell.alignment = right_align
                 elif col == 10:
                     cell.number_format = '#,##0.00'
