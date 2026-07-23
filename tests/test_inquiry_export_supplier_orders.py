@@ -32,7 +32,7 @@ def test_export_supplier_orders_includes_detail_spec_between_spec_and_brand(clie
             item_id, supplier_id, tax_price, tax_exempt_price, tax_rate,
             total_amount, is_selected, create_time
         ) VALUES (?, ?, ?, ?, ?, ?, 1, ?)
-    """, (item_id, supplier_id, 12.5, 11.06, 0.13, 37.5, now))
+    """, (item_id, supplier_id, 0.7345, 0.65, 0.13, 2.2035, now))
     cursor.execute("""
         INSERT INTO purchase_inquiry_supplier_freights (
             inquiry_id, supplier_id, tax_freight, tax_exempt_freight, tax_rate, remark, create_time, updated_at
@@ -51,9 +51,13 @@ def test_export_supplier_orders_includes_detail_spec_between_spec_and_brand(clie
     assert sheet.cell(row=7, column=4).value == 'DN50'
     assert sheet.cell(row=7, column=5).value == '询价详细规格'
     assert sheet.cell(row=7, column=6).value == '询价品牌'
-    assert sheet.cell(row=7, column=10).value == 37.5
-    assert sheet.cell(row=8, column=10).value == 37.5
+    assert sheet.cell(row=7, column=9).value == 0.7345
+    assert sheet.cell(row=7, column=10).value == 2.2035
+    assert sheet.cell(row=7, column=8).number_format == '#,##0.####'
+    assert sheet.cell(row=7, column=9).number_format == '#,##0.####'
+    assert sheet.cell(row=7, column=10).number_format == '#,##0.00'
+    assert sheet.cell(row=8, column=10).value == 2.2035
     assert sheet.cell(row=9, column=1).value == '运费'
     assert sheet.cell(row=9, column=10).value == 20
     assert sheet.cell(row=10, column=1).value == '到货总价'
-    assert sheet.cell(row=10, column=10).value == 57.5
+    assert sheet.cell(row=10, column=10).value == 22.2035
