@@ -10,6 +10,7 @@ from services.exam_import_service import (
     import_exam_papers_from_question_bank_dir,
     parse_exam_docx,
     parse_literature_question_bank_docx,
+    replace_exam_paper_from_question_bank_docx,
     sync_question_bank_reference_answers,
     import_exam_papers_from_docx,
 )
@@ -283,4 +284,30 @@ def test_reimport_archives_old_formal_exam_without_removing_lifecycle_rows(test_
     assert test_db.execute(
         "SELECT source_type FROM exam_papers WHERE id = ?",
         (old_current["id"],),
+    ).fetchone()[0] == "archived_exam"
+
+
+def test_replace_question_bank_archives_only_matching_active_paper(test_db):
+    source_dir = Path("docs/exam_sources/question_bank")
+    replacement_path = source_dir / "物资管理-结算单调差应用规范题库.docx"
+    import_exam_papers_from_question_bank_dir(source_dir)
+    before = list_papers()
+    before_by_title = {paper["title"]: paper for paper in before}
+    target_title = "物资管理-结算单调差应用规范题库"
+    target_id = before_by_title[target_title]["id"]
+
+    result = replace_exam_paper_from_question_bank_docx(replacement_path)
+
+    after = list_papers()
+    after_by_title = {paper["title"]: paper for paper in after}
+    assert {key: result[key] for key in ("inserted", "archived", "removed")} == {
+        "inserted": 1,
+        "archived": 1,
+        "removed": 0,
+    }
+    assert set(after_by_title) == set(before_by_title)
+    assert after_by_title[target_title]["id"] != target_id
+    assert len(get_paper_questions(after_by_title[target_title]["id"])) == 30
+    assert test_db.execute(
+        "SELECT source_type FROM exam_papers WHERE id = ?", (target_id,)
     ).fetchone()[0] == "archived_exam"

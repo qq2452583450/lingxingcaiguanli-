@@ -625,7 +625,7 @@ def test_clerk_can_view_attendance_calendar(client, test_db):
     assert response.status_code == 200
     assert data["success"] is True
     assert "days" in data["data"]
-    assert data["data"]["retroactive_limit"] == 3
+    assert "retroactive_limit" not in data["data"]
 
 
 def test_manager_can_view_monthly_checkin_report(client, test_db):

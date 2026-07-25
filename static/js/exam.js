@@ -217,7 +217,7 @@ async function loadAttendanceCalendar(monthValue = '') {
                 </div>
             </div>
             <div class="exam-actions" style="flex-wrap: wrap; gap: 6px;">${days}</div>
-            <div class="exam-muted">本月合格 ${calendar.actual_days || 0} 天，未合格/未打卡 ${calendar.missing_days || 0} 天，补打卡 ${calendar.retroactive_used || 0}/${calendar.retroactive_limit || 3} 次。</div>
+            <div class="exam-muted">本月合格 ${calendar.actual_days || 0} 天，未合格/未打卡 ${calendar.missing_days || 0} 天，已补打卡 ${calendar.retroactive_used || 0} 次。</div>
         `;
     } catch (e) {
         target.innerHTML = `<span>${examEscape(e.message || '打卡日历加载失败')}</span>`;

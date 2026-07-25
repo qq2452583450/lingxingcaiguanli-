@@ -15,7 +15,6 @@ EXAM_PASSING_SCORE = 80.0
 DAILY_PRACTICE_QUESTION_COUNT = 30
 DAILY_PRACTICE_REQUIRED_ACCURACY = 0.8
 MONTHLY_ATTENDANCE_REQUIRED_DAYS = 22
-RETROACTIVE_CHECKIN_MONTHLY_LIMIT = 3
 DAILY_PRACTICE_PAPER_TITLES = {
     "第一套（新编实操版）",
     "第二套（新编案例版）",
@@ -862,7 +861,6 @@ def list_attendance_calendar(user_id: int, month: str | None = None) -> dict:
             "actual_days": summary["actual_days"],
             "missing_days": summary["missing_days"],
             "retroactive_used": int(retroactive_used or 0),
-            "retroactive_limit": RETROACTIVE_CHECKIN_MONTHLY_LIMIT,
             "required_accuracy": DAILY_PRACTICE_REQUIRED_ACCURACY,
             "required_question_count": DAILY_PRACTICE_QUESTION_COUNT,
         }
@@ -881,23 +879,10 @@ def submit_retroactive_checkin(user_id: int, target_date: str, answers: dict) ->
     today = date.today()
     if target_day >= today:
         raise ValueError("Retroactive check-in is only available for past dates")
-    month_key = target_day.strftime("%Y-%m")
     conn, should_close = _connection()
     try:
         if _has_passed_practice_on_date(conn, user_id, target_day):
             raise ValueError("This date already has a qualified check-in")
-        used = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM exam_retroactive_checkins
-            WHERE user_id = ?
-              AND month = ?
-              AND passed = 1
-            """,
-            (user_id, month_key),
-        ).fetchone()[0]
-        if int(used or 0) >= RETROACTIVE_CHECKIN_MONTHLY_LIMIT:
-            raise ValueError("Monthly retroactive check-in limit has been reached")
     finally:
         if should_close:
             conn.close()
@@ -908,7 +893,9 @@ def submit_retroactive_checkin(user_id: int, target_date: str, answers: dict) ->
         target_day=target_day,
         retroactive=True,
     )
-    result["attendance_calendar"] = list_attendance_calendar(user_id, month_key)
+    result["attendance_calendar"] = list_attendance_calendar(
+        user_id, target_day.strftime("%Y-%m")
+    )
     return result
 
 

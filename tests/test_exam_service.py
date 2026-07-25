@@ -464,25 +464,19 @@ def test_retroactive_checkin_marks_calendar_day_and_consumes_monthly_quota(test_
     assert day["retroactive_allowed"] is False
 
 
-def test_retroactive_checkin_limit_is_three_passed_days_per_month(test_db):
+def test_retroactive_checkin_allows_more_than_three_passed_days_per_month(test_db):
     paper, _, _ = load_exam(test_db)
     user_id = seed_user(test_db, "retro_limit", "\u8865\u5361\u9650\u989d", "\u6750\u6599\u5458")
     questions = get_random_practice_questions(limit=30, paper_id=paper["id"])
     answers = {str(question["id"]): question["correct_answer"] for question in questions}
 
-    for offset in (1, 2, 3):
-        submit_retroactive_checkin(
+    for offset in (1, 2, 3, 4):
+        result = submit_retroactive_checkin(
             user_id,
             (date.today() - timedelta(days=offset)).strftime("%Y-%m-%d"),
             answers,
         )
-
-    with pytest.raises(ValueError, match="limit"):
-        submit_retroactive_checkin(
-            user_id,
-            (date.today() - timedelta(days=4)).strftime("%Y-%m-%d"),
-            answers,
-        )
+        assert result["passed"] is True
 
 
 def test_monthly_checkin_report_compares_actual_and_missing_days(test_db):

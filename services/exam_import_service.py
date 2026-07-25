@@ -854,6 +854,30 @@ def import_exam_papers_from_question_bank_dir(path: Path | None = None) -> dict:
             conn.close()
 
 
+def replace_exam_paper_from_question_bank_docx(path: Path) -> dict:
+    """Replace one active question-bank paper while preserving every other paper."""
+    paper = parse_literature_question_bank_docx(Path(path))
+    conn, should_close = _connection()
+    cursor = conn.cursor()
+
+    try:
+        existing_rows = cursor.execute(
+            "SELECT id FROM exam_papers WHERE source_type = ? AND title = ?",
+            ("exam", paper["title"]),
+        ).fetchall()
+        existing_ids = [row["id"] for row in existing_rows]
+        _archive_existing_exam_papers(cursor, existing_ids)
+        inserted_id = insert_paper(cursor, paper, source_type="exam")
+        conn.commit()
+        return {"inserted": 1, "archived": len(existing_ids), "removed": 0, "paper_id": inserted_id}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        if should_close:
+            conn.close()
+
+
 def sync_question_bank_reference_answers(path: Path | None = None) -> dict:
     """Backfill missing question explanations from the desktop question bank."""
     source_dir = get_question_bank_dir(path)
