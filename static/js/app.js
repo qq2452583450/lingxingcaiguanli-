@@ -2733,7 +2733,7 @@ function renderBaseInventoryTable(records) {
             <td>¥${(Number(item.quantity || 0) * Number(item.unit_price || 0)).toFixed(2)}</td>
             <td>${escapeHtml(item.update_time || '-')}</td>
             <td>${escapeHtml(item.remark || '-')}</td>
-            <td><button class="btn btn-primary" style="padding:4px 10px;font-size:12px;" onclick="openBaseTransferModal(${item.id})">调拨到项目</button> <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="editBaseInventory(${item.id})">编辑</button> <button class="btn btn-danger" style="padding:4px 10px;font-size:12px;" onclick="deleteBaseInventory(${item.id})">删除</button></td>
+            <td><button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="openBaseAttachments('inventory', ${item.id}, '基地库存附件')">附件 (${Number(item.attachment_count || 0)})</button> <button class="btn btn-primary" style="padding:4px 10px;font-size:12px;" onclick="openBaseTransferModal(${item.id})">调拨到项目</button> <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="editBaseInventory(${item.id})">编辑</button> <button class="btn btn-danger" style="padding:4px 10px;font-size:12px;" onclick="deleteBaseInventory(${item.id})">删除</button></td>
         </tr>
     `).join('') || '<tr><td colspan="13" class="loading">暂无基地库存，请点击"基地材料新增"补录历史材料</td></tr>';
 }
@@ -2753,9 +2753,88 @@ function renderBaseTransferRecords(records) {
             <td>¥${Number(group.depreciatedTotal || 0).toFixed(2)}</td>
             <td>${escapeHtml(group.operator_name || '-')}</td>
             <td>${escapeHtml(group.transfer_time || '-')}</td>
-            <td><button class="btn btn-danger" style="padding:4px 10px;font-size:12px;" onclick="deleteBaseTransferBatch('${encodeURIComponent(group.key)}')">删除</button></td>
+            <td><button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="openBaseAttachments('transfer', '${encodeURIComponent(group.displayNo)}', '基地调拨附件')">附件 (${Number(group.attachmentCount || 0)})</button> <button class="btn btn-danger" style="padding:4px 10px;font-size:12px;" onclick="deleteBaseTransferBatch('${encodeURIComponent(group.key)}')">删除</button></td>
         </tr>
     `).join('') || '<tr><td colspan="11" class="loading">暂无基地调拨记录</td></tr>';
+}
+
+let baseAttachmentContext = null;
+
+function baseAttachmentUrl(type, key) {
+    const encodedKey = encodeURIComponent(String(key));
+    return type === 'inventory'
+        ? `/api/base-inventory/${encodedKey}/attachments`
+        : `/api/base-transfers/${encodedKey}/attachments`;
+}
+
+async function openBaseAttachments(type, key, title) {
+    baseAttachmentContext = { type, key: decodeURIComponent(String(key)) };
+    document.getElementById('baseAttachmentTitle').textContent = title;
+    document.getElementById('baseAttachmentFiles').value = '';
+    openModal('modal-base-attachments');
+    await loadBaseAttachments();
+}
+
+async function loadBaseAttachments() {
+    if (!baseAttachmentContext) return;
+    const list = document.getElementById('baseAttachmentList');
+    list.innerHTML = '<div class="loading">加载附件中...</div>';
+    try {
+        const res = await api(baseAttachmentUrl(baseAttachmentContext.type, baseAttachmentContext.key));
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+        const files = data.data || [];
+        document.getElementById('baseAttachmentHint').textContent = `已上传 ${files.length}/9 个附件`;
+        list.innerHTML = files.map(file => `
+            <div style="display:flex;justify-content:space-between;gap:10px;padding:8px;border-bottom:1px solid #e5e7eb;">
+                <a href="/api/base-attachments/${baseAttachmentContext.type}/${file.id}" target="_blank" rel="noopener">${escapeHtml(file.file_name)}</a>
+                <button class="btn btn-danger" style="padding:3px 8px;font-size:12px;" onclick="deleteBaseAttachment(${file.id})">删除</button>
+            </div>`).join('') || '<div style="color:#64748b;">暂无附件</div>';
+    } catch (e) {
+        list.innerHTML = `<div style="color:#dc2626;">${escapeHtml(e.message || '附件加载失败')}</div>`;
+    }
+}
+
+async function submitBaseAttachments(event) {
+    event.preventDefault();
+    if (!baseAttachmentContext) return;
+    const files = Array.from(document.getElementById('baseAttachmentFiles').files || []);
+    if (!files.length) {
+        showToast('请选择附件', 'warning');
+        return;
+    }
+    const hint = document.getElementById('baseAttachmentHint').textContent || '';
+    const existing = Number((hint.match(/已上传\s*(\d+)/) || [])[1] || 0);
+    if (existing + files.length > 9) {
+        showToast('每条记录最多上传9个附件', 'warning');
+        return;
+    }
+    const formData = new FormData();
+    files.forEach(file => formData.append('files', file));
+    try {
+        const res = await api(baseAttachmentUrl(baseAttachmentContext.type, baseAttachmentContext.key), { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+        document.getElementById('baseAttachmentFiles').value = '';
+        showToast('附件上传成功', 'success');
+        await loadBaseAttachments();
+        await loadBaseInventory();
+    } catch (e) {
+        showToast(e.message || '附件上传失败', 'error');
+    }
+}
+
+async function deleteBaseAttachment(attachmentId) {
+    if (!baseAttachmentContext || !confirm('确定删除此附件吗？')) return;
+    try {
+        const res = await api(`/api/base-attachments/${baseAttachmentContext.type}/${attachmentId}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message);
+        await loadBaseAttachments();
+        await loadBaseInventory();
+    } catch (e) {
+        showToast(e.message || '附件删除失败', 'error');
+    }
 }
 
 function getBaseTransferBatchKey(item) {
@@ -2783,6 +2862,7 @@ function groupBaseTransferRecords(records) {
                 transfer_time: item.transfer_time,
                 remark: item.remark,
                 rows: [],
+                attachmentCount: Number(item.attachment_count || 0),
                 totalQuantity: 0,
                 totalFreight: 0,
                 originalTotal: 0,

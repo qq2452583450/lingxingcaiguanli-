@@ -394,3 +394,60 @@ def test_batch_base_inventory_transfer_uses_one_batch_no(client, test_db):
     assert [row['freight'] for row in rows] == [10, 0]
     assert [row['total_amount'] for row in rows] == [140, 180]
     assert rows[0]['remark'] == rows[1]['remark'] == '同一批调拨'
+
+
+def test_all_logged_in_users_can_upload_up_to_nine_base_attachments(client, test_db, tmp_path, monkeypatch):
+    from io import BytesIO
+
+    monkeypatch.setenv('BASE_ATTACHMENT_UPLOAD_DIR', str(tmp_path))
+    test_db.execute("""
+        INSERT INTO base_inventory (material_name, unit_name, quantity, unit_price)
+        VALUES ('附件测试材料', '个', 1, 1)
+    """)
+    inventory_id = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    with client.session_transaction() as session:
+        session['user'] = {'id': 1, 'username': 'viewer', 'real_name': '普通用户', 'role_name': '普通用户'}
+
+    assert client.get('/api/base-inventory').get_json()['success'] is True
+    response = client.post(
+        f'/api/base-inventory/{inventory_id}/attachments',
+        data={'files': (BytesIO(b'one'), 'first.pdf')},
+        content_type='multipart/form-data',
+    )
+    assert response.get_json()['success'] is True
+    assert len(client.get(f'/api/base-inventory/{inventory_id}/attachments').get_json()['data']) == 1
+
+    response = client.post(
+        f'/api/base-inventory/{inventory_id}/attachments',
+        data={'files': [(BytesIO(b'x'), f'{index}.pdf') for index in range(9)]},
+        content_type='multipart/form-data',
+    )
+    assert response.get_json()['success'] is False
+    assert '最多上传9个' in response.get_json()['message']
+
+
+def test_all_logged_in_users_can_upload_transfer_attachments(client, test_db, tmp_path, monkeypatch):
+    from io import BytesIO
+
+    monkeypatch.setenv('BASE_ATTACHMENT_UPLOAD_DIR', str(tmp_path))
+    test_db.execute("INSERT INTO projects (project_code, project_name) VALUES ('XM-ATT', '附件项目')")
+    project_id = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    test_db.execute("INSERT INTO base_inventory (material_name, unit_name, quantity, unit_price) VALUES ('调拨附件材料', '个', 1, 1)")
+    inventory_id = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    test_db.execute("""
+        INSERT INTO base_inventory_transfers (
+            transfer_no, batch_no, base_inventory_id, project_id, material_name
+        ) VALUES ('JDB-TEST-001', 'JDB-TEST-001', ?, ?, '调拨附件材料')
+    """, (inventory_id, project_id))
+    with client.session_transaction() as session:
+        session['user'] = {'id': 1, 'username': 'viewer', 'real_name': '普通用户', 'role_name': '普通用户'}
+
+    response = client.post(
+        '/api/base-transfers/JDB-TEST-001/attachments',
+        data={'files': (BytesIO(b'proof'), 'transfer.jpg')},
+        content_type='multipart/form-data',
+    )
+    assert response.get_json()['success'] is True
+    files = client.get('/api/base-transfers/JDB-TEST-001/attachments').get_json()['data']
+    assert len(files) == 1
+    assert files[0]['file_name'] == 'transfer.jpg'

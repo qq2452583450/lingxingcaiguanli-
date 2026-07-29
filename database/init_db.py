@@ -351,6 +351,32 @@ def init_database():
     if 'batch_no' not in base_transfer_columns:
         cursor.execute("ALTER TABLE base_inventory_transfers ADD COLUMN batch_no TEXT")
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS base_inventory_attachments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            base_inventory_id INTEGER NOT NULL,
+            file_path TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            uploader_id INTEGER,
+            create_time TEXT,
+            FOREIGN KEY (base_inventory_id) REFERENCES base_inventory(id),
+            FOREIGN KEY (uploader_id) REFERENCES users(id)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS base_transfer_attachments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transfer_key TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            uploader_id INTEGER,
+            create_time TEXT,
+            FOREIGN KEY (uploader_id) REFERENCES users(id)
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_base_inventory_attachments_inventory ON base_inventory_attachments(base_inventory_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_base_transfer_attachments_key ON base_transfer_attachments(transfer_key)")
+
     # 项目表
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS projects (

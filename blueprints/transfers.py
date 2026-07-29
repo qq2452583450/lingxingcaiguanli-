@@ -3,8 +3,11 @@
 """
 from datetime import datetime
 from html import escape
+import os
+from pathlib import Path
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, jsonify, request, session, send_from_directory
+from werkzeug.utils import secure_filename
 
 from helpers import get_db
 from helpers.order_no_generator import generate_stock_transfer_no
@@ -12,6 +15,40 @@ from helpers.order_no_generator import generate_stock_transfer_no
 
 transfer_bp = Blueprint('transfer', __name__, url_prefix='/api')
 BASE_INVENTORY_REGIONS = ('成都', '云南', '广西')
+BASE_ATTACHMENT_MAX_FILES = 9
+BASE_ATTACHMENT_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.gif', '.pdf'}
+
+
+def _base_attachment_root():
+    return Path(os.environ.get('BASE_ATTACHMENT_UPLOAD_DIR') or r'C:\材料基地附件')
+
+
+def _ensure_attachment_tables(cursor):
+    cursor.execute("""CREATE TABLE IF NOT EXISTS base_inventory_attachments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, base_inventory_id INTEGER NOT NULL,
+        file_path TEXT NOT NULL, file_name TEXT NOT NULL, uploader_id INTEGER, create_time TEXT)""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS base_transfer_attachments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, transfer_key TEXT NOT NULL,
+        file_path TEXT NOT NULL, file_name TEXT NOT NULL, uploader_id INTEGER, create_time TEXT)""")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_base_inventory_attachments_inventory ON base_inventory_attachments(base_inventory_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_base_transfer_attachments_key ON base_transfer_attachments(transfer_key)")
+
+
+def _attachment_files():
+    return [item for item in request.files.getlist('files') if item and item.filename]
+
+
+def _save_attachment(file_storage, prefix):
+    extension = Path(file_storage.filename).suffix.lower()
+    if extension not in BASE_ATTACHMENT_EXTENSIONS:
+        raise ValueError('仅支持上传图片或PDF附件')
+    root = _base_attachment_root()
+    root.mkdir(parents=True, exist_ok=True)
+    filename = secure_filename(file_storage.filename) or f'attachment{extension}'
+    stamp = datetime.now().strftime('%Y%m%d%H%M%S%f')
+    target = root / f'{prefix}_{stamp}_{filename}'
+    file_storage.save(target)
+    return str(target), filename
 
 
 def _current_user():
@@ -91,11 +128,12 @@ def _generate_base_transfer_no(reserved=None):
 def get_base_inventory():
     """获取材料基地库存台账。"""
     user = _current_user()
-    if not _can_manage_stock(user):
+    if not user:
         return jsonify({'success': False, 'message': '无权限查看基地库存'})
 
     conn = get_db()
     cursor = conn.cursor()
+    _ensure_attachment_tables(cursor)
     cursor.execute("""
         SELECT bi.id, bi.material_id, bi.quantity, bi.unit_price, bi.update_time, bi.remark,
                COALESCE(NULLIF(bi.region, ''), '成都') AS region,
@@ -103,7 +141,9 @@ def get_base_inventory():
                COALESCE(m.material_name, bi.material_name) AS material_name,
                COALESCE(m.specification, bi.specification) AS specification,
                COALESCE(m.detail_spec, bi.detail_spec) AS detail_spec,
-               COALESCE(u.unit_name, bi.unit_name) AS unit_name
+               COALESCE(u.unit_name, bi.unit_name) AS unit_name,
+               (SELECT COUNT(*) FROM base_inventory_attachments bia
+                WHERE bia.base_inventory_id = bi.id) AS attachment_count
         FROM base_inventory bi
         LEFT JOIN materials m ON bi.material_id = m.id
         LEFT JOIN units u ON m.unit_id = u.id
@@ -314,19 +354,107 @@ def stock_in_base_inventory():
 def get_base_transfers():
     """获取基地到项目调拨记录。"""
     user = _current_user()
-    if not _can_manage_stock(user):
+    if not user:
         return jsonify({'success': False, 'message': '无权限查看基地调拨记录'})
 
     conn = get_db()
     cursor = conn.cursor()
+    _ensure_attachment_tables(cursor)
     cursor.execute("""
-        SELECT bit.*, p.project_name, operator.real_name AS operator_name
+        SELECT bit.*, p.project_name, operator.real_name AS operator_name,
+               (SELECT COUNT(*) FROM base_transfer_attachments bta
+                WHERE bta.transfer_key = COALESCE(bit.batch_no, bit.transfer_no)) AS attachment_count
         FROM base_inventory_transfers bit
         JOIN projects p ON bit.project_id = p.id
         LEFT JOIN users operator ON bit.operator_id = operator.id
         ORDER BY bit.transfer_time DESC, bit.id DESC
     """)
     return jsonify({'success': True, 'data': [dict(row) for row in cursor.fetchall()]})
+
+
+@transfer_bp.route('/base-inventory/<int:base_inventory_id>/attachments', methods=['GET', 'POST'])
+def base_inventory_attachments(base_inventory_id):
+    user = _current_user()
+    if not user:
+        return jsonify({'success': False, 'message': '请先登录'})
+    conn = get_db()
+    cursor = conn.cursor()
+    _ensure_attachment_tables(cursor)
+    if not cursor.execute('SELECT 1 FROM base_inventory WHERE id = ?', (base_inventory_id,)).fetchone():
+        return jsonify({'success': False, 'message': '基地库存记录不存在'})
+    if request.method == 'GET':
+        cursor.execute('SELECT id, file_name, create_time FROM base_inventory_attachments WHERE base_inventory_id = ? ORDER BY id DESC', (base_inventory_id,))
+        return jsonify({'success': True, 'data': [dict(row) for row in cursor.fetchall()]})
+    files = _attachment_files()
+    cursor.execute('SELECT COUNT(*) FROM base_inventory_attachments WHERE base_inventory_id = ?', (base_inventory_id,))
+    if len(files) + cursor.fetchone()[0] > BASE_ATTACHMENT_MAX_FILES:
+        return jsonify({'success': False, 'message': f'附件最多上传{BASE_ATTACHMENT_MAX_FILES}个'})
+    saved = []
+    try:
+        for file_storage in files:
+            file_path, file_name = _save_attachment(file_storage, f'base_inventory_{base_inventory_id}')
+            cursor.execute('INSERT INTO base_inventory_attachments (base_inventory_id, file_path, file_name, uploader_id, create_time) VALUES (?, ?, ?, ?, ?)', (base_inventory_id, file_path, file_name, user['id'], datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+            saved.append({'id': cursor.lastrowid, 'file_name': file_name})
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({'success': False, 'message': str(exc)})
+    return jsonify({'success': True, 'data': saved})
+
+
+@transfer_bp.route('/base-transfers/<string:transfer_key>/attachments', methods=['GET', 'POST'])
+def base_transfer_attachments(transfer_key):
+    user = _current_user()
+    if not user:
+        return jsonify({'success': False, 'message': '请先登录'})
+    conn = get_db()
+    cursor = conn.cursor()
+    _ensure_attachment_tables(cursor)
+    if not cursor.execute('SELECT 1 FROM base_inventory_transfers WHERE transfer_no = ? OR batch_no = ?', (transfer_key, transfer_key)).fetchone():
+        return jsonify({'success': False, 'message': '基地调拨记录不存在'})
+    if request.method == 'GET':
+        cursor.execute('SELECT id, file_name, create_time FROM base_transfer_attachments WHERE transfer_key = ? ORDER BY id DESC', (transfer_key,))
+        return jsonify({'success': True, 'data': [dict(row) for row in cursor.fetchall()]})
+    files = _attachment_files()
+    cursor.execute('SELECT COUNT(*) FROM base_transfer_attachments WHERE transfer_key = ?', (transfer_key,))
+    if len(files) + cursor.fetchone()[0] > BASE_ATTACHMENT_MAX_FILES:
+        return jsonify({'success': False, 'message': f'附件最多上传{BASE_ATTACHMENT_MAX_FILES}个'})
+    saved = []
+    try:
+        for file_storage in files:
+            file_path, file_name = _save_attachment(file_storage, f'base_transfer_{transfer_key}')
+            cursor.execute('INSERT INTO base_transfer_attachments (transfer_key, file_path, file_name, uploader_id, create_time) VALUES (?, ?, ?, ?, ?)', (transfer_key, file_path, file_name, user['id'], datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+            saved.append({'id': cursor.lastrowid, 'file_name': file_name})
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        return jsonify({'success': False, 'message': str(exc)})
+    return jsonify({'success': True, 'data': saved})
+
+
+@transfer_bp.route('/base-attachments/<string:attachment_type>/<int:attachment_id>', methods=['GET', 'DELETE'])
+def base_attachment_file(attachment_type, attachment_id):
+    user = _current_user()
+    if not user:
+        return jsonify({'success': False, 'message': '请先登录'})
+    table = {'inventory': 'base_inventory_attachments', 'transfer': 'base_transfer_attachments'}.get(attachment_type)
+    if not table:
+        return jsonify({'success': False, 'message': '附件类型无效'})
+    conn = get_db()
+    cursor = conn.cursor()
+    _ensure_attachment_tables(cursor)
+    row = cursor.execute(f'SELECT file_path, file_name FROM {table} WHERE id = ?', (attachment_id,)).fetchone()
+    if not row:
+        return jsonify({'success': False, 'message': '附件不存在'})
+    if request.method == 'DELETE':
+        cursor.execute(f'DELETE FROM {table} WHERE id = ?', (attachment_id,))
+        conn.commit()
+        try:
+            Path(row['file_path']).unlink(missing_ok=True)
+        except OSError:
+            pass
+        return jsonify({'success': True, 'message': '附件已删除'})
+    return send_from_directory(str(Path(row['file_path']).parent), Path(row['file_path']).name, as_attachment=False, download_name=row['file_name'])
 
 
 @transfer_bp.route('/base-inventory/<int:base_inventory_id>/transfer', methods=['POST'])
