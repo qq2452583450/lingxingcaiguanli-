@@ -5,7 +5,10 @@ from io import BytesIO
 import pytest
 from openpyxl import load_workbook
 
-from services.exam_import_service import import_exam_papers_from_docx
+from services.exam_import_service import (
+    import_exam_papers_from_docx,
+    sync_formal_exam_pool_papers,
+)
 from services.exam_service import get_paper_questions
 
 
@@ -76,6 +79,10 @@ def csrf_headers():
 
 def seed_exam():
     import_exam_papers_from_docx(source_docx())
+
+
+def seed_formal_exam_pool():
+    sync_formal_exam_pool_papers()
 
 
 def select_current_paper(test_db, paper_id=None):
@@ -269,6 +276,111 @@ def test_manager_can_change_current_paper_and_summary_reflects_it(client, test_d
     assert summary["success"] is True
     assert summary["data"]["current_paper"]["id"] == target_paper["id"]
     assert summary["data"]["current_paper"]["title"] == target_paper["title"]
+
+
+def test_manager_can_enable_three_paper_random_formal_exam_pool(client, test_db):
+    seed_exam()
+    seed_formal_exam_pool()
+    select_current_paper(test_db)
+    manager_id = seed_user(test_db, "formal_pool_manager", "正式考试管理员", ROLE_MANAGER)
+    login(client, manager_id, "formal_pool_manager", "正式考试管理员", ROLE_MANAGER)
+
+    response = client.post(
+        "/api/exam/admin/formal-exam-pool",
+        json={},
+        headers=csrf_headers(),
+    )
+    data = response.get_json()
+    summary = client.get("/api/exam/summary").get_json()
+
+    assert response.status_code == 200
+    assert data["success"] is True
+    assert data["data"] == {
+        "enabled": True,
+        "configured": True,
+        "paper_count": 3,
+        "duration_minutes": 60,
+        "total_score": 100,
+    }
+    assert summary["data"]["formal_exam_pool"]["enabled"] is True
+    assert summary["data"]["current_paper"] is None
+
+
+def test_formal_exam_pool_random_selection_ignores_client_paper_id(client, test_db):
+    seed_exam()
+    seed_formal_exam_pool()
+    legacy_paper_id = papers(test_db)[0]["id"]
+    manager_id = seed_user(test_db, "pool_admin", "题池管理员", ROLE_MANAGER)
+    login(client, manager_id, "pool_admin", "题池管理员", ROLE_MANAGER)
+    client.post("/api/exam/admin/formal-exam-pool", json={}, headers=csrf_headers())
+    clerk_id = seed_user(test_db, "pool_clerk", "随机考试材料员", ROLE_CLERK)
+    login(client, clerk_id, "pool_clerk", "随机考试材料员", ROLE_CLERK)
+
+    response = client.post(
+        "/api/exam/attempts",
+        json={"paper_id": legacy_paper_id},
+        headers=csrf_headers(),
+    )
+    data = response.get_json()
+    selected = test_db.execute(
+        """
+        SELECT p.id, p.source_type
+        FROM exam_attempts a
+        JOIN exam_papers p ON p.id = a.paper_id
+        WHERE a.id = ?
+        """,
+        (data["attempt_id"],),
+    ).fetchone()
+
+    assert response.status_code == 200
+    assert data["success"] is True
+    assert selected["id"] != legacy_paper_id
+    assert selected["source_type"] == "formal_exam_pool"
+    detail = client.get(f"/api/exam/attempts/{data['attempt_id']}").get_json()
+    assert len(detail["data"]["questions"]) == 35
+    for question in detail["data"]["questions"]:
+        assert_question_is_sanitized(question)
+
+
+def test_setting_fixed_paper_disables_random_formal_exam_pool(client, test_db):
+    seed_exam()
+    seed_formal_exam_pool()
+    manager_id = seed_user(test_db, "fixed_after_pool", "固定试卷管理员", ROLE_MANAGER)
+    login(client, manager_id, "fixed_after_pool", "固定试卷管理员", ROLE_MANAGER)
+    client.post("/api/exam/admin/formal-exam-pool", json={}, headers=csrf_headers())
+    legacy_paper_id = next(
+        row["id"]
+        for row in test_db.execute(
+            "SELECT id FROM exam_papers WHERE source_type = 'exam' ORDER BY id"
+        ).fetchall()
+    )
+
+    response = client.post(
+        "/api/exam/admin/current-paper",
+        json={"paper_id": legacy_paper_id},
+        headers=csrf_headers(),
+    )
+    summary = client.get("/api/exam/summary").get_json()
+
+    assert response.status_code == 200
+    assert summary["data"]["current_paper"]["id"] == legacy_paper_id
+    assert summary["data"]["formal_exam_pool"]["enabled"] is False
+    assert summary["data"]["formal_exam_pool"]["configured"] is False
+
+
+def test_material_clerk_cannot_enable_formal_exam_pool(client, test_db):
+    seed_formal_exam_pool()
+    clerk_id = seed_user(test_db, "pool_denied", "无权限材料员", ROLE_CLERK)
+    login(client, clerk_id, "pool_denied", "无权限材料员", ROLE_CLERK)
+
+    response = client.post(
+        "/api/exam/admin/formal-exam-pool",
+        json={},
+        headers=csrf_headers(),
+    )
+
+    assert response.status_code == 403
+    assert response.get_json()["success"] is False
 
 
 def test_manager_can_clear_current_paper_and_summary_hides_formal_exam(client, test_db):

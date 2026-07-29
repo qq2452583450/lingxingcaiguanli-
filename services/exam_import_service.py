@@ -23,7 +23,19 @@ QUESTION_SCORES = {
 EXAM_SOURCE_PATTERN = "*材料进场验收标准专项考试卷*.docx"
 DESKTOP_QUESTION_BANK_DIR = Path.home() / "Desktop" / "题库"
 BUNDLED_QUESTION_BANK_DIR = Path(__file__).resolve().parents[1] / "docs" / "exam_sources" / "question_bank"
-BUNDLED_FORMAL_ONLY_DIR = Path(__file__).resolve().parents[1] / "docs" / "exam_sources" / "formal_only"
+BUNDLED_FORMAL_EXAM_POOL_DIR = (
+    Path(__file__).resolve().parents[1] / "docs" / "exam_sources" / "formal_exam_pool"
+)
+FORMAL_EXAM_POOL_SOURCE_TYPE = "formal_exam_pool"
+FORMAL_EXAM_POOL_TITLES = (
+    "综合题库一（满分 100 分）",
+    "综合题库二（满分 100 分）",
+    "综合题库三（满分 100 分）",
+)
+RETIRED_FORMAL_EXAM_TITLES = {
+    "项目物资管理综合考核试卷（第一套）",
+    "项目物资管理综合考核试卷（第二套）",
+}
 
 
 PAPER_TITLE_RE = re.compile(r"^第[一二三四五]套(?!.*参考答案)")
@@ -32,8 +44,7 @@ NUMBERED_TEXT_RE = re.compile(r"^(\d+)\s*[.．、]\s*(.*)")
 OPTION_RE = re.compile(r"([A-E])[.．、](.*?)(?=\s+[A-E][.．、]|$)")
 BANK_OPTION_RE = re.compile(r"^([A-D])[\s.．、]+(.+)$")
 BANK_ANSWER_TOKEN_RE = re.compile(r"(\d+)\s*[.．、]?\s*([A-D]+|[√×])")
-COMPREHENSIVE_PAPER_TITLE_RE = re.compile(r"^项目物资管理综合考核试卷（第[一二]套）$")
-INLINE_TRUE_FALSE_RE = re.compile(r"^(\d+)\s*[.．、]\s*(.*?)\s*[（(]([√×])[）)]\s*$")
+FORMAL_EXAM_POOL_TITLE_RE = re.compile(r"^综合题库[一二三]（满分\s*100\s*分）$")
 
 
 def parse_exam_docx(path: Path) -> list[dict]:
@@ -230,24 +241,12 @@ def parse_literature_question_bank_docx(path: Path) -> dict:
     }
 
 
-def parse_comprehensive_exam_docx(path: Path) -> list[dict]:
-    """Parse the two 60-minute, 100-point comprehensive formal papers."""
+def parse_formal_exam_pool_docx(path: Path) -> dict:
+    """Parse one 60-minute, 100-point formal pool paper with inline answers."""
     lines = _read_lines(path)
-    paper_ranges = [
-        index for index, line in enumerate(lines) if COMPREHENSIVE_PAPER_TITLE_RE.match(line)
-    ]
-    if not paper_ranges:
-        raise ValueError(f"No comprehensive exam paper found in {path}")
-
-    papers = []
-    for index, start in enumerate(paper_ranges):
-        end = paper_ranges[index + 1] if index + 1 < len(paper_ranges) else len(lines)
-        papers.append(_parse_comprehensive_paper(lines[start:end]))
-    return papers
-
-
-def _parse_comprehensive_paper(lines: list[str]) -> dict:
-    title = lines[0]
+    title = next((line for line in lines if FORMAL_EXAM_POOL_TITLE_RE.match(line)), "")
+    if not title:
+        raise ValueError(f"No formal exam pool paper found in {path}")
     single_start = _find_index(
         lines, lambda line: line.startswith("一、单项选择题"), f"{title} missing single-choice section."
     )
@@ -258,14 +257,14 @@ def _parse_comprehensive_paper(lines: list[str]) -> dict:
         lines, lambda line: line.startswith("三、判断题"), f"{title} missing true/false section."
     )
 
-    single_questions = _parse_comprehensive_choice_questions(
-        lines[single_start + 1 : multiple_start], "single_choice", 2
+    single_questions = _parse_inline_answer_questions(
+        lines[single_start + 1 : multiple_start], "single_choice", 3
     )
-    multiple_questions = _parse_comprehensive_choice_questions(
+    multiple_questions = _parse_inline_answer_questions(
         lines[multiple_start + 1 : true_false_start], "multiple_choice", 3
     )
-    true_false_questions = _parse_comprehensive_true_false_questions(
-        lines[true_false_start + 1 :]
+    true_false_questions = _parse_inline_answer_questions(
+        lines[true_false_start + 1 :], "true_false", 2
     )
 
     questions = []
@@ -296,79 +295,43 @@ def _parse_comprehensive_paper(lines: list[str]) -> dict:
     }
 
 
-def _parse_comprehensive_choice_questions(
+def _parse_inline_answer_questions(
     lines: list[str], question_type: str, score: int
 ) -> list[dict]:
     questions: list[dict] = []
-    current: dict | None = None
-
-    def flush() -> None:
-        nonlocal current
-        if current is None:
-            return
-        type_order = len(questions) + 1
-        if len(current["options"]) != 4 or not current["correct_answer"]:
-            raise ValueError(
-                f"{question_type} question {type_order} is missing options or answer."
-            )
-        current["type_order"] = type_order
-        current["score"] = score
-        questions.append(current)
-        current = None
-
+    stem = ""
+    options: list[dict] = []
     for line in lines:
-        question_match = NUMBERED_TEXT_RE.match(line)
-        if question_match:
-            flush()
-            current = _question(
-                question_type=question_type,
-                type_order=0,
-                stem=question_match.group(2).strip(),
-                options=[],
-                correct_answer="",
-            )
-            continue
-
-        options = _parse_options(line)
-        if options and current is not None:
-            current["options"].extend(options)
-            continue
-
         answer = _prefixed_text(line, "答案")
-        if answer is not None and current is not None:
-            current["correct_answer"] = answer.replace(" ", "").upper()
-            continue
-
-        explanation = _prefixed_text(line, "解析")
-        if explanation is not None and current is not None:
-            current["reference_answer"] = explanation
-            current["keywords"] = _keywords(explanation)
-
-    flush()
-    return questions
-
-
-def _parse_comprehensive_true_false_questions(lines: list[str]) -> list[dict]:
-    questions: list[dict] = []
-    for line in lines:
-        match = INLINE_TRUE_FALSE_RE.match(line)
-        if match:
+        if answer is not None:
+            if not stem:
+                continue
+            correct_answer = answer.replace(" ", "").upper()
+            expected_options = 4 if question_type == "single_choice" else 5
+            if question_type != "true_false" and len(options) != expected_options:
+                raise ValueError(
+                    f"{question_type} question {len(questions) + 1} expected "
+                    f"{expected_options} options, found {len(options)}."
+                )
             questions.append(
                 _question(
-                    question_type="true_false",
+                    question_type=question_type,
                     type_order=len(questions) + 1,
-                    stem=match.group(2).strip(),
-                    options=[],
-                    correct_answer=match.group(3),
+                    stem=stem,
+                    options=options,
+                    correct_answer=correct_answer,
                 )
             )
-            questions[-1]["score"] = 6
+            questions[-1]["score"] = score
+            stem = ""
+            options = []
             continue
 
-        explanation = _prefixed_text(line, "解析")
-        if explanation is not None and questions:
-            questions[-1]["reference_answer"] = explanation
-            questions[-1]["keywords"] = _keywords(explanation)
+        parsed_options = _parse_options(line)
+        if parsed_options and question_type != "true_false":
+            options = parsed_options
+        elif not stem:
+            stem = line.strip()
     return questions
 
 
@@ -999,42 +962,81 @@ def import_exam_papers_from_question_bank_dir(path: Path | None = None) -> dict:
             conn.close()
 
 
-def sync_formal_only_exam_papers(path: Path | None = None) -> dict:
-    """Add the bundled comprehensive papers without replacing the practice bank."""
-    source_dir = Path(path) if path is not None else BUNDLED_FORMAL_ONLY_DIR
+def sync_formal_exam_pool_papers(path: Path | None = None) -> dict:
+    """Replace the managed formal-only papers while preserving historical attempts."""
+    source_dir = Path(path) if path is not None else BUNDLED_FORMAL_EXAM_POOL_DIR
     docx_files = sorted(source_dir.glob("*.docx"))
     if not docx_files:
-        return {"inserted": 0, "archived": 0, "unchanged": 0, "source_files": 0}
+        return {
+            "inserted": 0,
+            "archived": 0,
+            "retired": 0,
+            "unchanged": 0,
+            "source_files": 0,
+        }
 
-    papers_by_title: dict[str, dict] = {}
+    papers_by_title = {}
     for docx_path in docx_files:
         try:
-            for paper in parse_comprehensive_exam_docx(docx_path):
-                papers_by_title.setdefault(paper["title"], paper)
+            paper = parse_formal_exam_pool_docx(docx_path)
+            papers_by_title.setdefault(paper["title"], paper)
         except BadZipFile:
             continue
+    if set(papers_by_title) != set(FORMAL_EXAM_POOL_TITLES):
+        raise ValueError(
+            f"Formal exam pool titles mismatch: {sorted(papers_by_title)}."
+        )
 
     conn, should_close = _connection()
     cursor = conn.cursor()
     inserted = 0
     archived = 0
+    retired = 0
     unchanged = 0
     try:
-        for paper in papers_by_title.values():
+        retired_placeholders = ",".join("?" for _ in RETIRED_FORMAL_EXAM_TITLES)
+        retired_rows = cursor.execute(
+            f"""
+            SELECT id
+            FROM exam_papers
+            WHERE source_type != 'archived_exam'
+              AND title IN ({retired_placeholders})
+            """,
+            sorted(RETIRED_FORMAL_EXAM_TITLES),
+        ).fetchall()
+        retired_ids = [row["id"] for row in retired_rows]
+        if retired_ids:
+            current_row = cursor.execute(
+                "SELECT value FROM exam_settings WHERE key = ?",
+                ("current_exam_paper_id",),
+            ).fetchone()
+            if current_row:
+                try:
+                    current_paper_id = int(current_row["value"])
+                except (TypeError, ValueError):
+                    current_paper_id = None
+                if current_paper_id in retired_ids:
+                    _clear_current_exam_setting(cursor)
+            _archive_existing_exam_papers(cursor, retired_ids)
+            retired = len(retired_ids)
+
+        for title in FORMAL_EXAM_POOL_TITLES:
+            paper = papers_by_title[title]
             existing_rows = cursor.execute(
                 """
-                SELECT p.id, p.duration_minutes, p.total_score,
+                SELECT p.id, p.source_type, p.duration_minutes, p.total_score,
                        COUNT(q.id) AS question_count,
                        COALESCE(SUM(q.score), 0) AS question_score
                 FROM exam_papers p
                 LEFT JOIN exam_questions q ON q.paper_id = p.id
-                WHERE p.source_type = 'exam' AND p.title = ?
+                WHERE p.source_type != 'archived_exam' AND p.title = ?
                 GROUP BY p.id
                 """,
                 (paper["title"],),
             ).fetchall()
             if any(
-                row["duration_minutes"] == 60
+                row["source_type"] == FORMAL_EXAM_POOL_SOURCE_TYPE
+                and row["duration_minutes"] == 60
                 and row["total_score"] == 100
                 and row["question_count"] == 35
                 and row["question_score"] == 100
@@ -1046,13 +1048,14 @@ def sync_formal_only_exam_papers(path: Path | None = None) -> dict:
             existing_ids = [row["id"] for row in existing_rows]
             _archive_existing_exam_papers(cursor, existing_ids)
             archived += len(existing_ids)
-            insert_paper(cursor, paper, source_type="exam")
+            insert_paper(cursor, paper, source_type=FORMAL_EXAM_POOL_SOURCE_TYPE)
             inserted += 1
 
         conn.commit()
         return {
             "inserted": inserted,
             "archived": archived,
+            "retired": retired,
             "unchanged": unchanged,
             "source_files": len(docx_files),
         }
@@ -1233,12 +1236,16 @@ def ensure_exam_sources_imported() -> dict:
         import_exam_papers_from_docx(source_path)
         created = True
 
-    formal_only_result = sync_formal_only_exam_papers()
-    created = created or bool(formal_only_result["inserted"])
+    formal_pool_result = sync_formal_exam_pool_papers()
+    created = created or bool(formal_pool_result["inserted"])
     conn, should_close = _connection()
     try:
         paper_count = conn.execute(
-            "SELECT COUNT(*) FROM exam_papers WHERE source_type = 'exam'"
+            """
+            SELECT COUNT(*)
+            FROM exam_papers
+            WHERE source_type IN ('exam', 'formal_exam_pool')
+            """
         ).fetchone()[0]
     finally:
         if should_close:

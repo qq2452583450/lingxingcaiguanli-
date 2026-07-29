@@ -15,6 +15,15 @@ def test_exam_taker_tabs_are_role_gated():
     assert "canTakeExam(currentUser)" in script
 
 
+def test_formal_exam_pool_admin_tab_is_manager_only():
+    index = (ROOT / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "static" / "js" / "exam.js").read_text(encoding="utf-8")
+
+    assert 'class="exam-tab exam-manager-only" data-exam-tab="formalExam"' in index
+    assert "loadFormalExamAdmin()" in script
+    assert "formal_exam_pool" in script
+
+
 def test_exam_bank_management_can_clear_current_paper():
     script = (ROOT / "static" / "js" / "exam.js").read_text(encoding="utf-8")
 

@@ -101,7 +101,7 @@ async function loadExamCenter() {
         if (!canTakeExam(currentUser) && ['practice', 'exam', 'retakes', 'results'].includes(examCurrentTab)) {
             examCurrentTab = 'papers';
         }
-        if (!canManageExam(currentUser) && ['papers', 'reviews', 'checkins', 'adminResults'].includes(examCurrentTab)) {
+        if (!canManageExam(currentUser) && ['formalExam', 'papers', 'reviews', 'checkins', 'adminResults'].includes(examCurrentTab)) {
             examCurrentTab = 'practice';
         }
         await showExamTab(examCurrentTab);
@@ -114,7 +114,7 @@ async function showExamTab(tab) {
     if (!canTakeExam(currentUser) && ['practice', 'exam', 'retakes', 'results'].includes(tab)) {
         tab = 'papers';
     }
-    if (!canManageExam(currentUser) && ['papers', 'reviews', 'checkins', 'adminResults'].includes(tab)) {
+    if (!canManageExam(currentUser) && ['formalExam', 'papers', 'reviews', 'checkins', 'adminResults'].includes(tab)) {
         tab = 'practice';
     }
     examCurrentTab = tab;
@@ -130,6 +130,8 @@ async function showExamTab(tab) {
         await loadRetakeEligibilities();
     } else if (tab === 'results') {
         await loadMyExamResults();
+    } else if (tab === 'formalExam') {
+        await loadFormalExamAdmin();
     } else if (tab === 'papers') {
         await loadExamPapersAdmin();
     } else if (tab === 'reviews') {
@@ -437,11 +439,13 @@ function renderWrongPracticeResult(result) {
 
 function renderExamStart() {
     const paper = examSummary?.current_paper;
+    const pool = examSummary?.formal_exam_pool || {};
     const content = examContent();
     if (!content) return;
     const canStart = canTakeExam(currentUser);
     const managerOnly = canManageExam(currentUser) && !canStart;
-    const startButton = paper && canStart
+    const examAvailable = Boolean(pool.enabled || paper);
+    const startButton = examAvailable && canStart
         ? '<button class="btn btn-primary" type="button" onclick="startCurrentExam()"><i data-lucide="play"></i>开始考试</button>'
         : '';
     const managerOnlyNotice = managerOnly
@@ -452,7 +456,11 @@ function renderExamStart() {
             <div class="exam-toolbar">
                 <div>
                     <h2>正式考试</h2>
-                    <p>${paper ? `当前试卷：${examEscape(paper.title)}，时长 ${examEscape(paper.duration_minutes || '-')} 分钟，总分 ${examScore(paper.total_score)}` : '管理员尚未设置当前试卷。'}</p>
+                    <p>${pool.enabled
+                        ? `正式考试已开启。开始考试时，系统会从 ${examEscape(pool.paper_count)} 套试卷中随机抽取 1 套；每套 ${examEscape(pool.duration_minutes || '-')} 分钟、${examScore(pool.total_score)} 分。`
+                        : (paper
+                            ? `当前试卷：${examEscape(paper.title)}，时长 ${examEscape(paper.duration_minutes || '-')} 分钟，总分 ${examScore(paper.total_score)}`
+                            : '管理员尚未开启正式考试。')}</p>
                 </div>
                 ${startButton}
             </div>
@@ -473,7 +481,7 @@ async function startCurrentExam() {
     try {
         const started = await examJson('/api/exam/attempts', {
             method: 'POST',
-            body: JSON.stringify({ paper_id: examSummary?.current_paper?.id })
+            body: JSON.stringify({})
         });
         const attemptId = started.attempt_id || started.data?.attempt_id || started.data?.id;
         const detail = await examJson(`/api/exam/attempts/${attemptId}`);
@@ -646,6 +654,88 @@ async function startRetakeEligibility(eligibilityId) {
     }
 }
 
+async function loadFormalExamAdmin() {
+    if (!canManageExam(currentUser)) return;
+    examLoading('正在加载正式考试设置...');
+    try {
+        const [papers, summary] = await Promise.all([
+            examJson('/api/exam/admin/papers'),
+            examJson('/api/exam/summary')
+        ]);
+        examSummary = summary.data || examSummary;
+        const pool = examSummary?.formal_exam_pool || {};
+        const poolPapers = (papers.data || []).filter(paper => paper.source_type === 'formal_exam_pool');
+        const ready = poolPapers.length === 3;
+        const rows = poolPapers.map((paper, index) => `
+            <tr>
+                <td>${index + 1}</td>
+                <td>${examEscape(paper.title)}</td>
+                <td>${examEscape(paper.duration_minutes || '-')} 分钟</td>
+                <td>${examScore(paper.total_score)} 分</td>
+                <td><span class="badge badge-ok">仅正式考试</span></td>
+            </tr>`).join('');
+        const statusText = pool.enabled
+            ? '已启用：材料员每次开始正式考试时，由服务器随机抽取其中一套。'
+            : (ready ? '题池已就绪，尚未启用。' : `题池不完整：当前 ${poolPapers.length}/3 套。`);
+        const action = pool.enabled
+            ? '<button class="btn btn-warning" type="button" onclick="disableFormalExamPool()"><i data-lucide="square"></i>停用正式考试</button>'
+            : `<button class="btn btn-primary" type="button" onclick="enableFormalExamPool()" ${ready ? '' : 'disabled'}><i data-lucide="play"></i>启用三套随机正式考试</button>`;
+        examContent().innerHTML = `
+            <div class="exam-panel">
+                <div class="exam-toolbar">
+                    <div>
+                        <h2>正式考试</h2>
+                        <p>${statusText}</p>
+                    </div>
+                    <div class="exam-actions">
+                        ${action}
+                        <button class="btn btn-secondary" type="button" onclick="loadFormalExamAdmin()"><i data-lucide="refresh-cw"></i>刷新</button>
+                    </div>
+                </div>
+                <div class="exam-summary-card">
+                    <strong>考试规则：</strong>三套试卷随机抽取一套，每套 60 分钟、100 分；不进入平时随机练习。
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead><tr><th>序号</th><th>试卷</th><th>时长</th><th>总分</th><th>用途</th></tr></thead>
+                        <tbody>${rows || '<tr><td colspan="5" class="empty-message">未找到正式考试题池</td></tr>'}</tbody>
+                    </table>
+                </div>
+            </div>`;
+        examRefreshIcons();
+    } catch (e) {
+        examError(e.message || '正式考试设置加载失败');
+    }
+}
+
+async function enableFormalExamPool() {
+    if (!confirm('启用后，材料员开始正式考试时将随机抽取三套试卷中的一套。确认启用？')) return;
+    try {
+        await examJson('/api/exam/admin/formal-exam-pool', {
+            method: 'POST',
+            body: JSON.stringify({})
+        });
+        examNotify('三套随机正式考试已启用', 'success');
+        await loadFormalExamAdmin();
+    } catch (e) {
+        examNotify(e.message || '正式考试启用失败', 'error');
+    }
+}
+
+async function disableFormalExamPool() {
+    if (!confirm('停用后，材料员将不能开始新的正式考试。确认停用？')) return;
+    try {
+        await examJson('/api/exam/admin/formal-exam-pool', {
+            method: 'DELETE',
+            body: JSON.stringify({})
+        });
+        examNotify('随机正式考试已停用', 'success');
+        await loadFormalExamAdmin();
+    } catch (e) {
+        examNotify(e.message || '正式考试停用失败', 'error');
+    }
+}
+
 async function loadExamPapersAdmin() {
     if (!canManageExam(currentUser)) return;
     examLoading('正在加载题库...');
@@ -658,9 +748,12 @@ async function loadExamPapersAdmin() {
         const currentId = examSummary?.current_paper?.id;
         const rows = (papers.data || []).map(paper => {
             const isCurrent = Number(paper.id) === Number(currentId);
-            const action = isCurrent
-                ? '<button class="btn btn-warning btn-sm" type="button" onclick="clearCurrentExamPaper()">取消当前</button>'
-                : `<button class="btn btn-secondary btn-sm" type="button" onclick="setCurrentExamPaper(${paper.id})">设为当前</button>`;
+            const isPoolPaper = paper.source_type === 'formal_exam_pool';
+            const action = isPoolPaper
+                ? '<span class="badge badge-ok">随机题池</span>'
+                : (isCurrent
+                    ? '<button class="btn btn-warning btn-sm" type="button" onclick="clearCurrentExamPaper()">取消当前</button>'
+                    : `<button class="btn btn-secondary btn-sm" type="button" onclick="setCurrentExamPaper(${paper.id})">设为当前</button>`);
             return `
             <tr>
                 <td>${examEscape(paper.title)}</td>

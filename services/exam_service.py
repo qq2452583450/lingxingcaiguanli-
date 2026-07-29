@@ -15,6 +15,9 @@ EXAM_PASSING_SCORE = 80.0
 DAILY_PRACTICE_QUESTION_COUNT = 30
 DAILY_PRACTICE_REQUIRED_ACCURACY = 0.8
 MONTHLY_ATTENDANCE_REQUIRED_DAYS = 22
+FORMAL_EXAM_POOL_SETTING_KEY = "formal_exam_pool_enabled"
+FORMAL_EXAM_POOL_SOURCE_TYPE = "formal_exam_pool"
+FORMAL_EXAM_POOL_REQUIRED_COUNT = 3
 DAILY_PRACTICE_PAPER_TITLES = {
     "第一套（新编实操版）",
     "第二套（新编案例版）",
@@ -230,6 +233,58 @@ def get_current_exam_paper() -> dict | None:
               AND p.source_type = 'exam'
             """,
             ("current_exam_paper_id",),
+        ).fetchone()
+        return _dict_or_none(row)
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_formal_exam_pool_status() -> dict:
+    conn, should_close = _connection()
+    try:
+        setting = conn.execute(
+            "SELECT value FROM exam_settings WHERE key = ?",
+            (FORMAL_EXAM_POOL_SETTING_KEY,),
+        ).fetchone()
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS paper_count,
+                   MIN(duration_minutes) AS duration_minutes,
+                   MIN(total_score) AS total_score
+            FROM exam_papers
+            WHERE source_type = ?
+            """,
+            (FORMAL_EXAM_POOL_SOURCE_TYPE,),
+        ).fetchone()
+        paper_count = int(row["paper_count"] or 0)
+        configured = bool(setting and setting["value"] == "1")
+        return {
+            "enabled": configured and paper_count == FORMAL_EXAM_POOL_REQUIRED_COUNT,
+            "configured": configured,
+            "paper_count": paper_count,
+            "duration_minutes": row["duration_minutes"],
+            "total_score": row["total_score"],
+        }
+    finally:
+        if should_close:
+            conn.close()
+
+
+def get_random_formal_exam_paper() -> dict | None:
+    if not get_formal_exam_pool_status()["enabled"]:
+        return None
+    conn, should_close = _connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT id, title, duration_minutes, total_score, source_type, create_time
+            FROM exam_papers
+            WHERE source_type = ?
+            ORDER BY RANDOM()
+            LIMIT 1
+            """,
+            (FORMAL_EXAM_POOL_SOURCE_TYPE,),
         ).fetchone()
         return _dict_or_none(row)
     finally:
@@ -1566,7 +1621,7 @@ def refresh_retake_eligibilities(conn=None) -> None:
             JOIN exam_papers p ON p.id = att.paper_id
             WHERE att.status = 'completed'
               AND COALESCE(att.final_score, 0) < ?
-              AND p.source_type = 'exam'
+              AND p.source_type IN ('exam', 'formal_exam_pool')
               AND NOT EXISTS (
                   SELECT 1
                   FROM exam_attempts passed

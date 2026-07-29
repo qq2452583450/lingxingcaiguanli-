@@ -19,8 +19,10 @@ from services.exam_service import (
     get_current_exam_paper,
     get_daily_practice_status,
     get_exam_paper,
+    get_formal_exam_pool_status,
     get_paper_questions,
     get_practice_draft,
+    get_random_formal_exam_paper,
     get_wrong_practice_questions_for_retry,
     list_daily_checkins,
     get_random_practice_questions,
@@ -39,6 +41,8 @@ from services.exam_service import (
     start_retake_attempt,
     submit_retroactive_checkin,
     submit_attempt,
+    FORMAL_EXAM_POOL_REQUIRED_COUNT,
+    FORMAL_EXAM_POOL_SETTING_KEY,
 )
 
 
@@ -309,6 +313,7 @@ def summary():
                 "can_take": can_take_exam(user),
                 "can_manage": can_manage_exam(user),
                 "current_paper": get_current_exam_paper(),
+                "formal_exam_pool": get_formal_exam_pool_status(),
                 "paper_count": len(papers),
             },
         }
@@ -511,20 +516,27 @@ def create_attempt():
     if not can_take_exam(user):
         return _json_error("Permission denied", 403)
 
-    current_paper = get_current_exam_paper()
-    if not current_paper:
-        return _json_error("No current exam paper is set")
+    pool_status = get_formal_exam_pool_status()
+    if pool_status["enabled"]:
+        selected_paper = get_random_formal_exam_paper()
+        if not selected_paper:
+            return _json_error("Formal exam pool is not ready")
+        paper_id = selected_paper["id"]
+    else:
+        current_paper = get_current_exam_paper()
+        if not current_paper:
+            return _json_error("No current exam paper is set")
 
-    data = request.get_json(silent=True) or {}
-    paper_id = data.get("paper_id")
-    if paper_id is None:
-        paper_id = current_paper["id"]
-    try:
-        paper_id = int(paper_id)
-    except (TypeError, ValueError):
-        return _json_error("Invalid paper_id")
-    if paper_id != current_paper["id"]:
-        return _json_error("Only the current exam paper can be attempted")
+        data = request.get_json(silent=True) or {}
+        paper_id = data.get("paper_id")
+        if paper_id is None:
+            paper_id = current_paper["id"]
+        try:
+            paper_id = int(paper_id)
+        except (TypeError, ValueError):
+            return _json_error("Invalid paper_id")
+        if paper_id != current_paper["id"]:
+            return _json_error("Only the current exam paper can be attempted")
     if not _paper_exists(paper_id):
         return _json_error("Paper not found", 404)
 
@@ -668,6 +680,10 @@ def set_current_paper():
         "INSERT OR REPLACE INTO exam_settings (key, value) VALUES (?, ?)",
         ("current_exam_paper_id", str(paper_id)),
     )
+    conn.execute(
+        "DELETE FROM exam_settings WHERE key = ?",
+        (FORMAL_EXAM_POOL_SETTING_KEY,),
+    )
     conn.commit()
     return jsonify({"success": True, "data": get_current_exam_paper()})
 
@@ -684,6 +700,46 @@ def clear_current_paper():
     except sqlite3.OperationalError as exc:
         return _json_error(f"取消当前试卷失败：{exc}", 500)
     return jsonify({"success": True, "data": None})
+
+
+@exam_bp.route("/admin/formal-exam-pool", methods=["POST"])
+def enable_formal_exam_pool():
+    _, denied = _require_exam_manager()
+    if denied:
+        return denied
+
+    status = get_formal_exam_pool_status()
+    if status["paper_count"] != FORMAL_EXAM_POOL_REQUIRED_COUNT:
+        return _json_error("正式考试题池必须包含三套完整试卷")
+
+    conn = get_db()
+    _ensure_exam_settings_table(conn)
+    conn.execute(
+        "INSERT OR REPLACE INTO exam_settings (key, value) VALUES (?, ?)",
+        (FORMAL_EXAM_POOL_SETTING_KEY, "1"),
+    )
+    conn.execute(
+        "DELETE FROM exam_settings WHERE key = ?",
+        ("current_exam_paper_id",),
+    )
+    conn.commit()
+    return jsonify({"success": True, "data": get_formal_exam_pool_status()})
+
+
+@exam_bp.route("/admin/formal-exam-pool", methods=["DELETE"])
+def disable_formal_exam_pool():
+    _, denied = _require_exam_manager()
+    if denied:
+        return denied
+
+    conn = get_db()
+    _ensure_exam_settings_table(conn)
+    conn.execute(
+        "DELETE FROM exam_settings WHERE key = ?",
+        (FORMAL_EXAM_POOL_SETTING_KEY,),
+    )
+    conn.commit()
+    return jsonify({"success": True, "data": get_formal_exam_pool_status()})
 
 
 @exam_bp.route("/admin/results", methods=["GET"])

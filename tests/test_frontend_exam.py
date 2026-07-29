@@ -48,6 +48,7 @@ def test_exam_tabs_have_required_structure():
     for tab_label in ("随机练习", "正式考试", "我的成绩", "题库管理", "阅卷", "成绩查询", "打卡记录"):
         assert tab_label in html
     assert 'data-exam-tab="checkins"' in html
+    assert 'class="exam-tab exam-manager-only" data-exam-tab="formalExam"' in html
 
 
 def test_exam_js_exposes_expected_entrypoints():
@@ -63,6 +64,9 @@ def test_exam_js_exposes_expected_entrypoints():
         "submitExamAttempt",
         "loadMyExamResults",
         "loadExamPapersAdmin",
+        "loadFormalExamAdmin",
+        "enableFormalExamPool",
+        "disableFormalExamPool",
         "setCurrentExamPaper",
         "loadPendingReviews",
         "submitReviewScore",
@@ -152,3 +156,13 @@ def test_exam_admin_checkin_records_and_result_delete_frontend():
     assert "/api/exam/admin/attempts/" in exam_js
     assert "method: 'DELETE'" in exam_js
     assert "删除" in exam_js
+
+
+def test_exam_admin_can_control_random_formal_exam_pool():
+    exam_js = read_text("static/js/exam.js")
+
+    assert "/api/exam/admin/formal-exam-pool" in exam_js
+    assert "启用三套随机正式考试" in exam_js
+    assert "不进入平时随机练习" in exam_js
+    assert "paper.source_type === 'formal_exam_pool'" in exam_js
+    assert "body: JSON.stringify({})" in exam_js

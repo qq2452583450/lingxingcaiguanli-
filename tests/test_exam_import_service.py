@@ -4,16 +4,17 @@ import importlib
 import pytest
 
 from services.exam_import_service import (
-    BUNDLED_FORMAL_ONLY_DIR,
+    BUNDLED_FORMAL_EXAM_POOL_DIR,
     DESKTOP_QUESTION_BANK_DIR,
+    FORMAL_EXAM_POOL_SOURCE_TYPE,
     ensure_exam_sources_imported,
     get_question_bank_dir,
     import_exam_papers_from_question_bank_dir,
-    parse_comprehensive_exam_docx,
     parse_exam_docx,
+    parse_formal_exam_pool_docx,
     parse_literature_question_bank_docx,
     replace_exam_paper_from_question_bank_docx,
-    sync_formal_only_exam_papers,
+    sync_formal_exam_pool_papers,
     sync_question_bank_reference_answers,
     import_exam_papers_from_docx,
 )
@@ -42,20 +43,23 @@ def test_parse_receiving_exam_docx_has_five_complete_papers():
     assert all(len(paper["questions"]) == 38 for paper in papers)
 
 
-def test_parse_comprehensive_exam_docx_has_two_unique_60_minute_100_point_papers():
+def test_parse_formal_exam_pool_has_three_unique_60_minute_100_point_papers():
     papers_by_title = {}
-    for source in sorted(BUNDLED_FORMAL_ONLY_DIR.glob("*.docx")):
-        for paper in parse_comprehensive_exam_docx(source):
-            papers_by_title.setdefault(paper["title"], paper)
+    for source in sorted(BUNDLED_FORMAL_EXAM_POOL_DIR.glob("*.docx")):
+        paper = parse_formal_exam_pool_docx(source)
+        papers_by_title.setdefault(paper["title"], paper)
 
-    assert list(papers_by_title) == [
-        "项目物资管理综合考核试卷（第一套）",
-        "项目物资管理综合考核试卷（第二套）",
-    ]
+    assert set(papers_by_title) == {
+        "综合题库一（满分 100 分）",
+        "综合题库二（满分 100 分）",
+        "综合题库三（满分 100 分）",
+    }
+    all_stems = []
     for paper in papers_by_title.values():
         assert paper["duration_minutes"] == 60
         assert paper["total_score"] == 100
         assert len(paper["questions"]) == 35
+        all_stems.extend(question["stem"] for question in paper["questions"])
         assert sum(question["score"] for question in paper["questions"]) == 100
         assert {
             question_type: sum(
@@ -64,24 +68,31 @@ def test_parse_comprehensive_exam_docx_has_two_unique_60_minute_100_point_papers
             )
             for question_type in ("single_choice", "multiple_choice", "true_false")
         } == {"single_choice": 20, "multiple_choice": 10, "true_false": 5}
+    assert len(all_stems) == len(set(all_stems))
 
 
-def test_sync_formal_only_papers_is_idempotent_and_excludes_them_from_practice(test_db):
-    first = sync_formal_only_exam_papers()
-    second = sync_formal_only_exam_papers()
+def test_sync_formal_exam_pool_is_idempotent_and_excludes_it_from_practice(test_db):
+    first = sync_formal_exam_pool_papers()
+    second = sync_formal_exam_pool_papers()
     papers = list_papers()
 
-    assert first == {"inserted": 2, "archived": 0, "unchanged": 0, "source_files": 2}
-    assert second == {"inserted": 0, "archived": 0, "unchanged": 2, "source_files": 2}
+    assert first == {
+        "inserted": 3, "archived": 0, "retired": 0, "unchanged": 0, "source_files": 3
+    }
+    assert second == {
+        "inserted": 0, "archived": 0, "retired": 0, "unchanged": 3, "source_files": 3
+    }
     assert [paper["title"] for paper in papers] == [
-        "项目物资管理综合考核试卷（第一套）",
-        "项目物资管理综合考核试卷（第二套）",
+        "综合题库一（满分 100 分）",
+        "综合题库二（满分 100 分）",
+        "综合题库三（满分 100 分）",
     ]
+    assert {paper["source_type"] for paper in papers} == {FORMAL_EXAM_POOL_SOURCE_TYPE}
     assert get_random_practice_questions(limit=100) == []
     assert get_random_practice_questions(limit=100, paper_id=papers[0]["id"]) == []
 
 
-def test_sync_formal_only_papers_preserves_current_exam_and_daily_practice_bank(test_db):
+def test_sync_formal_exam_pool_preserves_current_exam_and_daily_practice_bank(test_db):
     import_exam_papers_from_docx(source_docx())
     current = list_papers()[0]
     test_db.execute(
@@ -89,15 +100,50 @@ def test_sync_formal_only_papers_preserves_current_exam_and_daily_practice_bank(
         ("current_exam_paper_id", str(current["id"])),
     )
 
-    sync_formal_only_exam_papers()
+    sync_formal_exam_pool_papers()
     practice = get_random_practice_questions(limit=200)
 
     assert get_current_exam_paper()["id"] == current["id"]
     assert practice
     assert {
+        "综合题库一（满分 100 分）",
+        "综合题库二（满分 100 分）",
+        "综合题库三（满分 100 分）",
+    }.isdisjoint({question["paper_title"] for question in practice})
+
+
+def test_sync_formal_exam_pool_archives_retired_papers_and_clears_old_current(test_db):
+    cursor = test_db.cursor()
+    retired_ids = []
+    for title in (
         "项目物资管理综合考核试卷（第一套）",
         "项目物资管理综合考核试卷（第二套）",
-    }.isdisjoint({question["paper_title"] for question in practice})
+    ):
+        cursor.execute(
+            """
+            INSERT INTO exam_papers (
+                title, duration_minutes, total_score, source_type, create_time
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (title, 60, 100, "exam", "2026-07-29 00:00:00"),
+        )
+        retired_ids.append(cursor.lastrowid)
+    cursor.execute(
+        "INSERT INTO exam_settings (key, value) VALUES (?, ?)",
+        ("current_exam_paper_id", str(retired_ids[0])),
+    )
+    test_db.commit()
+
+    result = sync_formal_exam_pool_papers()
+
+    retired = test_db.execute(
+        "SELECT id, source_type FROM exam_papers WHERE id IN (?, ?) ORDER BY id",
+        retired_ids,
+    ).fetchall()
+    assert result["retired"] == 2
+    assert [row["source_type"] for row in retired] == ["archived_exam", "archived_exam"]
+    assert get_current_exam_paper() is None
+    assert len(list_papers()) == 3
 
 
 def test_import_exam_papers_does_not_auto_select_current_exam_paper(test_db):
@@ -197,9 +243,12 @@ def test_ensure_exam_sources_imported_is_idempotent(test_db):
     first = ensure_exam_sources_imported()
     second = ensure_exam_sources_imported()
 
-    assert first == {"created": True, "paper_count": 7}
-    assert second == {"created": False, "paper_count": 7}
-    assert len([paper for paper in list_papers() if paper["source_type"] == "exam"]) == 7
+    assert first == {"created": True, "paper_count": 8}
+    assert second == {"created": False, "paper_count": 8}
+    assert len([paper for paper in list_papers() if paper["source_type"] == "exam"]) == 5
+    assert len(
+        [paper for paper in list_papers() if paper["source_type"] == FORMAL_EXAM_POOL_SOURCE_TYPE]
+    ) == 3
 
 
 def test_ensure_exam_sources_imported_keeps_missing_current_setting(test_db):
@@ -211,7 +260,7 @@ def test_ensure_exam_sources_imported_keeps_missing_current_setting(test_db):
 
     result = ensure_exam_sources_imported()
 
-    assert result == {"created": True, "paper_count": 7}
+    assert result == {"created": True, "paper_count": 8}
     assert get_current_exam_paper() is None
 
 
@@ -235,7 +284,7 @@ def test_ensure_exam_sources_imported_does_not_replace_non_exam_current_setting(
 
     result = ensure_exam_sources_imported()
 
-    assert result == {"created": True, "paper_count": 7}
+    assert result == {"created": True, "paper_count": 8}
     assert get_current_exam_paper() is None
 
 
@@ -248,9 +297,9 @@ def test_ensure_exam_sources_imported_does_not_replace_stale_current_setting(tes
 
     result = ensure_exam_sources_imported()
 
-    assert result == {"created": True, "paper_count": 7}
+    assert result == {"created": True, "paper_count": 8}
     assert get_current_exam_paper() is None
-    assert len([paper for paper in list_papers() if paper["source_type"] == "exam"]) == 7
+    assert len([paper for paper in list_papers() if paper["source_type"] == "exam"]) == 5
 
 
 def test_startup_exam_source_hook_uses_import_helper(monkeypatch):
