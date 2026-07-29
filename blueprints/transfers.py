@@ -4,6 +4,7 @@
 from datetime import datetime
 from html import escape
 import os
+import shutil
 from pathlib import Path
 
 from flask import Blueprint, jsonify, request, session, send_from_directory
@@ -49,6 +50,26 @@ def _save_attachment(file_storage, prefix):
     target = root / f'{prefix}_{stamp}_{filename}'
     file_storage.save(target)
     return str(target), filename
+
+
+def _copy_inventory_attachments_to_transfer(cursor, base_inventory_id, transfer_key, uploader_id):
+    _ensure_attachment_tables(cursor)
+    cursor.execute(
+        'SELECT file_path, file_name FROM base_inventory_attachments WHERE base_inventory_id = ?',
+        (base_inventory_id,),
+    )
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    for row in cursor.fetchall():
+        source = Path(row['file_path'])
+        if not source.is_file():
+            continue
+        target = _base_attachment_root() / f'base_transfer_{transfer_key}_{datetime.now().strftime("%Y%m%d%H%M%S%f")}_{source.name}'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        cursor.execute(
+            'INSERT INTO base_transfer_attachments (transfer_key, file_path, file_name, uploader_id, create_time) VALUES (?, ?, ?, ?, ?)',
+            (transfer_key, str(target), row['file_name'], uploader_id, now),
+        )
 
 
 def _current_user():
@@ -416,9 +437,6 @@ def base_transfer_attachments(transfer_key):
         cursor.execute('SELECT id, file_name, create_time FROM base_transfer_attachments WHERE transfer_key = ? ORDER BY id DESC', (transfer_key,))
         return jsonify({'success': True, 'data': [dict(row) for row in cursor.fetchall()]})
     files = _attachment_files()
-    cursor.execute('SELECT COUNT(*) FROM base_transfer_attachments WHERE transfer_key = ?', (transfer_key,))
-    if len(files) + cursor.fetchone()[0] > BASE_ATTACHMENT_MAX_FILES:
-        return jsonify({'success': False, 'message': f'附件最多上传{BASE_ATTACHMENT_MAX_FILES}个'})
     saved = []
     try:
         for file_storage in files:
@@ -527,6 +545,7 @@ def transfer_base_inventory_to_project(base_inventory_id):
             freight, total_amount, user['id'], now, batch_no,
             escape((data.get('remark') or '').strip()),
         ))
+        _copy_inventory_attachments_to_transfer(cursor, base_inventory_id, batch_no, user['id'])
         conn.commit()
     except Exception as exc:
         conn.rollback()
@@ -718,6 +737,7 @@ def batch_transfer_base_inventory():
                 row_freight, total_amount, user['id'], now, batch_no,
                 escape((data.get('remark') or '').strip()),
             ))
+            _copy_inventory_attachments_to_transfer(cursor, base_inventory_id, batch_no, user['id'])
             results.append(transfer_no)
 
         conn.commit()

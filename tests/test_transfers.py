@@ -451,3 +451,35 @@ def test_all_logged_in_users_can_upload_transfer_attachments(client, test_db, tm
     files = client.get('/api/base-transfers/JDB-TEST-001/attachments').get_json()['data']
     assert len(files) == 1
     assert files[0]['file_name'] == 'transfer.jpg'
+
+
+def test_transfer_copies_inventory_attachments_and_has_no_attachment_limit(client, test_db, tmp_path, monkeypatch):
+    from io import BytesIO
+
+    monkeypatch.setenv('BASE_ATTACHMENT_UPLOAD_DIR', str(tmp_path))
+    test_db.execute("INSERT INTO projects (project_code, project_name) VALUES ('XM-COPY', '附件调拨项目')")
+    project_id = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    test_db.execute("INSERT INTO base_inventory (material_name, unit_name, quantity, unit_price) VALUES ('自动带附件材料', '个', 2, 10)")
+    inventory_id = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    login_as_material_clerk(client)
+    assert client.post(
+        f'/api/base-inventory/{inventory_id}/attachments',
+        data={'files': (BytesIO(b'source'), 'source.pdf')},
+        content_type='multipart/form-data',
+    ).get_json()['success'] is True
+
+    transfer = client.post(f'/api/base-inventory/{inventory_id}/transfer', json={
+        'project_id': project_id, 'quantity': 1, 'depreciated_unit_price': 8, 'freight': 0,
+    }).get_json()
+    assert transfer['success'] is True
+    transfer_key = transfer['transfer_no']
+    copied = client.get(f'/api/base-transfers/{transfer_key}/attachments').get_json()['data']
+    assert [file['file_name'] for file in copied] == ['source.pdf']
+
+    response = client.post(
+        f'/api/base-transfers/{transfer_key}/attachments',
+        data={'files': [(BytesIO(b'x'), f'{index}.pdf') for index in range(10)]},
+        content_type='multipart/form-data',
+    )
+    assert response.get_json()['success'] is True
+    assert len(client.get(f'/api/base-transfers/{transfer_key}/attachments').get_json()['data']) == 11

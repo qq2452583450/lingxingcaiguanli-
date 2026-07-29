@@ -2770,6 +2770,9 @@ function baseAttachmentUrl(type, key) {
 async function openBaseAttachments(type, key, title) {
     baseAttachmentContext = { type, key: decodeURIComponent(String(key)) };
     document.getElementById('baseAttachmentTitle').textContent = title;
+    document.getElementById('baseAttachmentUploadLabel').textContent = type === 'inventory'
+        ? '上传附件（图片或PDF，最多9个）'
+        : '上传附件（图片或PDF，数量不限）';
     document.getElementById('baseAttachmentFiles').value = '';
     openModal('modal-base-attachments');
     await loadBaseAttachments();
@@ -2784,7 +2787,9 @@ async function loadBaseAttachments() {
         const data = await res.json();
         if (!data.success) throw new Error(data.message);
         const files = data.data || [];
-        document.getElementById('baseAttachmentHint').textContent = `已上传 ${files.length}/9 个附件`;
+        document.getElementById('baseAttachmentHint').textContent = baseAttachmentContext.type === 'inventory'
+            ? `已上传 ${files.length}/9 个附件`
+            : `已上传 ${files.length} 个附件（数量不限）`;
         list.innerHTML = files.map(file => `
             <div style="display:flex;justify-content:space-between;gap:10px;padding:8px;border-bottom:1px solid #e5e7eb;">
                 <a href="/api/base-attachments/${baseAttachmentContext.type}/${file.id}" target="_blank" rel="noopener">${escapeHtml(file.file_name)}</a>
@@ -2805,7 +2810,7 @@ async function submitBaseAttachments(event) {
     }
     const hint = document.getElementById('baseAttachmentHint').textContent || '';
     const existing = Number((hint.match(/已上传\s*(\d+)/) || [])[1] || 0);
-    if (existing + files.length > 9) {
+    if (baseAttachmentContext.type === 'inventory' && existing + files.length > 9) {
         showToast('每条记录最多上传9个附件', 'warning');
         return;
     }
