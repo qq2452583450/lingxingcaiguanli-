@@ -150,6 +150,17 @@ def _apply_selected_supplier(items_data, selected_supplier_id):
         item['selected_quote_id'] = selected_supplier_id
 
 
+def _unique_supplier_quotes(quotes):
+    """Keep one quote per supplier so one item cannot select a supplier twice."""
+    unique = {}
+    for quote in quotes or []:
+        supplier_id = quote.get('supplier_id')
+        supplier_key = str(supplier_id or '')
+        if supplier_key and supplier_key not in unique:
+            unique[supplier_key] = quote
+    return list(unique.values())
+
+
 def _get_supplier_id_for_user(cursor, user_id):
     cursor.execute("SELECT id FROM suppliers WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
@@ -517,7 +528,7 @@ def create_inquiry():
         for item in items_data:
             selected_id = item.get('selected_quote_id')
             quantity = float(item.get('quantity', 1) or 1)
-            for quote in item.get('quotes', []):
+            for quote in _unique_supplier_quotes(item.get('quotes', [])):
                 tax_price = float(quote.get('tax_price', 0) or 0)
                 # 只计入选定供应商的报价
                 if selected_id and quote.get('supplier_id') == selected_id:
@@ -651,8 +662,7 @@ def create_inquiry():
                 item_id = cursor.lastrowid
 
                 # 写入该item的所有报价（允许价格为0，留给供应商填写）
-                quotes = item.get('quotes', [])
-                valid_quotes = [q for q in quotes if q.get('supplier_id')]
+                valid_quotes = _unique_supplier_quotes(item.get('quotes', []))
 
                 if valid_quotes:
                     # 计算最低价（基于不含税单价，仅考虑有价格的报价）
@@ -1017,14 +1027,14 @@ def update_inquiry(inquiry_id):
         for item in items_data:
             selected_id = item.get('selected_quote_id')
             quantity = float(item.get('quantity', 1) or 1)
-            for quote in item.get('quotes', []):
+            for quote in _unique_supplier_quotes(item.get('quotes', [])):
                 tax_price = float(quote.get('tax_price', 0) or 0)
                 if selected_id and quote.get('supplier_id') == selected_id:
                     total_amount += tax_price * quantity
                 elif not selected_id and quote.get('is_lowest'):
                     total_amount += tax_price * quantity
             library_price = float(item.get('library_price', 0) or 0)
-            for quote in item.get('quotes', []):
+            for quote in _unique_supplier_quotes(item.get('quotes', [])):
                 tp = float(quote.get('tax_price', 0) or 0)
                 if library_price > 0 and tp < library_price:
                     is_below = 1
@@ -1066,8 +1076,7 @@ def update_inquiry(inquiry_id):
             ))
             item_id = cursor.lastrowid
 
-            quotes = item.get('quotes', [])
-            valid_quotes = [q for q in quotes if q.get('supplier_id')]
+            valid_quotes = _unique_supplier_quotes(item.get('quotes', []))
 
             if valid_quotes:
                 # 计算最低价（仅考虑有价格的报价）
@@ -3493,14 +3502,14 @@ def submit_draft(draft_id):
         for item in items_data:
             selected_id = item.get('selected_quote_id')
             quantity = float(item.get('quantity', 1) or 1)
-            for quote in item.get('quotes', []):
+            for quote in _unique_supplier_quotes(item.get('quotes', [])):
                 tax_price = float(quote.get('tax_price', 0) or 0)
                 if selected_id and str(quote.get('supplier_id')) == str(selected_id):
                     total_amount += tax_price * quantity
                 elif not selected_id and quote.get('is_lowest'):
                     total_amount += tax_price * quantity
             library_price = float(item.get('library_price', 0) or 0)
-            for quote in item.get('quotes', []):
+            for quote in _unique_supplier_quotes(item.get('quotes', [])):
                 tp = float(quote.get('tax_price', 0) or 0)
                 if library_price > 0 and tp < library_price:
                     is_below = 1
@@ -3557,8 +3566,7 @@ def submit_draft(draft_id):
             ))
             item_id = cursor.lastrowid
 
-            quotes = item.get('quotes', [])
-            valid_quotes = [q for q in quotes if q.get('supplier_id')]
+            valid_quotes = _unique_supplier_quotes(item.get('quotes', []))
 
             if valid_quotes:
                 priced_quotes = [(float(q.get('tax_exempt_price', 0) or float(q.get('tax_price', 0)) / (1 + float(q.get('tax_rate', 0.13) or 0.13))), i) for i, q in enumerate(valid_quotes) if float(q.get('tax_price', 0) or 0) > 0]

@@ -465,6 +465,7 @@ def test_submit_draft_persists_selected_quote_and_total_amount(client, test_db):
                     "quotes": [
                         {"supplier_id": high_supplier_id, "tax_price": 18, "tax_rate": 0.13},
                         {"supplier_id": low_supplier_id, "tax_price": 12, "tax_rate": 0.13},
+                        {"supplier_id": low_supplier_id, "tax_price": 12, "tax_rate": 0.13},
                     ],
                 }
             ],
@@ -485,6 +486,13 @@ def test_submit_draft_persists_selected_quote_and_total_amount(client, test_db):
         (draft_id, low_supplier_id),
     ).fetchone()
     assert selected["is_selected"] == 1
+    quote_count = test_db.execute(
+        """SELECT COUNT(*) FROM purchase_inquiry_quotes q
+           JOIN purchase_inquiry_items i ON i.id = q.item_id
+           WHERE i.inquiry_id = ? AND q.supplier_id = ?""",
+        (draft_id, low_supplier_id),
+    ).fetchone()[0]
+    assert quote_count == 1
 
 
 def test_purchase_inquiries_include_project_city_code_and_name(client, test_db):
