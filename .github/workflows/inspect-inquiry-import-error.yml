@@ -1,0 +1,24 @@
+name: Inspect inquiry import error
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: lxclgl-inspect-inquiry-import-error
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read production service logs
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_SSH_PORT || 22 }}
+          script_stop: true
+          command_timeout: 10m
+          script: |
+            powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& { $ErrorActionPreference = 'Stop'; $AppDir = 'C:\wwwroot\lxclgl'; Write-Output '=== service ==='; Get-Service -Name 'lxclgl' -ErrorAction SilentlyContinue | Select-Object Name, Status; foreach ($Name in @('.server-err.log', '.server-out.log')) { $Path = Join-Path $AppDir $Name; Write-Output ('=== ' + $Name + ' ==='); if (Test-Path -LiteralPath $Path) { Get-Item -LiteralPath $Path | Select-Object FullName, Length, LastWriteTime; Get-Content -LiteralPath $Path -Tail 1500 } else { Write-Output 'not found' } } }"
