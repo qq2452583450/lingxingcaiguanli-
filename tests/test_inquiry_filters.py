@@ -1396,6 +1396,90 @@ def test_import_draft_quote_sheet_parses_exported_template(client, test_db):
     assert item["quotes"][0]["tax_rate"] == 0.13
 
 
+def test_import_draft_quote_sheet_creates_unique_codes_for_multiple_new_materials(client, test_db):
+    cursor = test_db.cursor()
+    create_inquiry_delete_tables(cursor)
+    ensure_project_id_column(cursor)
+    clerk_id = seed_role_user(cursor, "材料员", "clerk_import_unique", "材料员")
+    project_id = seed_project(cursor, "KMJJYC", "昆明导入项目")
+    cursor.execute("INSERT INTO units (unit_name) VALUES (?)", ("根",))
+    unit_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO materials (
+            material_code, material_name, specification, detail_spec, brand,
+            unit_id, tax_price, cash_price
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("KMLX00050", "Existing material", "DN40", "Standard", "None", unit_id, 10, 9),
+    )
+    material_id = cursor.lastrowid
+    inquiry_id = seed_inquiry(
+        cursor,
+        "XJ-DRAFT-IMPORT-UNIQUE",
+        clerk_id,
+        status="草稿",
+        project_id=project_id,
+    )
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiry_items (
+            inquiry_id, material_id, quantity, tax_rate, is_national_standard,
+            detail_spec, brand, create_time
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (inquiry_id, material_id, 1, 0.01, 0, "Standard", "None", "2026-06-06 10:00:00"),
+    )
+    test_db.commit()
+    set_session_user(client, clerk_id, "clerk_import_unique", "材料员", "材料员")
+
+    export_response = client.get(f"/api/purchase-inquiries/draft/{inquiry_id}/export-quote-sheet")
+    workbook = load_workbook(BytesIO(export_response.data), data_only=False)
+    sheet = workbook.active
+    for row, name in [(4, "Quartz imported item"), (5, "Zinc imported item")]:
+        sheet.cell(row, 1).value = row - 3
+        sheet.cell(row, 2).value = name
+        sheet.cell(row, 3).value = "DN50"
+        sheet.cell(row, 4).value = "Standard"
+        sheet.cell(row, 5).value = "None"
+        sheet.cell(row, 6).value = "否"
+        sheet.cell(row, 7).value = "根"
+        sheet.cell(row, 8).value = 2
+        sheet.cell(row, 9).value = 0
+    uploaded = BytesIO()
+    workbook.save(uploaded)
+    uploaded.seek(0)
+
+    response = client.post(
+        f"/api/purchase-inquiries/draft/{inquiry_id}/import-quote-sheet",
+        data={"file": (uploaded, "quote-sheet.xlsx")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data["success"] is True
+    assert [item["material_code"] for item in data["items"]] == [
+        "KMLX00051",
+        "KMLX00052",
+    ]
+    cursor.execute(
+        """
+        SELECT material_code
+        FROM materials
+        WHERE material_code IN (?, ?)
+        ORDER BY material_code
+        """,
+        ("KMLX00051", "KMLX00052"),
+    )
+    assert [row["material_code"] for row in cursor.fetchall()] == [
+        "KMLX00051",
+        "KMLX00052",
+    ]
+
+
 def test_export_draft_inquiry_xlsx_tolerates_legacy_optional_columns(client, test_db):
     cursor = test_db.cursor()
     create_inquiry_delete_tables(cursor)

@@ -3146,6 +3146,10 @@ def import_draft_quote_sheet(draft_id):
         conn.close()
         return jsonify({'success': False, 'message': '只有申请人可以导入此草稿'}), 403
 
+    cursor.execute("SELECT project_code FROM projects WHERE id = ?", (draft.get('project_id'),))
+    project_row = cursor.fetchone()
+    draft_project_code = project_row[0] if project_row else ''
+
     try:
         workbook = load_workbook(BytesIO(upload.read()), data_only=True)
         sheet = workbook.active
@@ -3353,18 +3357,7 @@ def import_draft_quote_sheet(draft_id):
             unit_row = cursor.fetchone()
             unit_id = unit_row[0] if unit_row else None
 
-            # 生成材料编码
-            cursor.execute("SELECT material_code FROM materials ORDER BY id DESC LIMIT 1")
-            last_row = cursor.fetchone()
-            if last_row and last_row[0]:
-                try:
-                    parts = last_row[0].rsplit('-', 1)
-                    new_num = int(parts[1]) + 1
-                    new_code = f"{parts[0]}-{new_num:03d}"
-                except (ValueError, IndexError):
-                    new_code = f"LX-{(last_row[0] or '0').replace('LX-','').replace('-','')}"
-            else:
-                new_code = "LX-001"
+            new_code = generate_material_code(cursor, draft_project_code, user)
 
             now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             cursor.execute("""
@@ -3431,10 +3424,12 @@ def import_draft_quote_sheet(draft_id):
             'warnings': item_warnings,
         })
 
-    conn.close()
-
     if not parsed_items:
+        conn.close()
         return jsonify({'success': False, 'message': '未读取到有效的询价明细'})
+
+    conn.commit()
+    conn.close()
 
     for item in parsed_items:
         for message in item.get('warnings', []):
