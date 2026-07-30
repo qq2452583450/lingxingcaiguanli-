@@ -35,5 +35,8 @@ def test_workflow_uses_deploy_script_for_dependency_install_before_restart():
     assert 'deploy\\force-restart-app.ps1' not in workflow
     assert "Invoke-Retry 'pull'" in workflow
     assert 'petty-cash/usages/1' in workflow
+    assert 'petty-cash/usages/1/reimburse' in workflow
+    assert 'petty_cash_reimburse_allow' in workflow
+    assert "'POST'" in workflow
     assert 'Installing Python dependencies' in deploy_script
     assert 'Start-Service -Name $ServiceName' in deploy_script

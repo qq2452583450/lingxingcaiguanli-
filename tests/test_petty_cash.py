@@ -281,3 +281,51 @@ def test_petty_cash_usage_permissions_and_attachment_limit(client, test_db, tmp_
     updated_loan = client.get(f"/api/petty-cash/loans?project_id={project_id}").get_json()["data"][0]
     assert updated_loan["total_amount"] == 1500
     assert updated_loan["balance_amount"] == 1380
+
+
+def test_material_clerk_can_reimburse_usage_and_restore_balance(client, test_db, tmp_path, monkeypatch):
+    monkeypatch.setenv("PETTY_CASH_UPLOAD_DIR", str(tmp_path))
+    cursor = test_db.cursor()
+    admin_id = seed_user(cursor, "admin", "管理员", "系统管理员")
+    clerk_id = seed_user(cursor, "clerk", "材料员", "材料员")
+    project_id = seed_project(cursor)
+    test_db.commit()
+
+    set_session_user(client, admin_id)
+    loan_id = create_loan(client, project_id)
+    usage = client.post(
+        "/api/petty-cash/usages",
+        data={
+            "loan_id": str(loan_id),
+            "use_date": "2026-06-10",
+            "expense_type": "运费",
+            "amount": "250",
+            "handler": "材料员",
+        },
+        content_type="multipart/form-data",
+    ).get_json()
+    usage_id = usage["id"]
+
+    set_session_user(client, clerk_id, "clerk", "材料员", "材料员")
+    reimbursed = client.post(f"/api/petty-cash/usages/{usage_id}/reimburse").get_json()
+    assert reimbursed["success"] is True
+    assert reimbursed["restored_amount"] == 250
+
+    usages = client.get(f"/api/petty-cash/usages?project_id={project_id}").get_json()["data"]
+    assert usages[0]["is_reimbursed"] == 1
+    assert usages[0]["reimbursed_at"]
+    assert usages[0]["reimbursed_by"] == clerk_id
+
+    summary = client.get(f"/api/petty-cash/summary?project_id={project_id}").get_json()["data"]
+    assert summary["total_amount"] == 1000
+    assert summary["used_amount"] == 0
+    assert summary["balance_amount"] == 1000
+    assert summary["usage_count"] == 1
+
+    loan = client.get(f"/api/petty-cash/loans?project_id={project_id}").get_json()["data"][0]
+    assert loan["used_amount"] == 0
+    assert loan["balance_amount"] == 1000
+
+    repeated = client.post(f"/api/petty-cash/usages/{usage_id}/reimburse").get_json()
+    assert repeated["success"] is False
+    assert "已报销" in repeated["message"]

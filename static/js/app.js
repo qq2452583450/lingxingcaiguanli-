@@ -583,10 +583,15 @@ function renderPettyCashUsages() {
             <td>${escapeHtml(item.handler || '-')}</td>
             <td>${pettyCashAttachmentLinks(item)}</td>
             <td class="owner-long-text" style="max-width:120px;">${escapeHtml(item.description || '-')}</td>
-            <td>${canManage ? `
-                <button class="btn btn-secondary" onclick="openPettyCashUsageModal(${item.id})">编辑</button>
-                <button class="btn btn-danger" onclick="deletePettyCashUsage(${item.id})">删除</button>
-            ` : '-'}</td>
+            <td>
+                ${item.is_reimbursed
+                    ? '<button class="btn btn-secondary" disabled>已报销</button>'
+                    : `<button class="btn btn-primary" onclick="reimbursePettyCashUsage(${item.id})">报销</button>`}
+                ${canManage ? `
+                    <button class="btn btn-secondary" onclick="openPettyCashUsageModal(${item.id})">编辑</button>
+                    <button class="btn btn-danger" onclick="deletePettyCashUsage(${item.id})">删除</button>
+                ` : ''}
+            </td>
         </tr>
     `).join('') : '<tr><td colspan="12" class="empty-message">暂无使用情况</td></tr>';
 }
@@ -733,6 +738,18 @@ async function deletePettyCashUsage(id) {
         return;
     }
     showToast('删除成功', 'success');
+    await loadPettyCash();
+}
+
+async function reimbursePettyCashUsage(id) {
+    if (!confirm('确定将该笔使用记录标记为已报销吗？报销后会恢复对应备用金额度。')) return;
+    const res = await api(`/api/petty-cash/usages/${id}/reimburse`, { method: 'POST' });
+    const data = await res.json();
+    if (!data.success) {
+        showToast(data.message || '报销失败', 'error');
+        return;
+    }
+    showToast('报销成功，备用金额度已恢复', 'success');
     await loadPettyCash();
 }
 

@@ -42,4 +42,7 @@ def test_frontend_has_independent_petty_cash_module():
     assert "material_name" in app_source
     assert "invoice_amount" in app_source
     assert "invoice_type" in app_source
+    assert "reimbursePettyCashUsage" in app_source
+    assert "已报销" in app_source
+    assert "/reimburse" in app_source
 

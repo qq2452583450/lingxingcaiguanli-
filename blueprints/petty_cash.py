@@ -89,6 +89,9 @@ def _ensure_usage_files_table(cursor):
         'material_name': 'TEXT',
         'invoice_amount': 'REAL DEFAULT 0',
         'invoice_type': 'TEXT',
+        'is_reimbursed': 'INTEGER DEFAULT 0',
+        'reimbursed_at': 'TEXT',
+        'reimbursed_by': 'INTEGER',
     }.items():
         if column_name not in existing:
             cursor.execute(f"ALTER TABLE petty_cash_usages ADD COLUMN {column_name} {column_def}")
@@ -156,7 +159,11 @@ def _loan_balance(cursor, loan_id):
     if not row:
         return None
     total = _number(row['total_amount'])
-    cursor.execute("SELECT COALESCE(SUM(amount), 0) AS used_amount FROM petty_cash_usages WHERE loan_id = ?", (loan_id,))
+    cursor.execute("""
+        SELECT COALESCE(SUM(amount), 0) AS used_amount
+        FROM petty_cash_usages
+        WHERE loan_id = ? AND COALESCE(is_reimbursed, 0) = 0
+    """, (loan_id,))
     used = _number(cursor.fetchone()['used_amount'])
     return total, used, total - used
 
@@ -182,13 +189,15 @@ def get_summary():
         params.append(project_id)
     conn = get_db()
     cursor = conn.cursor()
+    _ensure_usage_files_table(cursor)
     cursor.execute(f"""
         SELECT
             COALESCE(SUM(l.total_amount), 0) AS total_amount,
             COALESCE((SELECT SUM(u.amount)
                       FROM petty_cash_usages u
                       JOIN petty_cash_loans l2 ON u.loan_id = l2.id
-                      {'WHERE l2.project_id = ?' if project_id else ''}), 0) AS used_amount,
+                      WHERE COALESCE(u.is_reimbursed, 0) = 0
+                      {'AND l2.project_id = ?' if project_id else ''}), 0) AS used_amount,
             COUNT(DISTINCT l.id) AS loan_count,
             COALESCE((SELECT COUNT(*)
                       FROM petty_cash_usages u
@@ -220,13 +229,15 @@ def get_loans():
         params.append(project_id)
     conn = get_db()
     cursor = conn.cursor()
+    _ensure_usage_files_table(cursor)
     cursor.execute(f"""
         SELECT l.*, p.project_name, u.real_name AS creator_name,
                COALESCE(SUM(pc.amount), 0) AS used_amount
         FROM petty_cash_loans l
         LEFT JOIN projects p ON l.project_id = p.id
         LEFT JOIN users u ON l.creator_id = u.id
-        LEFT JOIN petty_cash_usages pc ON pc.loan_id = l.id
+        LEFT JOIN petty_cash_usages pc
+               ON pc.loan_id = l.id AND COALESCE(pc.is_reimbursed, 0) = 0
         {where}
         GROUP BY l.id
         ORDER BY l.loan_date DESC, l.id DESC
@@ -573,6 +584,36 @@ def delete_usage(usage_id):
     conn.execute("DELETE FROM petty_cash_usages WHERE id = ?", (usage_id,))
     conn.commit()
     return jsonify({'success': True})
+
+
+@petty_cash_bp.route('/usages/<int:usage_id>/reimburse', methods=['POST'])
+@login_required
+def reimburse_usage(usage_id):
+    user = session.get('user') or {}
+    conn = get_db()
+    cursor = conn.cursor()
+    _ensure_usage_files_table(cursor)
+    cursor.execute(
+        "SELECT amount, COALESCE(is_reimbursed, 0) AS is_reimbursed FROM petty_cash_usages WHERE id = ?",
+        (usage_id,),
+    )
+    usage = cursor.fetchone()
+    if not usage:
+        return jsonify({'success': False, 'message': '使用情况记录不存在'})
+    if usage['is_reimbursed']:
+        return jsonify({'success': False, 'message': '该笔记录已报销'})
+
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute("""
+        UPDATE petty_cash_usages
+        SET is_reimbursed = 1, reimbursed_at = ?, reimbursed_by = ?
+        WHERE id = ? AND COALESCE(is_reimbursed, 0) = 0
+    """, (now, user.get('id'), usage_id))
+    if cursor.rowcount != 1:
+        conn.rollback()
+        return jsonify({'success': False, 'message': '该笔记录已报销'})
+    conn.commit()
+    return jsonify({'success': True, 'restored_amount': _number(usage['amount'])})
 
 
 @petty_cash_bp.route('/files/<path:filename>', methods=['GET'])

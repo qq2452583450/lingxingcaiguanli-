@@ -400,6 +400,9 @@ def auto_fix_database():
             'proof_file_name': 'TEXT',
             'creator_id': 'INTEGER',
             'create_time': 'TEXT',
+            'is_reimbursed': 'INTEGER DEFAULT 0',
+            'reimbursed_at': 'TEXT',
+            'reimbursed_by': 'INTEGER',
         },
         'petty_cash_usage_files': {
             'id': 'INTEGER PRIMARY KEY AUTOINCREMENT',

@@ -940,10 +940,23 @@ def init_database():
             proof_file_name TEXT,
             creator_id INTEGER,
             create_time TEXT,
+            is_reimbursed INTEGER DEFAULT 0,
+            reimbursed_at TEXT,
+            reimbursed_by INTEGER,
             FOREIGN KEY (loan_id) REFERENCES petty_cash_loans(id),
-            FOREIGN KEY (creator_id) REFERENCES users(id)
+            FOREIGN KEY (creator_id) REFERENCES users(id),
+            FOREIGN KEY (reimbursed_by) REFERENCES users(id)
         )
     """)
+    for ddl in [
+        "ALTER TABLE petty_cash_usages ADD COLUMN is_reimbursed INTEGER DEFAULT 0",
+        "ALTER TABLE petty_cash_usages ADD COLUMN reimbursed_at TEXT",
+        "ALTER TABLE petty_cash_usages ADD COLUMN reimbursed_by INTEGER",
+    ]:
+        try:
+            cursor.execute(ddl)
+        except Exception:
+            pass
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS petty_cash_usage_files (
