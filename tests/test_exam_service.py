@@ -661,6 +661,47 @@ def test_review_answer_completes_attempt_and_results_scope_by_viewer(test_db):
     assert manager_results[0]["paper_title"] == paper["title"]
 
 
+def test_results_keep_only_the_highest_score_per_user_and_paper(test_db):
+    paper, _, _ = load_exam(test_db)
+    clerk_id = seed_user(test_db, "highest_result", "最高分材料员", "材料员")
+    manager_id = seed_user(test_db, "highest_manager", "成绩管理员", "系统管理员")
+    low_attempt_id = start_attempt(clerk_id, paper["id"])
+    high_attempt_id = start_attempt(clerk_id, paper["id"])
+    tie_attempt_id = start_attempt(clerk_id, paper["id"])
+    test_db.execute(
+        """
+        UPDATE exam_attempts
+        SET status = 'completed', final_score = ?, submitted_at = ?
+        WHERE id = ?
+        """,
+        (60, "2026-08-01 09:00:00", low_attempt_id),
+    )
+    test_db.execute(
+        """
+        UPDATE exam_attempts
+        SET status = 'completed', final_score = ?, submitted_at = ?
+        WHERE id = ?
+        """,
+        (90, "2026-08-01 10:00:00", high_attempt_id),
+    )
+    test_db.execute(
+        """
+        UPDATE exam_attempts
+        SET status = 'completed', final_score = ?, submitted_at = ?
+        WHERE id = ?
+        """,
+        (90, "2026-08-01 11:00:00", tie_attempt_id),
+    )
+    test_db.commit()
+
+    manager_results = list_results({"viewer": {"id": manager_id, "role_name": "系统管理员"}})
+    clerk_results = list_results({"viewer": {"id": clerk_id, "role_name": "材料员"}})
+
+    assert [row["attempt_id"] for row in manager_results] == [tie_attempt_id]
+    assert [row["attempt_id"] for row in clerk_results] == [tie_attempt_id]
+    assert manager_results[0]["final_score"] == 90
+
+
 def test_delete_exam_attempt_removes_formal_answers_and_reviews_but_keeps_practice(test_db):
     paper, objective, subjective = load_exam(test_db)
     clerk_id = seed_user(test_db, "delete_clerk", "\u5220\u9664\u6750\u6599\u5458", "\u6750\u6599\u5458")
