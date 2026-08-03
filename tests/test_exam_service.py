@@ -686,6 +686,57 @@ def test_delete_exam_attempt_removes_formal_answers_and_reviews_but_keeps_practi
     assert list_practice_history(clerk_id)[0]["session_id"] == practice_result["session_id"]
 
 
+def test_delete_retake_attempt_reopens_its_eligibility(test_db):
+    paper, _, _ = load_exam(test_db)
+    clerk_id = seed_user(test_db, "retake_delete", "补考删除", "材料员")
+    test_db.execute(
+        """
+        INSERT INTO exam_retake_eligibilities (
+            user_id, paper_id, eligibility_type, status, reason, created_at
+        ) VALUES (?, ?, 'retake_failed', 'open', '测试补考', '2026-08-03 09:00:00')
+        """,
+        (clerk_id, paper["id"]),
+    )
+    eligibility_id = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    attempt_id = start_attempt(clerk_id, paper["id"], eligibility_id)
+
+    delete_exam_attempt(attempt_id)
+
+    eligibility = test_db.execute(
+        "SELECT status, used_attempt_id, used_at FROM exam_retake_eligibilities WHERE id = ?",
+        (eligibility_id,),
+    ).fetchone()
+    assert eligibility["status"] == "open"
+    assert eligibility["used_attempt_id"] is None
+    assert eligibility["used_at"] is None
+
+
+def test_delete_source_attempt_detaches_used_retake_eligibility(test_db):
+    paper, _, _ = load_exam(test_db)
+    clerk_id = seed_user(test_db, "source_delete", "来源删除", "材料员")
+    source_attempt_id = start_attempt(clerk_id, paper["id"])
+    test_db.execute(
+        """
+        INSERT INTO exam_retake_eligibilities (
+            user_id, paper_id, eligibility_type, status, source_attempt_id, reason, created_at
+        ) VALUES (?, ?, 'retake_failed', 'open', ?, '测试补考', '2026-08-03 09:00:00')
+        """,
+        (clerk_id, paper["id"], source_attempt_id),
+    )
+    eligibility_id = test_db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    retake_attempt_id = start_attempt(clerk_id, paper["id"], eligibility_id)
+
+    delete_exam_attempt(source_attempt_id)
+
+    eligibility = test_db.execute(
+        "SELECT source_attempt_id, used_attempt_id FROM exam_retake_eligibilities WHERE id = ?",
+        (eligibility_id,),
+    ).fetchone()
+    assert eligibility["source_attempt_id"] is None
+    assert eligibility["used_attempt_id"] == retake_attempt_id
+    assert get_attempt(retake_attempt_id) is not None
+
+
 def test_submit_attempt_rejects_duplicate_submission_without_resetting_scores(test_db):
     paper, objective, subjective = load_exam(test_db)
     clerk_id = seed_user(test_db, "clerk", "\u5f20\u6750\u6599", "\u6750\u6599\u5458")

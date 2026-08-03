@@ -1909,6 +1909,33 @@ def delete_exam_attempt(attempt_id: int) -> None:
         ).fetchone()
         if not attempt:
             raise ValueError("Exam attempt not found")
+        # A deleted retake attempt releases its eligibility for another attempt.
+        conn.execute(
+            """
+            UPDATE exam_retake_eligibilities
+            SET status = 'open', used_attempt_id = NULL, used_at = NULL
+            WHERE used_attempt_id = ?
+            """,
+            (attempt_id,),
+        )
+        # A source attempt may be removed after its retake has been used. Keep
+        # that retake, but detach the now-deleted source attempt. Unused
+        # eligibility has no purpose without its source and is removed.
+        conn.execute(
+            """
+            UPDATE exam_retake_eligibilities
+            SET source_attempt_id = NULL
+            WHERE source_attempt_id = ? AND used_attempt_id IS NOT NULL
+            """,
+            (attempt_id,),
+        )
+        conn.execute(
+            """
+            DELETE FROM exam_retake_eligibilities
+            WHERE source_attempt_id = ? AND used_attempt_id IS NULL
+            """,
+            (attempt_id,),
+        )
         conn.execute(
             """
             DELETE FROM exam_subjective_reviews
@@ -1921,6 +1948,9 @@ def delete_exam_attempt(attempt_id: int) -> None:
         conn.execute("DELETE FROM exam_answers WHERE attempt_id = ?", (attempt_id,))
         conn.execute("DELETE FROM exam_attempts WHERE id = ?", (attempt_id,))
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         if should_close:
             conn.close()
