@@ -10,6 +10,7 @@ from services.exam_import_service import (
     ensure_exam_sources_imported,
     get_question_bank_dir,
     import_exam_papers_from_question_bank_dir,
+    insert_paper,
     parse_exam_docx,
     parse_formal_exam_pool_docx,
     parse_literature_question_bank_docx,
@@ -90,6 +91,40 @@ def test_sync_formal_exam_pool_is_idempotent_and_excludes_it_from_practice(test_
     assert {paper["source_type"] for paper in papers} == {FORMAL_EXAM_POOL_SOURCE_TYPE}
     assert get_random_practice_questions(limit=100) == []
     assert get_random_practice_questions(limit=100, paper_id=papers[0]["id"]) == []
+
+
+def test_imported_choice_questions_remove_option_e_and_answer_e(test_db):
+    paper_id = insert_paper(
+        test_db.cursor(),
+        {
+            "title": "No E option paper",
+            "duration_minutes": 60,
+            "questions": [
+                {
+                    "question_type": "multiple_choice",
+                    "order_no": 1,
+                    "stem": "Multiple choice",
+                    "correct_answer": "ABCE",
+                    "reference_answer": "Explanation",
+                    "keywords": "",
+                    "score": 3,
+                    "options": [
+                        {"key": "A", "text": "Option A"},
+                        {"key": "B", "text": "Option B"},
+                        {"key": "C", "text": "Option C"},
+                        {"key": "D", "text": "Option D"},
+                        {"key": "E", "text": "Option E"},
+                    ],
+                }
+            ],
+        },
+    )
+    test_db.commit()
+
+    question = get_paper_questions(paper_id)[0]
+
+    assert question["correct_answer"] == "ABC"
+    assert [option["key"] for option in question["options"]] == ["A", "B", "C", "D"]
 
 
 def test_sync_formal_exam_pool_preserves_current_exam_and_daily_practice_bank(test_db):

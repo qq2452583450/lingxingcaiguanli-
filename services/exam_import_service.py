@@ -1289,6 +1289,14 @@ def insert_paper(cursor, paper: dict, source_type: str = "exam") -> int:
     paper_id = cursor.lastrowid
 
     for question in paper.get("questions", []):
+        question_type = question["question_type"]
+        options = question.get("options", [])
+        correct_answer = str(question.get("correct_answer", ""))
+        if question_type in {"single_choice", "multiple_choice"}:
+            options = [option for option in options if option.get("key") != "E"]
+            correct_answer = correct_answer.replace("E", "")
+            if not correct_answer:
+                raise ValueError("Choice question has no A-D correct answer after removing option E")
         cursor.execute(
             """
             INSERT INTO exam_questions (
@@ -1298,17 +1306,17 @@ def insert_paper(cursor, paper: dict, source_type: str = "exam") -> int:
             """,
             (
                 paper_id,
-                question["question_type"],
+                question_type,
                 question["order_no"],
                 question["stem"],
-                question.get("correct_answer", ""),
+                correct_answer,
                 question.get("reference_answer", ""),
                 question.get("keywords", ""),
                 question["score"],
             ),
         )
         question_id = cursor.lastrowid
-        for option in question.get("options", []):
+        for option in options:
             cursor.execute(
                 """
                 INSERT INTO exam_question_options (question_id, option_key, option_text)
