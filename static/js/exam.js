@@ -729,7 +729,9 @@ function renderMaterialClerkWrongQuestions(records) {
                 <span>错题频次 ${examEscape(item.wrong_count || 0)} 次</span>
             </div>
             <div class="exam-question-paper">${examEscape(item.paper_title || '')}</div>
+            <p><strong>来源：</strong>${examEscape(item.source_labels || '')}</p>
             <p><strong>涉及材料员：</strong>${examEscape(item.clerk_count || 0)} 人（${examEscape(item.clerk_details || '')}）</p>
+            <p><strong>材料员错答：</strong>${(item.answer_details || []).map(detail => `${examEscape(detail.user_name || '')}（${examEscape(detail.source_label || '')}，${examEscape(detail.wrong_count || 0)}次）：${examEscape(answerTextFromOptions(item, detail.answer_text))}`).join('<br>') || '-'}</p>
             <p><strong>正确答案：</strong>${examEscape(answerTextFromOptions(item, item.correct_answer))}</p>
             <p><strong>解析：</strong>${examEscape(examExplanationText(item))}</p>
             <p><strong>最近答错：</strong>${examEscape(examDate(item.created_at))}</p>
@@ -738,7 +740,10 @@ function renderMaterialClerkWrongQuestions(records) {
         <div class="exam-panel">
             <div class="exam-toolbar">
                 <div><h2>材料员错题集合</h2><p>按题目汇总当前未订正错题，错题频次为材料员累计答错次数。</p></div>
-                <button class="btn btn-secondary" type="button" onclick="loadMaterialClerkWrongQuestions()"><i data-lucide="refresh-cw"></i>刷新</button>
+                <div class="exam-actions">
+                    <button class="btn btn-secondary" type="button" onclick="window.location.href='/api/exam/admin/practice/wrong-questions/export'"><i data-lucide="download"></i>导出</button>
+                    <button class="btn btn-secondary" type="button" onclick="loadMaterialClerkWrongQuestions()"><i data-lucide="refresh-cw"></i>刷新</button>
+                </div>
             </div>
             <div class="exam-question-list">${rows || '<div class="empty-message">暂无材料员错题</div>'}</div>
         </div>`;

@@ -661,29 +661,31 @@ def test_review_answer_completes_attempt_and_results_scope_by_viewer(test_db):
     assert manager_results[0]["paper_title"] == paper["title"]
 
 
-def test_results_keep_only_the_highest_score_per_user_and_paper(test_db):
+def test_results_keep_only_the_highest_score_per_user(test_db):
     paper, _, _ = load_exam(test_db)
     clerk_id = seed_user(test_db, "highest_result", "最高分材料员", "材料员")
     manager_id = seed_user(test_db, "highest_manager", "成绩管理员", "系统管理员")
     low_attempt_id = start_attempt(clerk_id, paper["id"])
+    test_db.execute(
+        "UPDATE exam_attempts SET status = 'completed', final_score = 60, submitted_at = ? WHERE id = ?",
+        ("2026-08-01 09:00:00", low_attempt_id),
+    )
+    test_db.commit()
     high_attempt_id = start_attempt(clerk_id, paper["id"])
-    tie_attempt_id = start_attempt(clerk_id, paper["id"])
     test_db.execute(
-        """
-        UPDATE exam_attempts
-        SET status = 'completed', final_score = ?, submitted_at = ?
-        WHERE id = ?
-        """,
-        (60, "2026-08-01 09:00:00", low_attempt_id),
+        "UPDATE exam_attempts SET status = 'completed', final_score = 90, submitted_at = ? WHERE id = ?",
+        ("2026-08-01 10:00:00", high_attempt_id),
     )
-    test_db.execute(
+    test_db.commit()
+    other_paper_id = test_db.execute(
         """
-        UPDATE exam_attempts
-        SET status = 'completed', final_score = ?, submitted_at = ?
-        WHERE id = ?
+        INSERT INTO exam_papers (title, duration_minutes, total_score, source_type, create_time)
+        VALUES (?, 60, 100, 'exam', ?)
         """,
-        (90, "2026-08-01 10:00:00", high_attempt_id),
-    )
+        ("另一套试卷", "2026-08-01 08:00:00"),
+    ).lastrowid
+    test_db.commit()
+    tie_attempt_id = start_attempt(clerk_id, other_paper_id)
     test_db.execute(
         """
         UPDATE exam_attempts
@@ -700,6 +702,17 @@ def test_results_keep_only_the_highest_score_per_user_and_paper(test_db):
     assert [row["attempt_id"] for row in manager_results] == [tie_attempt_id]
     assert [row["attempt_id"] for row in clerk_results] == [tie_attempt_id]
     assert manager_results[0]["final_score"] == 90
+
+
+def test_start_attempt_rejects_a_second_in_progress_exam(test_db):
+    paper, _, _ = load_exam(test_db)
+    clerk_id = seed_user(test_db, "active_attempt", "在考材料员", "材料员")
+    attempt_id = start_attempt(clerk_id, paper["id"])
+
+    with pytest.raises(ValueError, match="already have an exam in progress"):
+        start_attempt(clerk_id, paper["id"])
+
+    assert get_attempt(attempt_id)["status"] == "in_progress"
 
 
 def test_delete_exam_attempt_removes_formal_answers_and_reviews_but_keeps_practice(test_db):

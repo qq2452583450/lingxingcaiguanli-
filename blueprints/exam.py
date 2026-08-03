@@ -300,6 +300,68 @@ def _monthly_checkins_workbook(rows, month):
     return output
 
 
+def _option_answer_text(question, answer_text):
+    answer_text = str(answer_text or "").strip()
+    if not answer_text:
+        return "-"
+    options = {str(option.get("key")): option.get("text") for option in question.get("options", [])}
+    return "、".join(
+        f"{key}. {options[key]}" if key in options else key
+        for key in answer_text.split(",")
+        if key
+    ) or answer_text
+
+
+def _material_clerk_wrong_questions_workbook(rows):
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "材料员错题集合"
+    headers = [
+        "序号", "来源", "试卷", "题型", "题目", "正确答案", "解析",
+        "错题频次", "涉及材料员数", "材料员错答详情", "最近答错时间",
+    ]
+    sheet.append(headers)
+    header_fill = PatternFill("solid", fgColor="1F4E78")
+    for cell in sheet[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    for index, row in enumerate(rows, start=1):
+        answer_details = "\n".join(
+            f"{detail['user_name']}（{detail['source_label']}，{detail['wrong_count']}次）："
+            f"{_option_answer_text(row, detail['answer_text'])}"
+            for detail in row.get("answer_details", [])
+        )
+        sheet.append([
+            index,
+            row.get("source_labels", ""),
+            row.get("paper_title", ""),
+            row.get("question_type", ""),
+            row.get("stem", ""),
+            _option_answer_text(row, row.get("correct_answer")),
+            row.get("reference_answer", ""),
+            row.get("wrong_count", 0),
+            row.get("clerk_count", 0),
+            answer_details,
+            row.get("created_at", ""),
+        ])
+
+    for row in sheet.iter_rows():
+        for cell in row:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+    for column, width in enumerate((8, 16, 24, 14, 42, 28, 42, 12, 14, 46, 20), start=1):
+        sheet.column_dimensions[chr(64 + column)].width = width
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
 @exam_bp.route("/summary", methods=["GET"])
 def summary():
     user, denied = _require_exam_user()
@@ -479,6 +541,23 @@ def admin_material_clerk_wrong_questions():
     limit = request.args.get("limit", default=100, type=int)
     limit = max(1, min(limit or 100, 500))
     return jsonify({"success": True, "data": list_material_clerk_wrong_questions(limit=limit)})
+
+
+@exam_bp.route("/admin/practice/wrong-questions/export", methods=["GET"])
+def export_material_clerk_wrong_questions():
+    _, denied = _require_exam_manager()
+    if denied:
+        return denied
+
+    output = _material_clerk_wrong_questions_workbook(
+        list_material_clerk_wrong_questions(limit=500)
+    )
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name="material-clerk-wrong-questions.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 @exam_bp.route("/practice/wrong/questions", methods=["GET"])

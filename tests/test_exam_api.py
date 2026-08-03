@@ -825,6 +825,21 @@ def test_exam_managers_can_view_aggregated_material_clerk_wrong_questions(client
     record_practice_answers(clerk_one_id, {str(question["id"]): wrong_answer})
     record_practice_answers(clerk_two_id, {str(question["id"]): wrong_answer})
     record_practice_answers(owner_id, {str(question["id"]): wrong_answer})
+    formal_attempt_id = test_db.execute(
+        """
+        INSERT INTO exam_attempts (user_id, paper_id, status, final_score, started_at, submitted_at)
+        VALUES (?, ?, 'completed', 0, ?, ?)
+        """,
+        (clerk_one_id, question["paper_id"], "2026-08-03 09:00:00", "2026-08-03 10:00:00"),
+    ).lastrowid
+    test_db.execute(
+        """
+        INSERT INTO exam_answers (attempt_id, question_id, answer_text, auto_score, suggested_score, final_score)
+        VALUES (?, ?, ?, 0, 0, 0)
+        """,
+        (formal_attempt_id, question["id"], wrong_answer),
+    )
+    test_db.commit()
 
     login(client, manager_id, "wrong_manager", "错题管理员", ROLE_MANAGER)
     response = client.get("/api/exam/admin/practice/wrong-questions")
@@ -835,10 +850,19 @@ def test_exam_managers_can_view_aggregated_material_clerk_wrong_questions(client
     assert len(data["data"]) == 1
     row = data["data"][0]
     assert row["question_id"] == question["id"]
-    assert row["wrong_count"] == 3
+    assert row["wrong_count"] == 4
     assert row["clerk_count"] == 2
-    assert "材料员甲（2次）" in row["clerk_details"]
+    assert "材料员甲（3次）" in row["clerk_details"]
     assert "材料员乙（1次）" in row["clerk_details"]
+    assert set(row["source_labels"].split("、")) == {"平时打卡", "正式考试"}
+    assert any(detail["answer_text"] == wrong_answer for detail in row["answer_details"])
+
+    export = client.get("/api/exam/admin/practice/wrong-questions/export")
+    workbook = load_workbook(BytesIO(export.data))
+    assert export.status_code == 200
+    assert workbook.active.title == "材料员错题集合"
+    assert workbook.active["F1"].value == "正确答案"
+    assert workbook.active["J2"].value
 
     login(client, owner_id, "wrong_owner", "审批负责人", ROLE_APPROVAL_OWNER)
     assert client.get("/api/exam/admin/practice/wrong-questions").status_code == 200

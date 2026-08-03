@@ -164,8 +164,10 @@ def test_exam_managers_can_open_material_clerk_wrong_question_collection():
     exam_js = read_text("static/js/exam.js")
 
     assert "/api/exam/admin/practice/wrong-questions" in exam_js
+    assert "/api/exam/admin/practice/wrong-questions/export" in exam_js
     assert "错题频次" in exam_js
     assert "材料员错题集合" in exam_js
+    assert "材料员错答" in exam_js
 
 
 def test_exam_admin_can_control_random_formal_exam_pool():

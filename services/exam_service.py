@@ -1163,40 +1163,86 @@ def list_wrong_practice_questions(user_id: int, limit: int = 100) -> list[dict]:
 
 
 def list_material_clerk_wrong_questions(limit: int = 100) -> list[dict]:
-    """Return unresolved practice wrong questions aggregated across material clerks."""
+    """Return material clerks' practice and formal-exam wrong questions."""
     _sync_question_bank_references_once()
     conn, should_close = _connection()
     try:
         rows = conn.execute(
             """
-            SELECT w.question_id,
-                   SUM(w.wrong_count) AS wrong_count,
-                   COUNT(*) AS clerk_count,
-                   GROUP_CONCAT(
-                       COALESCE(NULLIF(u.real_name, ''), u.username) || '（' || w.wrong_count || '次）',
-                       '、'
-                   ) AS clerk_details,
-                   MAX(w.last_wrong_at) AS last_wrong_at,
+            WITH wrong_records AS (
+                SELECT w.question_id, w.user_id, w.wrong_count,
+                       w.last_answer_text AS answer_text,
+                       w.last_wrong_at AS wrong_at,
+                       '平时打卡' AS source_label
+                FROM exam_practice_wrong_questions w
+                JOIN exam_questions q ON q.id = w.question_id
+                JOIN exam_papers p ON p.id = q.paper_id
+                WHERE p.source_type = 'exam'
+
+                UNION ALL
+
+                SELECT ans.question_id, att.user_id, 1 AS wrong_count,
+                       ans.answer_text,
+                       COALESCE(att.submitted_at, att.started_at) AS wrong_at,
+                       '正式考试' AS source_label
+                FROM exam_answers ans
+                JOIN exam_attempts att ON att.id = ans.attempt_id
+                JOIN exam_questions q ON q.id = ans.question_id
+                JOIN exam_papers p ON p.id = q.paper_id
+                WHERE att.status = 'completed'
+                  AND ans.final_score < q.score
+            )
+            SELECT wr.question_id, wr.user_id, wr.wrong_count, wr.answer_text,
+                   wr.wrong_at, wr.source_label,
+                   COALESCE(NULLIF(u.real_name, ''), u.username) AS user_name,
                    q.paper_id, p.title AS paper_title,
                    q.question_type, q.order_no, q.stem, q.correct_answer,
                    q.reference_answer, q.score
-            FROM exam_practice_wrong_questions w
-            JOIN users u ON u.id = w.user_id
+            FROM wrong_records wr
+            JOIN users u ON u.id = wr.user_id
             JOIN roles r ON r.id = u.role_id
-            JOIN exam_questions q ON q.id = w.question_id
+            JOIN exam_questions q ON q.id = wr.question_id
             JOIN exam_papers p ON p.id = q.paper_id
             WHERE r.role_name = '材料员'
-              AND p.source_type = 'exam'
-            GROUP BY w.question_id
-            ORDER BY wrong_count DESC, last_wrong_at DESC, w.question_id DESC
-            LIMIT ?
+            ORDER BY wr.wrong_at DESC, wr.question_id DESC
             """,
-            (limit,),
         ).fetchall()
-        items = []
+        grouped = {}
         for row in rows:
-            question = dict(row)
-            question["id"] = row["question_id"]
+            item = grouped.setdefault(
+                row["question_id"],
+                {
+                    "question": dict(row),
+                    "wrong_count": 0,
+                    "last_wrong_at": row["wrong_at"],
+                    "source_labels": set(),
+                    "clerks": {},
+                    "answer_details": [],
+                },
+            )
+            item["wrong_count"] += int(row["wrong_count"] or 0)
+            item["source_labels"].add(row["source_label"])
+            if row["wrong_at"] > item["last_wrong_at"]:
+                item["last_wrong_at"] = row["wrong_at"]
+            clerk = item["clerks"].setdefault(row["user_id"], {"name": row["user_name"], "wrong_count": 0})
+            clerk["wrong_count"] += int(row["wrong_count"] or 0)
+            item["answer_details"].append(
+                {
+                    "user_name": row["user_name"],
+                    "source_label": row["source_label"],
+                    "wrong_count": int(row["wrong_count"] or 0),
+                    "answer_text": row["answer_text"],
+                }
+            )
+
+        items = []
+        for group in sorted(
+            grouped.values(),
+            key=lambda item: (item["wrong_count"], item["last_wrong_at"]),
+            reverse=True,
+        )[:limit]:
+            question = group["question"]
+            question["id"] = question["question_id"]
             option_rows = conn.execute(
                 """
                 SELECT option_key, option_text
@@ -1214,12 +1260,17 @@ def list_material_clerk_wrong_questions(limit: int = 100) -> list[dict]:
                 ensure_question_options(question),
                 "",
                 False,
-                row["last_wrong_at"],
+                group["last_wrong_at"],
                 None,
             )
-            item["wrong_count"] = row["wrong_count"]
-            item["clerk_count"] = row["clerk_count"]
-            item["clerk_details"] = row["clerk_details"]
+            item["wrong_count"] = group["wrong_count"]
+            item["clerk_count"] = len(group["clerks"])
+            item["clerk_details"] = "、".join(
+                f"{clerk['name']}（{clerk['wrong_count']}次）"
+                for clerk in group["clerks"].values()
+            )
+            item["source_labels"] = "、".join(sorted(group["source_labels"]))
+            item["answer_details"] = group["answer_details"]
             items.append(item)
         return items
     finally:
@@ -1471,6 +1522,18 @@ def _raw_paper_score_total(questions: list[dict]) -> float:
 def start_attempt(user_id, paper_id, retake_eligibility_id: int | None = None) -> int:
     conn, should_close = _connection()
     try:
+        active_attempt = conn.execute(
+            """
+            SELECT id
+            FROM exam_attempts
+            WHERE user_id = ? AND status = 'in_progress'
+            ORDER BY started_at DESC, id DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+        if active_attempt:
+            raise ValueError("You already have an exam in progress")
         if retake_eligibility_id is not None:
             eligibility = conn.execute(
                 """
@@ -2054,7 +2117,7 @@ def list_results(filters=None) -> list[dict]:
                        att.final_subjective_score, att.final_score,
                        att.started_at, att.submitted_at,
                        ROW_NUMBER() OVER (
-                           PARTITION BY att.user_id, att.paper_id
+                           PARTITION BY att.user_id
                            ORDER BY
                                CASE WHEN att.final_score IS NULL THEN 1 ELSE 0 END,
                                att.final_score DESC,
