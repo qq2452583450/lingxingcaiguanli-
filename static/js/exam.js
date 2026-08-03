@@ -713,9 +713,9 @@ async function loadFormalExamAdmin() {
 
 async function loadMaterialClerkWrongQuestions() {
     if (!canManageExam(currentUser)) return;
+    const filters = materialClerkWrongQuestionDateFilters();
     examLoading('正在加载材料员错题集合...');
     try {
-        const filters = materialClerkWrongQuestionDateFilters();
         const query = new URLSearchParams(filters).toString();
         const data = await examJson(`/api/exam/admin/practice/wrong-questions${query ? `?${query}` : ''}`);
         renderMaterialClerkWrongQuestions(data.data || [], filters);
@@ -763,7 +763,7 @@ function renderMaterialClerkWrongQuestions(records, filters = {}) {
                     <input id="materialClerkWrongStartDate" type="date" value="${examEscape(filters.start_date || '')}" aria-label="开始日期">
                     <span>至</span>
                     <input id="materialClerkWrongEndDate" type="date" value="${examEscape(filters.end_date || '')}" aria-label="结束日期">
-                    <button class="btn btn-secondary" type="button" onclick="loadMaterialClerkWrongQuestions()">按日期统计</button>
+                    <button class="btn btn-secondary" type="button" onclick="loadMaterialClerkWrongQuestions()">查询</button>
                     <button class="btn btn-secondary" type="button" onclick="exportMaterialClerkWrongQuestions()"><i data-lucide="download"></i>导出</button>
                     <button class="btn btn-secondary" type="button" onclick="loadMaterialClerkWrongQuestions()"><i data-lucide="refresh-cw"></i>刷新</button>
                 </div>

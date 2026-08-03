@@ -170,7 +170,8 @@ def test_exam_managers_can_open_material_clerk_wrong_question_collection():
     assert "材料员错题集合" in exam_js
     assert "材料员错答" in exam_js
     assert "materialClerkWrongStartDate" in exam_js
-    assert "按日期统计" in exam_js
+    assert ">查询</button>" in exam_js
+    assert exam_js.index("const filters = materialClerkWrongQuestionDateFilters();") < exam_js.index("examLoading('正在加载材料员错题集合...');")
 
 
 def test_exam_admin_can_control_random_formal_exam_pool():
