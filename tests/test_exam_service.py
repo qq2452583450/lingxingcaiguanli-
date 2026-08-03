@@ -718,12 +718,21 @@ def test_start_attempt_rejects_a_second_in_progress_exam(test_db):
 def test_manager_results_include_material_clerks_without_an_exam_attempt(test_db):
     manager_id = seed_user(test_db, "result_manager", "成绩管理员", "系统管理员")
     clerk_id = seed_user(test_db, "no_exam_clerk", "刘光华", "材料员")
+    completed_clerk_id = seed_user(test_db, "completed_clerk", "已完成材料员", "材料员")
+    paper, _, _ = load_exam(test_db)
+    completed_attempt_id = start_attempt(completed_clerk_id, paper["id"])
+    test_db.execute(
+        "UPDATE exam_attempts SET status = 'completed', final_score = 90, submitted_at = ? WHERE id = ?",
+        ("2026-08-03 10:00:00", completed_attempt_id),
+    )
+    test_db.commit()
 
     results = list_results({"viewer": {"id": manager_id, "role_name": "系统管理员"}})
 
     row = next(item for item in results if item["user_id"] == clerk_id)
     assert row["status"] == "not_completed"
     assert row["attempt_id"] is None
+    assert results[0]["user_id"] == clerk_id
 
 
 def test_delete_exam_attempt_removes_formal_answers_and_reviews_but_keeps_practice(test_db):

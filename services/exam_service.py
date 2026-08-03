@@ -2161,6 +2161,7 @@ def list_results(filters=None) -> list[dict]:
                         "suggested_subjective_score": None, "final_subjective_score": None,
                         "final_score": None, "started_at": None, "submitted_at": None,
                     })
+            results.sort(key=lambda row: row.get("status") != "not_completed")
         return results
     finally:
         if should_close:
