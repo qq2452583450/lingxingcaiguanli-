@@ -892,6 +892,42 @@ def test_exam_managers_can_view_aggregated_material_clerk_wrong_questions(client
     assert client.get("/api/exam/admin/practice/wrong-questions").status_code == 403
 
 
+def test_material_clerk_wrong_questions_keep_each_questions_own_options(client, test_db):
+    from services.exam_service import record_practice_answers
+
+    seed_exam()
+    manager_id = seed_user(test_db, "wrong_options_manager", "选项管理员", ROLE_MANAGER)
+    clerk_id = seed_user(test_db, "wrong_options_clerk", "选项材料员", ROLE_CLERK)
+    objectives = [
+        question for question in get_paper_questions(papers(test_db)[0]["id"])
+        if question["question_type"] in {"single_choice", "multiple_choice", "true_false"}
+    ]
+    first_question, second_question = objectives[:2]
+    test_db.execute(
+        "UPDATE exam_question_options SET option_text = ? WHERE question_id = ? AND option_key = 'A'",
+        ("仅第二题的选项A", second_question["id"]),
+    )
+    test_db.commit()
+    record_practice_answers(
+        clerk_id,
+        {
+            str(first_question["id"]): definitely_wrong_objective_answer(
+                first_question, first_question["correct_answer"]
+            ),
+            str(second_question["id"]): definitely_wrong_objective_answer(
+                second_question, second_question["correct_answer"]
+            ),
+        },
+    )
+    login(client, manager_id, "wrong_options_manager", "选项管理员", ROLE_MANAGER)
+
+    data = client.get("/api/exam/admin/practice/wrong-questions").get_json()
+    rows = {row["question_id"]: row for row in data["data"]}
+
+    assert rows[first_question["id"]]["options"][0]["text"] == first_question["options"][0]["text"]
+    assert rows[second_question["id"]]["options"][0]["text"] == "仅第二题的选项A"
+
+
 def test_wrong_practice_can_be_retried_and_is_removed_after_a_correct_answer(client, test_db):
     from services.exam_service import record_practice_answers
 

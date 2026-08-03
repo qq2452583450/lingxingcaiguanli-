@@ -1282,7 +1282,7 @@ def list_material_clerk_wrong_questions(
                 WHERE question_id = ?
                 ORDER BY option_key
                 """,
-                (row["question_id"],),
+                (question["question_id"],),
             ).fetchall()
             question["options"] = [
                 {"key": option["option_key"], "text": option["option_text"]}
