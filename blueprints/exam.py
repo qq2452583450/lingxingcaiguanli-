@@ -835,11 +835,13 @@ def disable_formal_exam_pool():
 
 @exam_bp.route("/admin/results", methods=["GET"])
 def admin_results():
-    _, denied = _require_exam_manager()
+    user, denied = _require_exam_manager()
     if denied:
         return denied
 
-    return jsonify({"success": True, "data": list_results(_filters_from_request())})
+    filters = _filters_from_request()
+    filters["viewer"] = user
+    return jsonify({"success": True, "data": list_results(filters)})
 
 
 @exam_bp.route("/admin/checkins", methods=["GET"])

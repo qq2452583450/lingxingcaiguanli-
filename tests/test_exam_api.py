@@ -963,6 +963,20 @@ def test_manager_can_delete_exam_attempt_result(client, test_db):
     assert attempt_id not in {row["attempt_id"] for row in results["data"]}
 
 
+def test_manager_results_include_material_clerk_without_an_exam(client, test_db):
+    manager_id = seed_user(test_db, "missing_result_manager", "成绩管理员", ROLE_MANAGER)
+    clerk_id = seed_user(test_db, "missing_result_clerk", "刘光华", ROLE_CLERK)
+    login(client, manager_id, "missing_result_manager", "成绩管理员", ROLE_MANAGER)
+
+    response = client.get("/api/exam/admin/results")
+    data = response.get_json()
+
+    assert response.status_code == 200
+    row = next(item for item in data["data"] if item["user_id"] == clerk_id)
+    assert row["status"] == "not_completed"
+    assert row["attempt_id"] is None
+
+
 def test_material_clerk_cannot_delete_exam_attempt_result(client, test_db):
     seed_exam()
     select_current_paper(test_db)
