@@ -808,6 +808,45 @@ def test_wrong_practice_endpoint_scopes_to_current_user(client, test_db):
     assert data["data"][0]["question_id"] == question["id"]
 
 
+def test_exam_managers_can_view_aggregated_material_clerk_wrong_questions(client, test_db):
+    from services.exam_service import record_practice_answers
+
+    seed_exam()
+    manager_id = seed_user(test_db, "wrong_manager", "错题管理员", ROLE_MANAGER)
+    clerk_one_id = seed_user(test_db, "wrong_clerk_one", "材料员甲", ROLE_CLERK)
+    clerk_two_id = seed_user(test_db, "wrong_clerk_two", "材料员乙", ROLE_CLERK)
+    owner_id = seed_user(test_db, "wrong_owner", "审批负责人", ROLE_APPROVAL_OWNER)
+    question = next(
+        q for q in get_paper_questions(papers(test_db)[0]["id"])
+        if q["question_type"] in {"single_choice", "true_false"}
+    )
+    wrong_answer = "B" if question["correct_answer"] != "B" else "A"
+    record_practice_answers(clerk_one_id, {str(question["id"]): wrong_answer})
+    record_practice_answers(clerk_one_id, {str(question["id"]): wrong_answer})
+    record_practice_answers(clerk_two_id, {str(question["id"]): wrong_answer})
+    record_practice_answers(owner_id, {str(question["id"]): wrong_answer})
+
+    login(client, manager_id, "wrong_manager", "错题管理员", ROLE_MANAGER)
+    response = client.get("/api/exam/admin/practice/wrong-questions")
+    data = response.get_json()
+
+    assert response.status_code == 200
+    assert data["success"] is True
+    assert len(data["data"]) == 1
+    row = data["data"][0]
+    assert row["question_id"] == question["id"]
+    assert row["wrong_count"] == 3
+    assert row["clerk_count"] == 2
+    assert "材料员甲（2次）" in row["clerk_details"]
+    assert "材料员乙（1次）" in row["clerk_details"]
+
+    login(client, owner_id, "wrong_owner", "审批负责人", ROLE_APPROVAL_OWNER)
+    assert client.get("/api/exam/admin/practice/wrong-questions").status_code == 200
+
+    login(client, clerk_one_id, "wrong_clerk_one", "材料员甲", ROLE_CLERK)
+    assert client.get("/api/exam/admin/practice/wrong-questions").status_code == 403
+
+
 def test_wrong_practice_can_be_retried_and_is_removed_after_a_correct_answer(client, test_db):
     from services.exam_service import record_practice_answers
 

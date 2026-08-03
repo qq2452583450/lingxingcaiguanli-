@@ -101,7 +101,7 @@ async function loadExamCenter() {
         if (!canTakeExam(currentUser) && ['practice', 'exam', 'retakes', 'results'].includes(examCurrentTab)) {
             examCurrentTab = 'papers';
         }
-        if (!canManageExam(currentUser) && ['formalExam', 'papers', 'reviews', 'checkins', 'adminResults'].includes(examCurrentTab)) {
+        if (!canManageExam(currentUser) && ['formalExam', 'papers', 'reviews', 'checkins', 'wrongQuestions', 'adminResults'].includes(examCurrentTab)) {
             examCurrentTab = 'practice';
         }
         await showExamTab(examCurrentTab);
@@ -114,7 +114,7 @@ async function showExamTab(tab) {
     if (!canTakeExam(currentUser) && ['practice', 'exam', 'retakes', 'results'].includes(tab)) {
         tab = 'papers';
     }
-    if (!canManageExam(currentUser) && ['formalExam', 'papers', 'reviews', 'checkins', 'adminResults'].includes(tab)) {
+    if (!canManageExam(currentUser) && ['formalExam', 'papers', 'reviews', 'checkins', 'wrongQuestions', 'adminResults'].includes(tab)) {
         tab = 'practice';
     }
     examCurrentTab = tab;
@@ -138,6 +138,8 @@ async function showExamTab(tab) {
         await loadPendingReviews();
     } else if (tab === 'checkins') {
         await loadCheckinRecords();
+    } else if (tab === 'wrongQuestions') {
+        await loadMaterialClerkWrongQuestions();
     } else if (tab === 'adminResults') {
         await loadAllExamResults();
     }
@@ -706,6 +708,41 @@ async function loadFormalExamAdmin() {
     } catch (e) {
         examError(e.message || '正式考试设置加载失败');
     }
+}
+
+async function loadMaterialClerkWrongQuestions() {
+    if (!canManageExam(currentUser)) return;
+    examLoading('正在加载材料员错题集合...');
+    try {
+        const data = await examJson('/api/exam/admin/practice/wrong-questions');
+        renderMaterialClerkWrongQuestions(data.data || []);
+    } catch (e) {
+        examError(e.message || '材料员错题集合加载失败');
+    }
+}
+
+function renderMaterialClerkWrongQuestions(records) {
+    const rows = records.map((item, index) => `
+        <div class="exam-question exam-wrong">
+            <div class="exam-question-head">
+                <strong>${index + 1}. ${examEscape(item.stem || '')}</strong>
+                <span>错题频次 ${examEscape(item.wrong_count || 0)} 次</span>
+            </div>
+            <div class="exam-question-paper">${examEscape(item.paper_title || '')}</div>
+            <p><strong>涉及材料员：</strong>${examEscape(item.clerk_count || 0)} 人（${examEscape(item.clerk_details || '')}）</p>
+            <p><strong>正确答案：</strong>${examEscape(answerTextFromOptions(item, item.correct_answer))}</p>
+            <p><strong>解析：</strong>${examEscape(examExplanationText(item))}</p>
+            <p><strong>最近答错：</strong>${examEscape(examDate(item.created_at))}</p>
+        </div>`).join('');
+    examContent().innerHTML = `
+        <div class="exam-panel">
+            <div class="exam-toolbar">
+                <div><h2>材料员错题集合</h2><p>按题目汇总当前未订正错题，错题频次为材料员累计答错次数。</p></div>
+                <button class="btn btn-secondary" type="button" onclick="loadMaterialClerkWrongQuestions()"><i data-lucide="refresh-cw"></i>刷新</button>
+            </div>
+            <div class="exam-question-list">${rows || '<div class="empty-message">暂无材料员错题</div>'}</div>
+        </div>`;
+    examRefreshIcons();
 }
 
 async function enableFormalExamPool() {

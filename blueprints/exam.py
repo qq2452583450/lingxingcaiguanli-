@@ -32,6 +32,7 @@ from services.exam_service import (
     list_results,
     list_monthly_checkin_reports,
     list_retake_eligibilities,
+    list_material_clerk_wrong_questions,
     list_wrong_practice_questions,
     record_practice_answers,
     retry_wrong_practice_answers,
@@ -467,6 +468,17 @@ def wrong_practice():
     limit = request.args.get("limit", default=100, type=int)
     limit = max(1, min(limit or 100, 500))
     return jsonify({"success": True, "data": list_wrong_practice_questions(user["id"], limit=limit)})
+
+
+@exam_bp.route("/admin/practice/wrong-questions", methods=["GET"])
+def admin_material_clerk_wrong_questions():
+    _, denied = _require_exam_manager()
+    if denied:
+        return denied
+
+    limit = request.args.get("limit", default=100, type=int)
+    limit = max(1, min(limit or 100, 500))
+    return jsonify({"success": True, "data": list_material_clerk_wrong_questions(limit=limit)})
 
 
 @exam_bp.route("/practice/wrong/questions", methods=["GET"])

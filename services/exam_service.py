@@ -1162,6 +1162,71 @@ def list_wrong_practice_questions(user_id: int, limit: int = 100) -> list[dict]:
             conn.close()
 
 
+def list_material_clerk_wrong_questions(limit: int = 100) -> list[dict]:
+    """Return unresolved practice wrong questions aggregated across material clerks."""
+    _sync_question_bank_references_once()
+    conn, should_close = _connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT w.question_id,
+                   SUM(w.wrong_count) AS wrong_count,
+                   COUNT(*) AS clerk_count,
+                   GROUP_CONCAT(
+                       COALESCE(NULLIF(u.real_name, ''), u.username) || '（' || w.wrong_count || '次）',
+                       '、'
+                   ) AS clerk_details,
+                   MAX(w.last_wrong_at) AS last_wrong_at,
+                   q.paper_id, p.title AS paper_title,
+                   q.question_type, q.order_no, q.stem, q.correct_answer,
+                   q.reference_answer, q.score
+            FROM exam_practice_wrong_questions w
+            JOIN users u ON u.id = w.user_id
+            JOIN roles r ON r.id = u.role_id
+            JOIN exam_questions q ON q.id = w.question_id
+            JOIN exam_papers p ON p.id = q.paper_id
+            WHERE r.role_name = '材料员'
+              AND p.source_type = 'exam'
+            GROUP BY w.question_id
+            ORDER BY wrong_count DESC, last_wrong_at DESC, w.question_id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        items = []
+        for row in rows:
+            question = dict(row)
+            question["id"] = row["question_id"]
+            option_rows = conn.execute(
+                """
+                SELECT option_key, option_text
+                FROM exam_question_options
+                WHERE question_id = ?
+                ORDER BY option_key
+                """,
+                (row["question_id"],),
+            ).fetchall()
+            question["options"] = [
+                {"key": option["option_key"], "text": option["option_text"]}
+                for option in option_rows
+            ]
+            item = _practice_item(
+                ensure_question_options(question),
+                "",
+                False,
+                row["last_wrong_at"],
+                None,
+            )
+            item["wrong_count"] = row["wrong_count"]
+            item["clerk_count"] = row["clerk_count"]
+            item["clerk_details"] = row["clerk_details"]
+            items.append(item)
+        return items
+    finally:
+        if should_close:
+            conn.close()
+
+
 def get_wrong_practice_questions_for_retry(user_id: int, limit: int = 100) -> list[dict]:
     _sync_question_bank_references_once()
     conn, should_close = _connection()
