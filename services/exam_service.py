@@ -1162,14 +1162,38 @@ def list_wrong_practice_questions(user_id: int, limit: int = 100) -> list[dict]:
             conn.close()
 
 
-def list_material_clerk_wrong_questions(limit: int = 100) -> list[dict]:
-    """Return material clerks' practice and formal-exam wrong questions."""
+def list_material_clerk_wrong_questions(
+    limit: int = 100,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> list[dict]:
+    """Return material clerks' wrong questions, optionally counted within a date range."""
     _sync_question_bank_references_once()
-    conn, should_close = _connection()
-    try:
-        rows = conn.execute(
-            """
-            WITH wrong_records AS (
+    start_day = _parse_date(start_date) if start_date else None
+    end_day = _parse_date(end_date) if end_date else None
+    if start_day and end_day and start_day > end_day:
+        raise ValueError("Start date cannot be later than end date")
+
+    date_conditions = []
+    date_params = []
+    if start_day:
+        date_conditions.append("wr.wrong_at >= ?")
+        date_params.append(start_day.isoformat())
+    if end_day:
+        date_conditions.append("wr.wrong_at < ?")
+        date_params.append((end_day + timedelta(days=1)).isoformat())
+    date_where_sql = " AND " + " AND ".join(date_conditions) if date_conditions else ""
+    practice_records_sql = """
+                SELECT pa.question_id, pa.user_id, 1 AS wrong_count,
+                       pa.answer_text,
+                       pa.created_at AS wrong_at,
+                       '平时打卡' AS source_label
+                FROM exam_practice_attempts pa
+                JOIN exam_questions q ON q.id = pa.question_id
+                JOIN exam_papers p ON p.id = q.paper_id
+                WHERE pa.is_correct = 0
+                  AND p.source_type = 'exam'
+    """ if date_conditions else """
                 SELECT w.question_id, w.user_id, w.wrong_count,
                        w.last_answer_text AS answer_text,
                        w.last_wrong_at AS wrong_at,
@@ -1178,6 +1202,13 @@ def list_material_clerk_wrong_questions(limit: int = 100) -> list[dict]:
                 JOIN exam_questions q ON q.id = w.question_id
                 JOIN exam_papers p ON p.id = q.paper_id
                 WHERE p.source_type = 'exam'
+    """
+    conn, should_close = _connection()
+    try:
+        rows = conn.execute(
+            f"""
+            WITH wrong_records AS (
+                {practice_records_sql}
 
                 UNION ALL
 
@@ -1203,9 +1234,10 @@ def list_material_clerk_wrong_questions(limit: int = 100) -> list[dict]:
             JOIN roles r ON r.id = u.role_id
             JOIN exam_questions q ON q.id = wr.question_id
             JOIN exam_papers p ON p.id = q.paper_id
-            WHERE r.role_name = '材料员'
+            WHERE r.role_name = '材料员'{date_where_sql}
             ORDER BY wr.wrong_at DESC, wr.question_id DESC
             """,
+            date_params,
         ).fetchall()
         grouped = {}
         for row in rows:

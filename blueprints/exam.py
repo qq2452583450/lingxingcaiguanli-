@@ -312,7 +312,7 @@ def _option_answer_text(question, answer_text):
     ) or answer_text
 
 
-def _material_clerk_wrong_questions_workbook(rows):
+def _material_clerk_wrong_questions_workbook(rows, start_date=None, end_date=None):
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
 
@@ -321,7 +321,7 @@ def _material_clerk_wrong_questions_workbook(rows):
     sheet.title = "材料员错题集合"
     headers = [
         "序号", "来源", "试卷", "题型", "题目", "正确答案", "解析",
-        "错题频次", "涉及材料员数", "材料员错答详情", "最近答错时间",
+        "错题频次", "涉及材料员数", "材料员错答详情", "最近答错时间", "统计日期范围",
     ]
     sheet.append(headers)
     header_fill = PatternFill("solid", fgColor="1F4E78")
@@ -330,6 +330,7 @@ def _material_clerk_wrong_questions_workbook(rows):
         cell.fill = header_fill
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
+    date_range = f"{start_date or '开始'} 至 {end_date or '结束'}" if start_date or end_date else "全部日期"
     for index, row in enumerate(rows, start=1):
         answer_details = "\n".join(
             f"{detail['user_name']}（{detail['source_label']}，{detail['wrong_count']}次）："
@@ -348,12 +349,13 @@ def _material_clerk_wrong_questions_workbook(rows):
             row.get("clerk_count", 0),
             answer_details,
             row.get("created_at", ""),
+            date_range,
         ])
 
     for row in sheet.iter_rows():
         for cell in row:
             cell.alignment = Alignment(vertical="top", wrap_text=True)
-    for column, width in enumerate((8, 16, 24, 14, 42, 28, 42, 12, 14, 46, 20), start=1):
+    for column, width in enumerate((8, 16, 24, 14, 42, 28, 42, 12, 14, 46, 20, 24), start=1):
         sheet.column_dimensions[chr(64 + column)].width = width
 
     output = BytesIO()
@@ -540,7 +542,15 @@ def admin_material_clerk_wrong_questions():
 
     limit = request.args.get("limit", default=100, type=int)
     limit = max(1, min(limit or 100, 500))
-    return jsonify({"success": True, "data": list_material_clerk_wrong_questions(limit=limit)})
+    try:
+        data = list_material_clerk_wrong_questions(
+            limit=limit,
+            start_date=request.args.get("start_date") or None,
+            end_date=request.args.get("end_date") or None,
+        )
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+    return jsonify({"success": True, "data": data})
 
 
 @exam_bp.route("/admin/practice/wrong-questions/export", methods=["GET"])
@@ -549,9 +559,17 @@ def export_material_clerk_wrong_questions():
     if denied:
         return denied
 
-    output = _material_clerk_wrong_questions_workbook(
-        list_material_clerk_wrong_questions(limit=500)
-    )
+    start_date = request.args.get("start_date") or None
+    end_date = request.args.get("end_date") or None
+    try:
+        rows = list_material_clerk_wrong_questions(
+            limit=500,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except ValueError as exc:
+        return _json_error(str(exc), 400)
+    output = _material_clerk_wrong_questions_workbook(rows, start_date, end_date)
     return send_file(
         output,
         as_attachment=True,

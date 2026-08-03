@@ -864,6 +864,27 @@ def test_exam_managers_can_view_aggregated_material_clerk_wrong_questions(client
     assert workbook.active["F1"].value == "正确答案"
     assert workbook.active["J2"].value
 
+    test_db.execute(
+        "UPDATE exam_practice_attempts SET created_at = '2026-08-01 09:00:00'"
+    )
+    test_db.commit()
+    filtered = client.get(
+        "/api/exam/admin/practice/wrong-questions?start_date=2026-08-03&end_date=2026-08-03"
+    ).get_json()
+    assert filtered["success"] is True
+    assert filtered["data"][0]["wrong_count"] == 1
+    assert filtered["data"][0]["source_labels"] == "正式考试"
+
+    filtered_export = client.get(
+        "/api/exam/admin/practice/wrong-questions/export?start_date=2026-08-03&end_date=2026-08-03"
+    )
+    filtered_workbook = load_workbook(BytesIO(filtered_export.data))
+    assert filtered_export.status_code == 200
+    assert filtered_workbook.active["L2"].value == "2026-08-03 至 2026-08-03"
+
+    invalid_date = client.get("/api/exam/admin/practice/wrong-questions?start_date=2026-08-04&end_date=2026-08-03")
+    assert invalid_date.status_code == 400
+
     login(client, owner_id, "wrong_owner", "审批负责人", ROLE_APPROVAL_OWNER)
     assert client.get("/api/exam/admin/practice/wrong-questions").status_code == 200
 

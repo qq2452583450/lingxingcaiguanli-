@@ -715,14 +715,32 @@ async function loadMaterialClerkWrongQuestions() {
     if (!canManageExam(currentUser)) return;
     examLoading('正在加载材料员错题集合...');
     try {
-        const data = await examJson('/api/exam/admin/practice/wrong-questions');
-        renderMaterialClerkWrongQuestions(data.data || []);
+        const filters = materialClerkWrongQuestionDateFilters();
+        const query = new URLSearchParams(filters).toString();
+        const data = await examJson(`/api/exam/admin/practice/wrong-questions${query ? `?${query}` : ''}`);
+        renderMaterialClerkWrongQuestions(data.data || [], filters);
     } catch (e) {
         examError(e.message || '材料员错题集合加载失败');
     }
 }
 
-function renderMaterialClerkWrongQuestions(records) {
+function materialClerkWrongQuestionDateFilters() {
+    return {
+        start_date: document.getElementById('materialClerkWrongStartDate')?.value || '',
+        end_date: document.getElementById('materialClerkWrongEndDate')?.value || ''
+    };
+}
+
+function exportMaterialClerkWrongQuestions() {
+    const query = new URLSearchParams(materialClerkWrongQuestionDateFilters()).toString();
+    window.location.href = `/api/exam/admin/practice/wrong-questions/export${query ? `?${query}` : ''}`;
+}
+
+function renderMaterialClerkWrongQuestions(records, filters = {}) {
+    const hasDateFilter = filters.start_date || filters.end_date;
+    const description = hasDateFilter
+        ? '按所选日期范围统计材料员实际答错记录，包含平时打卡和正式考试。'
+        : '按题目汇总当前未订正错题，错题频次为材料员累计答错次数。';
     const rows = records.map((item, index) => `
         <div class="exam-question exam-wrong">
             <div class="exam-question-head">
@@ -740,9 +758,13 @@ function renderMaterialClerkWrongQuestions(records) {
     examContent().innerHTML = `
         <div class="exam-panel">
             <div class="exam-toolbar">
-                <div><h2>材料员错题集合</h2><p>按题目汇总当前未订正错题，错题频次为材料员累计答错次数。</p></div>
+                <div><h2>材料员错题集合</h2><p>${description}</p></div>
                 <div class="exam-actions">
-                    <button class="btn btn-secondary" type="button" onclick="window.location.href='/api/exam/admin/practice/wrong-questions/export'"><i data-lucide="download"></i>导出</button>
+                    <input id="materialClerkWrongStartDate" type="date" value="${examEscape(filters.start_date || '')}" aria-label="开始日期">
+                    <span>至</span>
+                    <input id="materialClerkWrongEndDate" type="date" value="${examEscape(filters.end_date || '')}" aria-label="结束日期">
+                    <button class="btn btn-secondary" type="button" onclick="loadMaterialClerkWrongQuestions()">按日期统计</button>
+                    <button class="btn btn-secondary" type="button" onclick="exportMaterialClerkWrongQuestions()"><i data-lucide="download"></i>导出</button>
                     <button class="btn btn-secondary" type="button" onclick="loadMaterialClerkWrongQuestions()"><i data-lucide="refresh-cw"></i>刷新</button>
                 </div>
             </div>
