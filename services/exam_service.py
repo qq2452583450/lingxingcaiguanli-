@@ -2140,7 +2140,28 @@ def list_results(filters=None) -> list[dict]:
             """,
             params,
         ).fetchall()
-        return [dict(row) for row in rows]
+        results = [dict(row) for row in rows]
+        if viewer and can_manage_exam(viewer) and not filters.get("paper_id") and not filters.get("status"):
+            listed_user_ids = {row["user_id"] for row in results}
+            material_clerks = conn.execute(
+                """
+                SELECT u.id AS user_id, u.real_name AS user_name, u.username, r.role_name
+                FROM users u JOIN roles r ON r.id = u.role_id
+                WHERE r.role_name = '材料员' AND COALESCE(u.is_active, 1) = 1
+                ORDER BY u.id
+                """
+            ).fetchall()
+            for clerk in material_clerks:
+                if clerk["user_id"] not in listed_user_ids:
+                    results.append({
+                        "id": None, "attempt_id": None, "user_id": clerk["user_id"],
+                        "user_name": clerk["user_name"], "username": clerk["username"],
+                        "role_name": clerk["role_name"], "paper_id": None, "paper_title": "-",
+                        "status": "not_completed", "objective_score": None,
+                        "suggested_subjective_score": None, "final_subjective_score": None,
+                        "final_score": None, "started_at": None, "submitted_at": None,
+                    })
+        return results
     finally:
         if should_close:
             conn.close()

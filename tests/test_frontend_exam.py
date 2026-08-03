@@ -158,6 +158,7 @@ def test_exam_admin_checkin_records_and_result_delete_frontend():
     assert "/api/exam/admin/attempts/" in exam_js
     assert "method: 'DELETE'" in exam_js
     assert "删除" in exam_js
+    assert "not_completed" in exam_js
 
 
 def test_exam_managers_can_open_material_clerk_wrong_question_collection():

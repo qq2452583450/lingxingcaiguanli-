@@ -715,6 +715,17 @@ def test_start_attempt_rejects_a_second_in_progress_exam(test_db):
     assert get_attempt(attempt_id)["status"] == "in_progress"
 
 
+def test_manager_results_include_material_clerks_without_an_exam_attempt(test_db):
+    manager_id = seed_user(test_db, "result_manager", "成绩管理员", "系统管理员")
+    clerk_id = seed_user(test_db, "no_exam_clerk", "刘光华", "材料员")
+
+    results = list_results({"viewer": {"id": manager_id, "role_name": "系统管理员"}})
+
+    row = next(item for item in results if item["user_id"] == clerk_id)
+    assert row["status"] == "not_completed"
+    assert row["attempt_id"] is None
+
+
 def test_delete_exam_attempt_removes_formal_answers_and_reviews_but_keeps_practice(test_db):
     paper, objective, subjective = load_exam(test_db)
     clerk_id = seed_user(test_db, "delete_clerk", "\u5220\u9664\u6750\u6599\u5458", "\u6750\u6599\u5458")
