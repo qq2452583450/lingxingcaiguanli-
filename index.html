@@ -464,6 +464,10 @@
                     <h1>入库管理</h1>
                 </div>
                 <div class="toolbar">
+                    <div class="search-box">
+                        <input type="text" id="stockInSearch" placeholder="搜索材料、供应商、项目或单号" onkeydown="if(event.key==='Enter') searchStockIn()" style="width:280px;">
+                        <button class="btn btn-primary" type="button" onclick="searchStockIn()">搜索</button>
+                    </div>
                     <button class="btn btn-secondary" onclick="loadStockIn()">刷新</button>
                 </div>
                 <div class="table-container">
@@ -499,6 +503,7 @@
                         <tbody id="stockInTable"></tbody>
                     </table>
                 </div>
+                <div class="pagination" id="stockInPagination"></div>
             </div>
 
             <!-- 出库管理 -->
@@ -593,6 +598,10 @@
                     <h1>库存管理</h1>
                 </div>
                 <div class="toolbar">
+                    <div class="search-box">
+                        <input type="text" id="inventorySearch" placeholder="搜索编码、材料、规格、项目或存放点" onkeydown="if(event.key==='Enter') searchInventory()" style="width:300px;">
+                        <button class="btn btn-primary" type="button" onclick="searchInventory()">搜索</button>
+                    </div>
                     <button class="btn btn-secondary" onclick="loadInventory()">刷新</button>
                 </div>
                 <div class="table-container">
@@ -630,6 +639,7 @@
                         <tbody id="inventoryTable"></tbody>
                     </table>
                 </div>
+                <div class="pagination" id="inventoryPagination"></div>
             </div>
 
             <!-- 供应商管理 -->
@@ -1811,6 +1821,6 @@
     </div>
 
     <script src="/static/js/exam.js?v=2026062601"></script>
-    <script src="/static/js/app.js?v=2026073001"></script>
+    <script src="/static/js/app.js?v=2026080301"></script>
 </body>
 </html>

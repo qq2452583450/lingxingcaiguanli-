@@ -13,6 +13,9 @@ let selectedInquirySupplierId = null;
 let stockInDetails = [];
 let warehouses = [];
 let inventoryCache = [];
+const STOCK_PAGE_SIZE = 50;
+let stockInState = { page: 1, totalPages: 1, total: 0 };
+let inventoryState = { page: 1, totalPages: 1, total: 0 };
 let baseStockInSourceWarehouseId = null;
 let baseStockInEditId = null;
 let baseInventoryCache = [];
@@ -2341,20 +2344,37 @@ async function printInquiryApproval(id) {
 
 // ==================== 入库管理 ====================
 
-async function loadStockIn() {
+async function loadStockIn(page = 1) {
+    const tbody = document.getElementById('stockInTable');
+    const keyword = document.getElementById('stockInSearch')?.value.trim() || '';
+    const params = new URLSearchParams({
+        page: String(page),
+        page_size: String(STOCK_PAGE_SIZE),
+        keyword
+    });
+    if (tbody) tbody.innerHTML = '<tr><td colspan="11" class="loading">加载中...</td></tr>';
     try {
-        const res = await api('/api/stock-in');
+        const res = await api(`/api/stock-in?${params.toString()}`);
         const data = await res.json();
         if (data.success) {
-            renderStockInTable(data.data);
+            stockInState = {
+                page: data.page || page,
+                totalPages: data.total_pages || 1,
+                total: data.total || 0
+            };
+            renderStockInTable(data.data, stockInState.page);
+            renderStockPagination('stockInPagination', stockInState, 'loadStockIn');
             applyPermissionControls();
+        } else {
+            throw new Error(data.message || '加载入库单失败');
         }
     } catch (e) {
+        if (tbody) tbody.innerHTML = '<tr><td colspan="11" class="error-message">加载失败，请点击刷新重试</td></tr>';
         showToast('加载入库单失败', 'error');
     }
 }
 
-function renderStockInTable(stockIn) {
+function renderStockInTable(stockIn, page = 1) {
     const tbody = document.getElementById('stockInTable');
     if (!stockIn || stockIn.length === 0) {
         tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#999;">暂无入库记录</td></tr>';
@@ -2392,7 +2412,7 @@ function renderStockInTable(stockIn) {
             : '<span style="color:#999;">-</span>';
 
         return `<tr ${rowStyle}>
-            <td>${i + 1}</td>
+            <td>${(page - 1) * STOCK_PAGE_SIZE + i + 1}</td>
             <td>${nameStr}</td>
             <td>${inQty} ${escapeHtml(s.unit_name || '')}</td>
             <td>${escapeHtml(s.supplier_name || '-')}</td>
@@ -2408,6 +2428,20 @@ function renderStockInTable(stockIn) {
             </td>
         </tr>`;
     }).join('');
+}
+
+function searchStockIn() {
+    loadStockIn(1);
+}
+
+function renderStockPagination(containerId, state, loaderName) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    container.innerHTML = `
+        <button type="button" onclick="${loaderName}(${state.page - 1})" ${state.page <= 1 ? 'disabled' : ''}>上一页</button>
+        <span>第 ${state.page} / ${state.totalPages} 页，共 ${state.total} 条，每页 ${STOCK_PAGE_SIZE} 条</span>
+        <button type="button" onclick="${loaderName}(${state.page + 1})" ${state.page >= state.totalPages ? 'disabled' : ''}>下一页</button>
+    `;
 }
 
 async function deleteStockIn(id) {
@@ -2502,7 +2536,13 @@ async function openStockOutModal(materialId, materialName, spec, unitPrice, ware
     let stockQty = 0;
     try {
         await loadWarehouses();
-        const res = await api('/api/inventory');
+        const params = new URLSearchParams({
+            material_id: String(materialId),
+            warehouse_id: String(warehouseId),
+            page: '1',
+            page_size: '1'
+        });
+        const res = await api(`/api/inventory?${params.toString()}`);
         const data = await res.json();
         const inv = (data.data || []).find(i => i.material_id == materialId && i.warehouse_id == warehouseId);
         if (inv) {
@@ -2631,25 +2671,42 @@ function renderStockOutTable(stockOut) {
 
 // ==================== 库存管理 ====================
 
-async function loadInventory() {
+async function loadInventory(page = 1) {
+    const tbody = document.getElementById('inventoryTable');
+    const keyword = document.getElementById('inventorySearch')?.value.trim() || '';
+    const params = new URLSearchParams({
+        page: String(page),
+        page_size: String(STOCK_PAGE_SIZE),
+        keyword
+    });
+    if (tbody) tbody.innerHTML = '<tr><td colspan="12" class="loading">加载中...</td></tr>';
     try {
-        const res = await api('/api/inventory');
+        const res = await api(`/api/inventory?${params.toString()}`);
         const data = await res.json();
         if (data.success) {
             inventoryCache = data.data || [];
-            renderInventoryTable(data.data);
+            inventoryState = {
+                page: data.page || page,
+                totalPages: data.total_pages || 1,
+                total: data.total || 0
+            };
+            renderInventoryTable(data.data, inventoryState.page);
+            renderStockPagination('inventoryPagination', inventoryState, 'loadInventory');
             applyPermissionControls();
+        } else {
+            throw new Error(data.message || '加载库存失败');
         }
     } catch (e) {
+        if (tbody) tbody.innerHTML = '<tr><td colspan="12" class="error-message">加载失败，请点击刷新重试</td></tr>';
         showToast('加载库存失败', 'error');
     }
 }
 
-function renderInventoryTable(inventory) {
+function renderInventoryTable(inventory, page = 1) {
     const tbody = document.getElementById('inventoryTable');
     tbody.innerHTML = (inventory || []).map((i, idx) => `
         <tr>
-            <td>${idx + 1}</td>
+            <td>${(page - 1) * STOCK_PAGE_SIZE + idx + 1}</td>
             <td style="font-size:12px;color:var(--txt2);">${escapeHtml(i.material_code || '-')}</td>
             <td>${escapeHtml(i.material_name || '-')}</td>
             <td>${escapeHtml(i.specification || '-')}</td>
@@ -2666,6 +2723,10 @@ function renderInventoryTable(inventory) {
             </td>
         </tr>
     `).join('') || '<tr><td colspan="12" class="loading">暂无数据</td></tr>';
+}
+
+function searchInventory() {
+    loadInventory(1);
 }
 
 // ==================== 材料基地库存 ====================
