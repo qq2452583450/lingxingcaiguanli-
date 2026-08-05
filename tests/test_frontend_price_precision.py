@@ -76,3 +76,18 @@ def test_inquiry_form_uses_selected_supplier_freights_and_landed_total():
     assert "已拟定供应商汇总" in source
     assert "supplier_freights" in submit_body
     assert "selected_supplier_id: null" in submit_body
+
+
+def test_inquiry_detail_table_displays_supplier_freight_and_landed_total():
+    source = Path("static/js/app.js").read_text(encoding="utf-8")
+
+    assert "function renderMergedDetailTable" in source
+    assert "return html + renderInquirySupplierFreightSummary(flatDetails, options);" in source
+    assert "function renderInquirySupplierFreightSummary" in source
+    assert "运费明细（按供应商）" in source
+    assert "approvalFreightAmount" in source
+    assert "<p><strong>运费:</strong>" in source
+    assert "supplierSummaries: data.supplier_summaries" in source
+    assert "supplierFreights: data.supplier_freights" in source
+    assert "tax_freight" in source
+    assert "landed_total" in source

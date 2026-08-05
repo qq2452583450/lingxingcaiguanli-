@@ -1847,6 +1847,7 @@ def print_inquiry_approval(inquiry_id):
     )
 
     supplier_totals = {}
+    supplier_ids_by_name = {}
     if items:
         for item in items:
             quantity = float(item.get('quantity', 1) or 1)
@@ -1857,11 +1858,34 @@ def print_inquiry_approval(inquiry_id):
                     if total_amount is None:
                         total_amount = float(quote.get('tax_price', 0) or 0) * quantity
                     supplier_totals[supplier_name] = supplier_totals.get(supplier_name, 0) + float(total_amount or 0)
+                    supplier_ids_by_name[supplier_name] = quote.get('supplier_id')
+
+    _ensure_inquiry_supplier_freight_table(cursor)
+    cursor.execute("""
+        SELECT supplier_id, tax_freight
+        FROM purchase_inquiry_supplier_freights
+        WHERE inquiry_id = ?
+    """, (inquiry_id,))
+    freight_by_supplier = {
+        row['supplier_id']: float(row['tax_freight'] or 0)
+        for row in cursor.fetchall()
+    }
 
     supplier_totals_html = '　|　'.join(
         f'{text(name)}: <strong>{money(amount)}</strong>'
         for name, amount in supplier_totals.items()
     ) or '-'
+    supplier_freight_html = '　|　'.join(
+        f'{text(name)}: <strong>{money(freight_by_supplier.get(supplier_ids_by_name.get(name), 0))}</strong>'
+        for name in supplier_totals
+    ) or '-'
+    supplier_freight_rows_html = ''.join(
+        f'<tr><td>{text(name)}</td>'
+        f'<td class="num">{money(amount)}</td>'
+        f'<td class="num freight-amount">{money(freight_by_supplier.get(supplier_ids_by_name.get(name), 0))}</td>'
+        f'<td class="num"><strong>{money(amount + freight_by_supplier.get(supplier_ids_by_name.get(name), 0))}</strong></td></tr>'
+        for name, amount in supplier_totals.items()
+    )
 
     rows_html = ''
     if items:
@@ -1997,6 +2021,10 @@ def print_inquiry_approval(inquiry_id):
             .summary-grid div {{ padding: 8px; }}
             .summary-grid div:first-child {{ border-right: 1px solid #222; }}
             .summary-total {{ text-align: right; }}
+            .freight-summary {{ margin-top: 6px; padding-top: 6px; border-top: 1px dashed #999; color: #b45309; }}
+            .freight-detail-title {{ margin-top: 8px; padding: 5px 8px; border: 1px solid #222; border-bottom: 0; font-size: 12px; font-weight: 700; }}
+            .freight-detail-table {{ margin-top: 0; }}
+            .freight-detail-table .freight-amount {{ color: #b45309; font-weight: 700; }}
             .signature-table td {{ height: 46px; font-size: 12px; width: 33.33%; }}
             .approval-title {{ margin-top: 10px; font-size: 12px; font-weight: 700; }}
             .approval-table th, .approval-table td {{ font-size: 11px; }}
@@ -2041,9 +2069,17 @@ def print_inquiry_approval(inquiry_id):
                 </tbody>
             </table>
             <div class="summary-grid">
-                <div><strong>各供应商拟定合计：</strong>{supplier_totals_html}</div>
+                <div>
+                    <strong>各供应商拟定合计：</strong>{supplier_totals_html}
+                    <div class="freight-summary"><strong>各供应商运费：</strong>{supplier_freight_html}</div>
+                </div>
                 <div class="summary-total"><strong>拟定合计：{money(inquiry.get('total_amount'))}</strong>　大写：{amount_chinese}</div>
             </div>
+            <div class="freight-detail-title">运费明细</div>
+            <table class="freight-detail-table">
+                <thead><tr><th>供应商</th><th>货款</th><th>运费</th><th>到货总价</th></tr></thead>
+                <tbody>{supplier_freight_rows_html or '<tr><td colspan="4" class="pending">暂无运费明细</td></tr>'}</tbody>
+            </table>
             <table class="signature-table">
                 <tr>
                     <td>申请人签字：</td>

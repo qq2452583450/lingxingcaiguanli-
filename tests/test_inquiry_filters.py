@@ -798,6 +798,24 @@ def test_approval_print_uses_excel_like_supplier_columns_and_selected_totals(cli
             )
     cursor.execute(
         """
+        INSERT INTO purchase_inquiry_supplier_freights (
+            inquiry_id, supplier_id, tax_freight, tax_exempt_freight,
+            tax_rate, remark, create_time, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (inquiry_id, supplier_a, 5, 4.95, 0.01, "整车配送", "2026-06-11 10:00:00", "2026-06-11 10:00:00"),
+    )
+    cursor.execute(
+        """
+        INSERT INTO purchase_inquiry_supplier_freights (
+            inquiry_id, supplier_id, tax_freight, tax_exempt_freight,
+            tax_rate, remark, create_time, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (inquiry_id, supplier_b, 3, 2.97, 0.01, "整车配送", "2026-06-11 10:00:00", "2026-06-11 10:00:00"),
+    )
+    cursor.execute(
+        """
         INSERT INTO approval_records (order_type, order_id, approver_id, approver_name, result, remark, approval_time)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
@@ -831,6 +849,10 @@ def test_approval_print_uses_excel_like_supplier_columns_and_selected_totals(cli
     assert "各供应商拟定合计" in html
     assert "佩文筛网: <strong>¥40.00</strong>" in html
     assert "捷阳五金: <strong>¥21.00</strong>" in html
+    assert "运费明细" in html
+    assert "各供应商运费" in html
+    assert ">¥5.00</td>" in html
+    assert ">¥3.00</td>" in html
     assert "拟定合计：¥61.00" in html
     assert "申请人签字" in html
     assert "材料员签字" in html

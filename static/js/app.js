@@ -1845,7 +1845,71 @@ function renderMergedDetailTable(flatDetails, options = {}) {
     });
 
     html += '</tbody></table>';
-    return html;
+    return html + renderInquirySupplierFreightSummary(flatDetails, options);
+}
+
+/**
+ * 显示询比价明细对应的供应商级运费和到货总价。
+ * 运费属于供应商级费用，不能重复摊到每一条材料报价中，因此在明细表下方单独汇总展示。
+ */
+function renderInquirySupplierFreightSummary(flatDetails, options = {}) {
+    let summaries = Array.isArray(options.supplierSummaries)
+        ? options.supplierSummaries.filter(Boolean)
+        : [];
+
+    // 兼容旧询比价数据：接口只有 supplier_freights 时，按明细中的供应商报价计算货款。
+    if (!summaries.length && Array.isArray(options.supplierFreights)) {
+        const goodsBySupplier = {};
+        (flatDetails || []).forEach(detail => {
+            const supplierId = detail.supplier_id;
+            if (!supplierId) return;
+            const key = String(supplierId);
+            if (!goodsBySupplier[key]) {
+                goodsBySupplier[key] = {
+                    supplier_id: supplierId,
+                    supplier_name: '供应商' + supplierId,
+                    goods_amount: 0
+                };
+            }
+            goodsBySupplier[key].goods_amount +=
+                (Number(detail.quote_price ?? detail.this_price ?? detail.tax_price) || 0) *
+                (Number(detail.quantity) || 1);
+        });
+        summaries = options.supplierFreights.map(freight => {
+            const key = String(freight.supplier_id);
+            const base = goodsBySupplier[key] || {
+                supplier_id: freight.supplier_id,
+                supplier_name: '供应商' + freight.supplier_id,
+                goods_amount: 0
+            };
+            const taxFreight = Number(freight.tax_freight) || 0;
+            return {
+                ...base,
+                tax_freight: taxFreight,
+                landed_total: base.goods_amount + taxFreight
+            };
+        });
+    }
+
+    if (!summaries.length) return '';
+    return `<div class="inquiry-freight-summary" style="margin-top:12px;">
+        <div style="font-weight:600;margin:8px 0;color:var(--text-primary);">运费明细（按供应商）</div>
+        <table class="data-table"><thead><tr>
+            <th>供应商</th><th>已报价货款</th><th>含税运费</th><th>到货总价</th>
+        </tr></thead><tbody>
+            ${summaries.map(summary => {
+                const goodsAmount = Number(summary.goods_amount) || 0;
+                const taxFreight = Number(summary.tax_freight) || 0;
+                const landedTotal = Number(summary.landed_total ?? (goodsAmount + taxFreight)) || 0;
+                return `<tr>
+                    <td>${escapeHtml(summary.supplier_name || ('供应商' + (summary.supplier_id || '-')))}</td>
+                    <td>¥${goodsAmount.toFixed(2)}</td>
+                    <td style="font-weight:600;color:var(--danger);">¥${taxFreight.toFixed(2)}</td>
+                    <td><strong>¥${landedTotal.toFixed(2)}</strong></td>
+                </tr>`;
+            }).join('')}
+        </tbody></table>
+    </div>`;
 }
 
 function getStatusClass(status) {
@@ -1900,6 +1964,7 @@ async function viewInquiry(id) {
                                 detail_spec: item.detail_spec || '',
                                 unit_name: item.unit_name || '-',
                                 quantity: item.quantity || 1,
+                                supplier_id: q.supplier_id,
                                 supplier_name: q.supplier_name || '-',
                                 library_price: item.library_price || 0,
                                 is_cash_price: item.is_cash_price,
@@ -1929,7 +1994,22 @@ async function viewInquiry(id) {
                     }
                 });
             }
-            const displayTotal = calcTotal > 0 ? calcTotal : (i.total_amount || 0);
+            const selectedSupplierIds = new Set(flatDetails
+                .filter(d => d.is_selected == 1 && d.supplier_id)
+                .map(d => String(d.supplier_id)));
+            if (!selectedSupplierIds.size) {
+                flatDetails.filter(d => d.is_lowest == 1 && d.supplier_id)
+                    .forEach(d => selectedSupplierIds.add(String(d.supplier_id)));
+            }
+            const detailFreightRows = (data.supplier_summaries && data.supplier_summaries.length)
+                ? data.supplier_summaries
+                : (data.supplier_freights || []);
+            const detailFreightTotal = detailFreightRows
+                .filter(summary => selectedSupplierIds.has(String(summary.supplier_id)))
+                .reduce((sum, summary) => sum + (Number(summary.tax_freight) || 0), 0);
+            const displayTotal = calcTotal > 0
+                ? calcTotal + detailFreightTotal
+                : (i.total_amount || 0);
             const qs = i.quote_status || 'draft';
             const qsText = { draft: '未发布', collecting: '报价中', locked: '已锁定' }[qs] || qs;
             const qsClass = { draft: 'status-draft', collecting: 'status-pending', locked: 'status-agreed' }[qs] || '';
@@ -1939,6 +2019,7 @@ async function viewInquiry(id) {
                     <p><strong>日期:</strong> ${i.inquiry_date || '-'}</p>
                     <p><strong>项目:</strong> ${escapeHtml(i.project_display_name || [i.project_city, i.project_code, i.project_name].filter(Boolean).join(' / ') || '-')}</p>
                     <p><strong>申请人:</strong> ${i.applicant_name || '-'}</p>
+                    <p><strong>运费:</strong> ¥${detailFreightTotal.toFixed(2)}</p>
                     <p><strong>总金额:</strong> ¥${displayTotal.toFixed(2)}</p>
                     <p><strong>状态:</strong> <span class="status ${getStatusClass(i.approval_status)}">${i.approval_status}</span></p>
                     <p><strong>报价状态:</strong> <span class="status ${qsClass}">${qsText}</span>${i.quote_deadline ? ` (截止: ${i.quote_deadline})` : ''}</p>
@@ -1955,7 +2036,11 @@ async function viewInquiry(id) {
                 </div>
                 <h4 style="margin:15px 0;">询价明细</h4>
                 <div class="table-container">
-                    ${renderMergedDetailTable(flatDetails, { showSelected: true })}
+                    ${renderMergedDetailTable(flatDetails, {
+                        showSelected: true,
+                        supplierSummaries: data.supplier_summaries,
+                        supplierFreights: data.supplier_freights
+                    })}
                 </div>
             `;
             openModal('modal-detail');
@@ -2119,6 +2204,7 @@ async function approveInquiry(id) {
                             detail_spec: item.detail_spec || '',
                             unit_name: item.unit_name || '-',
                             quantity: item.quantity || 1,
+                            supplier_id: q.supplier_id,
                             supplier_name: q.supplier_name || '-',
                             library_price: item.library_price || 0,
                             is_cash_price: item.is_cash_price,
@@ -2151,7 +2237,24 @@ async function approveInquiry(id) {
                 }
             });
         }
-        const approveDisplayTotal = approveCalcTotal > 0 ? approveCalcTotal : (inquiry.total_amount || 0);
+        const approveSelectedSupplierIds = new Set(flatDetails
+            .filter(d => d.is_selected == 1 && d.supplier_id)
+            .map(d => String(d.supplier_id)));
+        if (!approveSelectedSupplierIds.size) {
+            flatDetails.filter(d => d.is_lowest == 1 && d.supplier_id)
+                .forEach(d => approveSelectedSupplierIds.add(String(d.supplier_id)));
+        }
+        const approveFreightRows = (detailData.supplier_summaries && detailData.supplier_summaries.length)
+            ? detailData.supplier_summaries
+            : (detailData.supplier_freights || []);
+        const approveFreightTotal = approveFreightRows
+            .filter(summary => approveSelectedSupplierIds.has(String(summary.supplier_id)))
+            .reduce((sum, summary) => sum + (Number(summary.tax_freight) || 0), 0);
+        const approveDisplayTotal = approveCalcTotal > 0
+            ? approveCalcTotal + approveFreightTotal
+            : (inquiry.total_amount || 0);
+        const approvalFreightEl = document.getElementById('approvalFreightAmount');
+        if (approvalFreightEl) approvalFreightEl.textContent = '¥' + approveFreightTotal.toFixed(2);
         document.getElementById('approvalTotalAmount').textContent = '¥' + approveDisplayTotal.toFixed(2);
         document.getElementById('approvalBelowLib').textContent = inquiry.is_below_library_price == 1 ? '是' : '否';
 
@@ -2161,7 +2264,11 @@ async function approveInquiry(id) {
 
         // 填充明细表格（比价展示：每种材料下展开各供应商报价，材料名+规格相同行合并）
         const detailWrap = document.getElementById('approvalDetailTableWrap');
-        detailWrap.innerHTML = renderMergedDetailTable(flatDetails, { showSelected: true });
+        detailWrap.innerHTML = renderMergedDetailTable(flatDetails, {
+            showSelected: true,
+            supplierSummaries: detailData.supplier_summaries,
+            supplierFreights: detailData.supplier_freights
+        });
 
         // 根据当前状态生成审批操作按钮（简化：材料员发起，只需主管审批）
         const actionBtns = document.getElementById('approvalActionBtns');
