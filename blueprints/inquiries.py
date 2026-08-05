@@ -1812,8 +1812,6 @@ def print_inquiry_approval(inquiry_id):
     """, (inquiry_id,))
     approval_records = [dict(row) for row in cursor.fetchall()]
 
-    conn.close()
-
     amount_chinese = amount_to_chinese(inquiry['total_amount'])
 
     def money(value):
@@ -1870,6 +1868,7 @@ def print_inquiry_approval(inquiry_id):
         row['supplier_id']: float(row['tax_freight'] or 0)
         for row in cursor.fetchall()
     }
+    conn.close()
 
     supplier_totals_html = '　|　'.join(
         f'{text(name)}: <strong>{money(amount)}</strong>'
