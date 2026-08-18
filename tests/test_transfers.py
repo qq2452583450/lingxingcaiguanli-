@@ -168,6 +168,31 @@ def test_base_inventory_manual_stock_in_creates_standalone_base_material(client,
     assert listed['remark'] == '旧料盘点补录'
 
 
+def test_base_inventory_records_and_returns_source_project(client, test_db):
+    login_as_material_clerk(client)
+    project_id = test_db.execute("""
+        INSERT INTO projects (project_code, project_name, create_time)
+        VALUES ('PROJ-BASE-001', '基地调入测试项目', '2026-08-18 09:00:00')
+    """).lastrowid
+    test_db.commit()
+
+    response = client.post('/api/base-inventory', json={
+        'material_name': '项目退库钢管',
+        'unit_name': '根',
+        'region': '云南',
+        'source_project_id': project_id,
+        'quantity': 8,
+        'unit_price': 13.5,
+    })
+
+    assert response.get_json()['success'] is True
+    stored = test_db.execute("SELECT source_project_id FROM base_inventory").fetchone()
+    assert stored['source_project_id'] == project_id
+    listed = client.get('/api/base-inventory').get_json()['data'][0]
+    assert listed['source_project_id'] == project_id
+    assert listed['source_project_name'] == '基地调入测试项目'
+
+
 def test_base_inventory_rejects_invalid_region(client, test_db):
     login_as_material_clerk(client)
 

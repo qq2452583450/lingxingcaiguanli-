@@ -545,6 +545,14 @@
                 </div>
                 <div class="toolbar">
                     <button class="btn btn-secondary" onclick="loadBaseInventory()">刷新</button>
+                    <select id="baseInventoryProjectFilter" onchange="applyBaseInventoryFilters()" title="按来源项目筛选">
+                        <option value="">全部项目</option>
+                    </select>
+                    <input type="text" id="baseInventoryMaterialFilter" placeholder="筛选材料名称" oninput="applyBaseInventoryFilters()" title="按材料名称筛选">
+                    <input type="date" id="baseInventoryStartDate" onchange="applyBaseInventoryFilters()" title="更新时间开始日期">
+                    <span>至</span>
+                    <input type="date" id="baseInventoryEndDate" onchange="applyBaseInventoryFilters()" title="更新时间结束日期">
+                    <button class="btn btn-secondary" onclick="resetBaseInventoryFilters()">重置</button>
                     <button class="btn btn-primary" id="btnBatchTransfer" onclick="openBatchTransferModal()" style="margin-left:auto;">批量调拨</button>
                 </div>
                 <div class="table-container">
@@ -554,6 +562,7 @@
                                 <th style="width:30px;"><input type="checkbox" id="selectAllBaseInventory" onchange="toggleSelectAllBaseInventory()" title="全选/取消全选"></th>
                                 <th>材料编码</th>
                                 <th>地区</th>
+                                <th>来源项目</th>
                                 <th>材料名称</th>
                                 <th>规格</th>
                                 <th>详细规格</th>
@@ -1221,6 +1230,12 @@
                             <option value="广西">广西</option>
                         </select>
                     </div>
+                </div>
+                <div class="form-group">
+                    <label>来源项目（调入基地）</label>
+                    <select id="baseStockInSourceProject">
+                        <option value="">-- 请选择来源项目（可选） --</option>
+                    </select>
                 </div>
                 <div class="form-row">
                     <div class="form-group">

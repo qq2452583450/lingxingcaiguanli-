@@ -20,6 +20,7 @@ let baseStockInSourceWarehouseId = null;
 let baseStockInEditId = null;
 let baseInventoryCache = [];
 let baseTransferRecordsCache = [];
+let baseInventoryProjects = [];
 let cartItems = [];
 let selectedMaterialIds = new Set();
 let csrfToken = '';
@@ -2856,18 +2857,24 @@ let selectedBaseInventoryIds = new Set();
 
 async function loadBaseInventory() {
     try {
-        const [inventoryRes, transferRes] = await Promise.all([
+        const [inventoryRes, transferRes, projectsRes] = await Promise.all([
             api('/api/base-inventory'),
-            api('/api/base-transfers')
+            api('/api/base-transfers'),
+            api('/api/projects')
         ]);
-        const [inventoryData, transferData] = await Promise.all([
+        const [inventoryData, transferData, projectsData] = await Promise.all([
             inventoryRes.json(),
-            transferRes.json()
+            transferRes.json(),
+            projectsRes.json()
         ]);
+        if (projectsData.success) {
+            baseInventoryProjects = projectsData.data || [];
+            renderBaseInventoryProjectOptions('baseInventoryProjectFilter', '全部项目');
+        }
         if (inventoryData.success) {
             baseInventoryCache = inventoryData.data || [];
             selectedBaseInventoryIds.clear();
-            renderBaseInventoryTable(baseInventoryCache);
+            renderBaseInventoryTable(getFilteredBaseInventory());
         }
         if (transferData.success) {
             baseTransferRecordsCache = transferData.data || [];
@@ -2877,6 +2884,55 @@ async function loadBaseInventory() {
         console.error('loadBaseInventory failed', e);
         showToast('加载基地库存失败', 'error');
     }
+}
+
+function renderBaseInventoryProjectOptions(selectId, placeholder, selectedId = null) {
+    const select = document.getElementById(selectId);
+    if (!select) return;
+    const value = selectedId === null ? select.value : String(selectedId || '');
+    select.innerHTML = `<option value="">${escapeHtml(placeholder)}</option>` +
+        baseInventoryProjects.map(project =>
+            `<option value="${project.id}">${escapeHtml(project.project_name || '')}</option>`
+        ).join('');
+    select.value = value;
+}
+
+async function ensureBaseInventoryProjects(selectedId = null) {
+    if (!baseInventoryProjects.length) {
+        const res = await api('/api/projects');
+        const data = await res.json();
+        if (data.success) baseInventoryProjects = data.data || [];
+    }
+    renderBaseInventoryProjectOptions('baseStockInSourceProject', '-- 请选择来源项目（可选） --', selectedId);
+}
+
+function getFilteredBaseInventory() {
+    const projectId = document.getElementById('baseInventoryProjectFilter')?.value || '';
+    const materialName = (document.getElementById('baseInventoryMaterialFilter')?.value || '').trim().toLowerCase();
+    const startDate = document.getElementById('baseInventoryStartDate')?.value || '';
+    const endDate = document.getElementById('baseInventoryEndDate')?.value || '';
+    return baseInventoryCache.filter(item => {
+        if (projectId && String(item.source_project_id || '') !== projectId) return false;
+        if (materialName && !(item.material_name || '').toLowerCase().includes(materialName)) return false;
+        const updateDate = String(item.update_time || '').slice(0, 10);
+        if (startDate && (!updateDate || updateDate < startDate)) return false;
+        if (endDate && (!updateDate || updateDate > endDate)) return false;
+        return true;
+    });
+}
+
+function applyBaseInventoryFilters() {
+    selectedBaseInventoryIds.clear();
+    renderBaseInventoryTable(getFilteredBaseInventory());
+}
+
+function resetBaseInventoryFilters() {
+    ['baseInventoryProjectFilter', 'baseInventoryMaterialFilter', 'baseInventoryStartDate', 'baseInventoryEndDate']
+        .forEach(id => {
+            const element = document.getElementById(id);
+            if (element) element.value = '';
+        });
+    applyBaseInventoryFilters();
 }
 
 function toggleBaseInventorySelect(id) {
@@ -2890,11 +2946,11 @@ function toggleBaseInventorySelect(id) {
 function toggleSelectAllBaseInventory() {
     const selectAll = document.getElementById('selectAllBaseInventory');
     if (selectAll.checked) {
-        baseInventoryCache.forEach(item => selectedBaseInventoryIds.add(item.id));
+        getFilteredBaseInventory().forEach(item => selectedBaseInventoryIds.add(item.id));
     } else {
         selectedBaseInventoryIds.clear();
     }
-    renderBaseInventoryTable(baseInventoryCache);
+    renderBaseInventoryTable(getFilteredBaseInventory());
 }
 
 function renderBaseInventoryTable(records) {
@@ -2909,6 +2965,7 @@ function renderBaseInventoryTable(records) {
             <td style="text-align:center;"><input type="checkbox" ${selectedBaseInventoryIds.has(item.id) ? 'checked' : ''} onchange="toggleBaseInventorySelect(${item.id})"></td>
             <td>${escapeHtml(item.material_code || '-')}</td>
             <td>${escapeHtml(item.region || '成都')}</td>
+            <td>${escapeHtml(item.source_project_name || '-')}</td>
             <td>${escapeHtml(item.material_name || '-')}</td>
             <td>${escapeHtml(item.specification || '-')}</td>
             <td>${escapeHtml(item.detail_spec || '-')}</td>
@@ -2920,7 +2977,7 @@ function renderBaseInventoryTable(records) {
             <td>${escapeHtml(item.remark || '-')}</td>
             <td><button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="openBaseAttachments('inventory', ${item.id}, '基地库存附件')">附件 (${Number(item.attachment_count || 0)})</button> <button class="btn btn-primary" style="padding:4px 10px;font-size:12px;" onclick="openBaseTransferModal(${item.id})">调拨到项目</button> <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="editBaseInventory(${item.id})">编辑</button> <button class="btn btn-danger" style="padding:4px 10px;font-size:12px;" onclick="deleteBaseInventory(${item.id})">删除</button></td>
         </tr>
-    `).join('') || '<tr><td colspan="13" class="loading">暂无基地库存，请点击"基地材料新增"补录历史材料</td></tr>';
+    `).join('') || '<tr><td colspan="14" class="loading">暂无符合条件的基地库存</td></tr>';
 }
 
 function renderBaseTransferRecords(records) {
@@ -3271,7 +3328,7 @@ async function submitEditBaseTransfer(event) {
     }
 }
 
-function editBaseInventory(inventoryId) {
+async function editBaseInventory(inventoryId) {
     const item = baseInventoryCache.find(r => r.id === inventoryId);
     if (!item) return;
     baseStockInEditId = inventoryId;
@@ -3281,6 +3338,7 @@ function editBaseInventory(inventoryId) {
     document.getElementById('baseStockInDetailSpec').value = item.detail_spec || '';
     document.getElementById('baseStockInUnitName').value = item.unit_name || '';
     document.getElementById('baseStockInRegion').value = item.region || '成都';
+    await ensureBaseInventoryProjects(item.source_project_id);
     document.getElementById('baseStockInQuantity').value = item.quantity || 0;
     document.getElementById('baseStockInPrice').value = Number(item.unit_price || 0);
     document.getElementById('baseStockInRemark').value = item.remark || '';
@@ -3428,6 +3486,7 @@ async function openBaseStockInModal(materialId = null, quantity = 1, unitPrice =
     document.getElementById('baseStockInQuantity').value = Number(quantity) > 0 ? Number(quantity) : 1;
     document.getElementById('baseStockInPrice').value = Number(unitPrice || 0);
     document.getElementById('baseStockInRegion').value = '成都';
+    await ensureBaseInventoryProjects();
     document.getElementById('baseStockInRemark').value = '';
     openModal('modal-base-stock-in');
 }
@@ -3450,6 +3509,7 @@ async function submitBaseStockIn(event) {
             detail_spec: document.getElementById('baseStockInDetailSpec').value.trim(),
             unit_name: document.getElementById('baseStockInUnitName').value.trim(),
             region: document.getElementById('baseStockInRegion').value,
+            source_project_id: parseInt(document.getElementById('baseStockInSourceProject').value) || null,
             quantity,
             unit_price: unitPrice,
             remark: document.getElementById('baseStockInRemark').value.trim(),

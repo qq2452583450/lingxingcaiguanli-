@@ -87,6 +87,30 @@ def _get_base_inventory_region(data):
     return region, None
 
 
+def _ensure_base_inventory_project_column(cursor):
+    """为已有基地库存补齐来源项目字段。"""
+    cursor.execute("PRAGMA table_info(base_inventory)")
+    columns = {row['name'] for row in cursor.fetchall()}
+    if 'source_project_id' not in columns:
+        cursor.execute("ALTER TABLE base_inventory ADD COLUMN source_project_id INTEGER")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_base_inventory_source_project ON base_inventory(source_project_id)"
+    )
+
+
+def _get_base_inventory_source_project(cursor, data):
+    raw_project_id = data.get('source_project_id')
+    if raw_project_id in (None, ''):
+        return None, None
+    try:
+        project_id = int(raw_project_id)
+    except (TypeError, ValueError):
+        return None, '请选择有效的来源项目'
+    if not cursor.execute("SELECT 1 FROM projects WHERE id = ?", (project_id,)).fetchone():
+        return None, '来源项目不存在，请刷新后重试'
+    return project_id, None
+
+
 def _get_base_warehouse(cursor, create_if_missing=False):
     """使用默认仓库作为唯一材料基地，兼容已有库存数据。"""
     cursor.execute("""
@@ -155,19 +179,24 @@ def get_base_inventory():
     conn = get_db()
     cursor = conn.cursor()
     _ensure_attachment_tables(cursor)
+    _ensure_base_inventory_project_column(cursor)
+    # GET 请求结束时连接会关闭；提交一次以保留首次访问时的兼容迁移。
+    conn.commit()
     cursor.execute("""
-        SELECT bi.id, bi.material_id, bi.quantity, bi.unit_price, bi.update_time, bi.remark,
+        SELECT bi.id, bi.material_id, bi.source_project_id, bi.quantity, bi.unit_price, bi.update_time, bi.remark,
                COALESCE(NULLIF(bi.region, ''), '成都') AS region,
                COALESCE(m.material_code, '基地自有') AS material_code,
                COALESCE(m.material_name, bi.material_name) AS material_name,
                COALESCE(m.specification, bi.specification) AS specification,
                COALESCE(m.detail_spec, bi.detail_spec) AS detail_spec,
                COALESCE(u.unit_name, bi.unit_name) AS unit_name,
+               p.project_name AS source_project_name,
                (SELECT COUNT(*) FROM base_inventory_attachments bia
                 WHERE bia.base_inventory_id = bi.id) AS attachment_count
         FROM base_inventory bi
         LEFT JOIN materials m ON bi.material_id = m.id
         LEFT JOIN units u ON m.unit_id = u.id
+        LEFT JOIN projects p ON p.id = bi.source_project_id
         WHERE bi.quantity != 0
         ORDER BY COALESCE(NULLIF(bi.region, ''), '成都') ASC, m.material_code ASC
     """)
@@ -187,6 +216,7 @@ def delete_base_inventory(base_inventory_id):
 
     conn = get_db()
     cursor = conn.cursor()
+    _ensure_base_inventory_project_column(cursor)
     cursor.execute("SELECT * FROM base_inventory WHERE id = ?", (base_inventory_id,))
     inventory = cursor.fetchone()
     if not inventory:
@@ -209,6 +239,7 @@ def update_base_inventory(base_inventory_id):
 
     conn = get_db()
     cursor = conn.cursor()
+    _ensure_base_inventory_project_column(cursor)
     cursor.execute("SELECT * FROM base_inventory WHERE id = ?", (base_inventory_id,))
     inventory = cursor.fetchone()
     if not inventory:
@@ -232,6 +263,12 @@ def update_base_inventory(base_inventory_id):
     region, region_error = _get_base_inventory_region(data)
     if region_error:
         return jsonify({'success': False, 'message': region_error})
+    source_project_id, source_project_error = _get_base_inventory_source_project(cursor, data)
+    if source_project_error:
+        return jsonify({'success': False, 'message': source_project_error})
+    if 'source_project_id' not in data:
+        # 兼容尚未更新的客户端：编辑其他字段时不丢失已记录的来源项目。
+        source_project_id = inventory['source_project_id']
     remark = escape((data.get('remark') or '').strip())
 
     if not material_name:
@@ -243,10 +280,10 @@ def update_base_inventory(base_inventory_id):
             UPDATE base_inventory
             SET material_name = ?, specification = ?, detail_spec = ?,
                 unit_name = ?, region = ?, quantity = ?, unit_price = ?,
-                update_time = ?, remark = ?
+                source_project_id = ?, update_time = ?, remark = ?
             WHERE id = ?
         """, (material_name, specification, detail_spec, unit_name, region,
-              quantity, unit_price, now, remark, base_inventory_id))
+              quantity, unit_price, source_project_id, now, remark, base_inventory_id))
         conn.commit()
     except Exception as exc:
         conn.rollback()
@@ -286,6 +323,7 @@ def stock_in_base_inventory():
 
     conn = get_db()
     cursor = conn.cursor()
+    _ensure_base_inventory_project_column(cursor)
     material_name = (data.get('material_name') or '').strip()
     specification = (data.get('specification') or '').strip()
     detail_spec = (data.get('detail_spec') or '').strip()
@@ -293,6 +331,9 @@ def stock_in_base_inventory():
     region, region_error = _get_base_inventory_region(data)
     if region_error:
         return jsonify({'success': False, 'message': region_error})
+    source_project_id, source_project_error = _get_base_inventory_source_project(cursor, data)
+    if source_project_error:
+        return jsonify({'success': False, 'message': source_project_error})
     remark = escape((data.get('remark') or '').strip())
 
     if material_id is not None:
@@ -322,20 +363,21 @@ def stock_in_base_inventory():
 
     if material_id is not None:
         cursor.execute("""
-            INSERT INTO base_inventory (material_id, region, quantity, unit_price, update_time, remark)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO base_inventory (material_id, region, source_project_id, quantity, unit_price, update_time, remark)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(material_id, region) DO UPDATE SET
                 quantity = quantity + excluded.quantity,
                 unit_price = CASE
                     WHEN excluded.unit_price > 0 THEN excluded.unit_price
                     ELSE base_inventory.unit_price
                 END,
+                source_project_id = COALESCE(excluded.source_project_id, base_inventory.source_project_id),
                 update_time = excluded.update_time,
                 remark = CASE
                     WHEN ? != '' THEN ?
                     ELSE base_inventory.remark
                 END
-        """, (material_id, region, quantity, unit_price, now, remark, remark, remark))
+        """, (material_id, region, source_project_id, quantity, unit_price, now, remark, remark, remark))
     else:
         cursor.execute("""
             SELECT id
@@ -353,17 +395,18 @@ def stock_in_base_inventory():
                 UPDATE base_inventory
                 SET quantity = quantity + ?,
                     unit_price = CASE WHEN ? > 0 THEN ? ELSE unit_price END,
+                    source_project_id = COALESCE(?, source_project_id),
                     update_time = ?,
                     remark = CASE WHEN ? != '' THEN ? ELSE remark END
                 WHERE id = ?
-            """, (quantity, unit_price, unit_price, now, remark, remark, existing['id']))
+            """, (quantity, unit_price, unit_price, source_project_id, now, remark, remark, existing['id']))
         else:
             cursor.execute("""
                 INSERT INTO base_inventory (
-                    material_name, specification, detail_spec, unit_name, region,
+                    material_name, specification, detail_spec, unit_name, region, source_project_id,
                     quantity, unit_price, update_time, remark
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (material_name, specification, detail_spec, unit_name, region, quantity, unit_price, now, remark))
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (material_name, specification, detail_spec, unit_name, region, source_project_id, quantity, unit_price, now, remark))
     conn.commit()
     return jsonify({
         'success': True,
