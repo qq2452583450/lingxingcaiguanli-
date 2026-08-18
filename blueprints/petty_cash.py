@@ -3,10 +3,11 @@
 """
 import os
 import re
+from io import BytesIO
 from datetime import datetime
 from pathlib import Path
 
-from flask import Blueprint, jsonify, request, session, send_from_directory
+from flask import Blueprint, jsonify, request, session, send_file, send_from_directory
 from werkzeug.utils import secure_filename
 
 from helpers import get_db
@@ -176,6 +177,78 @@ def _loan_row(row):
     item['used_amount'] = used
     item['balance_amount'] = total - used
     return item
+
+
+def _petty_cash_export_workbook(summary, loans, usages, project_name, expense_type):
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    workbook = Workbook()
+    summary_sheet = workbook.active
+    summary_sheet.title = '备用金汇总'
+    summary_sheet.append(['备用金导出汇总'])
+    summary_sheet.append(['导出项目', project_name or '全部项目'])
+    summary_sheet.append(['使用类型', expense_type or '全部使用类型'])
+    summary_sheet.append(['借款总额', summary['total_amount']])
+    summary_sheet.append(['现有金额', summary['balance_amount']])
+    summary_sheet.append(['已使用金额', summary['used_amount']])
+    summary_sheet.append(['使用笔数', summary['usage_count']])
+    summary_sheet.append(['导出明细笔数', summary['exported_usage_count']])
+
+    loan_sheet = workbook.create_sheet('借款记录')
+    loan_sheet.append(['备用金单号', '项目', '借款日期', '借款总额', '现有金额', '已使用金额', '创建人', '支付附件', '备注'])
+    for loan in loans:
+        loan_sheet.append([
+            loan.get('loan_no'), loan.get('project_name'), loan.get('loan_date'),
+            loan.get('total_amount'), loan.get('balance_amount'), loan.get('used_amount'),
+            loan.get('creator_name'), loan.get('payment_file_name'), loan.get('remark'),
+        ])
+
+    usage_sheet = workbook.create_sheet('使用明细')
+    usage_sheet.append(['明细单号', '备用金单号', '项目', '使用日期', '费用类型', '使用金额', '供应商名称', '材料名称', '发票金额', '发票类型', '经办人', '报销状态', '报销时间', '附件', '说明'])
+    for usage in usages:
+        usage_sheet.append([
+            usage.get('usage_no'), usage.get('loan_no'), usage.get('project_name'), usage.get('use_date'),
+            usage.get('expense_type'), usage.get('amount'), usage.get('supplier_name'), usage.get('material_name'),
+            usage.get('invoice_amount'), usage.get('invoice_type'), usage.get('handler'),
+            '已报销' if usage.get('is_reimbursed') else '未报销', usage.get('reimbursed_at'),
+            '；'.join(usage.get('proof_files') or []), usage.get('description'),
+        ])
+
+    header_fill = PatternFill('solid', fgColor='1F4E78')
+    for sheet in (loan_sheet, usage_sheet):
+        for cell in sheet[1]:
+            cell.font = Font(color='FFFFFF', bold=True)
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+        sheet.freeze_panes = 'A2'
+        sheet.auto_filter.ref = sheet.dimensions
+        for column in sheet.columns:
+            width = min(max(max(len(str(cell.value or '')) for cell in column) + 2, 12), 36)
+            sheet.column_dimensions[column[0].column_letter].width = width
+        for row in sheet.iter_rows(min_row=2):
+            for cell in row:
+                cell.alignment = Alignment(vertical='top', wrap_text=True)
+
+    summary_sheet['A1'].font = Font(size=14, bold=True, color='FFFFFF')
+    summary_sheet['A1'].fill = header_fill
+    summary_sheet.merge_cells('A1:B1')
+    summary_sheet.column_dimensions['A'].width = 18
+    summary_sheet.column_dimensions['B'].width = 36
+    for row_index in range(2, 9):
+        summary_sheet.cell(row_index, 1).font = Font(bold=True)
+    for row_index in range(4, 7):
+        summary_sheet.cell(row_index, 2).number_format = '#,##0.00'
+
+    for sheet, money_columns in ((loan_sheet, (4, 5, 6)), (usage_sheet, (6, 9))):
+        for row in sheet.iter_rows(min_row=2):
+            for index in money_columns:
+                row[index - 1].number_format = '#,##0.00'
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
 
 
 @petty_cash_bp.route('/summary', methods=['GET'])
@@ -414,6 +487,94 @@ def get_usages():
         item['proof_files'] = files
         item['proof_file_count'] = len(files)
     return jsonify({'success': True, 'data': rows})
+
+
+@petty_cash_bp.route('/export', methods=['GET'])
+@login_required
+def export_petty_cash():
+    project_id = request.args.get('project_id', type=int)
+    expense_type = request.args.get('expense_type', '').strip()
+    conn = get_db()
+    cursor = conn.cursor()
+    _ensure_usage_files_table(cursor)
+
+    project = _project(cursor, project_id) if project_id else None
+    if project_id and not project:
+        return jsonify({'success': False, 'message': '项目不存在'}), 404
+
+    loan_params = [project_id] if project_id else []
+    loan_where = 'WHERE l.project_id = ?' if project_id else ''
+    cursor.execute(f"""
+        SELECT l.*, p.project_name, u.real_name AS creator_name,
+               COALESCE(SUM(pc.amount), 0) AS used_amount
+        FROM petty_cash_loans l
+        LEFT JOIN projects p ON l.project_id = p.id
+        LEFT JOIN users u ON l.creator_id = u.id
+        LEFT JOIN petty_cash_usages pc
+               ON pc.loan_id = l.id AND COALESCE(pc.is_reimbursed, 0) = 0
+        {loan_where}
+        GROUP BY l.id
+        ORDER BY l.loan_date DESC, l.id DESC
+    """, loan_params)
+    loans = [_loan_row(row) for row in cursor.fetchall()]
+
+    usage_where = []
+    usage_params = []
+    if project_id:
+        usage_where.append('l.project_id = ?')
+        usage_params.append(project_id)
+    if expense_type:
+        usage_where.append('u.expense_type = ?')
+        usage_params.append(expense_type)
+    usage_where_sql = 'WHERE ' + ' AND '.join(usage_where) if usage_where else ''
+    cursor.execute(f"""
+        SELECT u.*, l.loan_no, p.project_name
+        FROM petty_cash_usages u
+        JOIN petty_cash_loans l ON u.loan_id = l.id
+        LEFT JOIN projects p ON l.project_id = p.id
+        {usage_where_sql}
+        ORDER BY u.use_date DESC, u.id DESC
+    """, usage_params)
+    usages = [dict(row) for row in cursor.fetchall()]
+    usage_ids = [usage['id'] for usage in usages]
+    files_by_usage = {}
+    if usage_ids:
+        placeholders = ','.join('?' for _ in usage_ids)
+        cursor.execute(f"""
+            SELECT usage_id, file_name FROM petty_cash_usage_files
+            WHERE usage_id IN ({placeholders}) ORDER BY id ASC
+        """, usage_ids)
+        for file_row in cursor.fetchall():
+            files_by_usage.setdefault(file_row['usage_id'], []).append(file_row['file_name'])
+    for usage in usages:
+        usage['amount'] = _number(usage.get('amount'))
+        usage['invoice_amount'] = _number(usage.get('invoice_amount'))
+        usage['proof_files'] = files_by_usage.get(usage['id']) or ([usage['proof_file_name']] if usage.get('proof_file_name') else [])
+
+    summary_usage_params = [project_id] if project_id else []
+    summary_usage_where = 'WHERE l.project_id = ?' if project_id else ''
+    cursor.execute(f"""
+        SELECT COUNT(*) AS usage_count
+        FROM petty_cash_usages u
+        JOIN petty_cash_loans l ON u.loan_id = l.id
+        {summary_usage_where}
+    """, summary_usage_params)
+    usage_count = int(cursor.fetchone()['usage_count'] or 0)
+
+    summary = {
+        'total_amount': sum(loan['total_amount'] for loan in loans),
+        'used_amount': sum(loan['used_amount'] for loan in loans),
+        'balance_amount': sum(loan['balance_amount'] for loan in loans),
+        'usage_count': usage_count,
+        'exported_usage_count': len(usages),
+    }
+    output = _petty_cash_export_workbook(summary, loans, usages, project['project_name'] if project else '', expense_type)
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name='备用金导出.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
 
 
 @petty_cash_bp.route('/usages', methods=['POST'])

@@ -471,6 +471,11 @@ function pettyCashQuery(extra = {}) {
     return query ? `?${query}` : '';
 }
 
+function exportPettyCash() {
+    const type = document.getElementById('pettyCashTypeFilter')?.value || '';
+    window.location.href = `/api/petty-cash/export${pettyCashQuery({ expense_type: type })}`;
+}
+
 async function loadPettyCashProjects() {
     if (pettyCashProjects.length) return;
     const res = await api('/api/projects?mine=1');

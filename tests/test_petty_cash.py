@@ -1,6 +1,8 @@
 import io
 from pathlib import Path
 
+from openpyxl import load_workbook
+
 
 def seed_role(cursor, role_name):
     cursor.execute("SELECT id FROM roles WHERE role_name = ?", (role_name,))
@@ -329,3 +331,39 @@ def test_material_clerk_can_reimburse_usage_and_restore_balance(client, test_db,
     repeated = client.post(f"/api/petty-cash/usages/{usage_id}/reimburse").get_json()
     assert repeated["success"] is False
     assert "已报销" in repeated["message"]
+
+
+def test_petty_cash_export_matches_project_and_expense_type_filter(client, test_db, tmp_path, monkeypatch):
+    monkeypatch.setenv("PETTY_CASH_UPLOAD_DIR", str(tmp_path))
+    cursor = test_db.cursor()
+    user_id = seed_user(cursor)
+    project_id = seed_project(cursor)
+    other_project_id = seed_project(cursor, "XM-OTHER", "其他项目")
+    test_db.commit()
+    set_session_user(client, user_id)
+
+    loan_id = create_loan(client, project_id)
+    other_loan_id = create_loan(client, other_project_id)
+    for loan, expense_type, amount in ((loan_id, "运费", "250"), (loan_id, "维修费", "100"), (other_loan_id, "运费", "300")):
+        response = client.post(
+            "/api/petty-cash/usages",
+            data={"loan_id": str(loan), "use_date": "2026-06-11", "expense_type": expense_type, "amount": amount},
+            content_type="multipart/form-data",
+        )
+        assert response.get_json()["success"] is True
+
+    response = client.get(f"/api/petty-cash/export?project_id={project_id}&expense_type=运费")
+    assert response.status_code == 200
+    assert response.mimetype == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert "attachment;" in response.headers["Content-Disposition"]
+
+    workbook = load_workbook(io.BytesIO(response.data), data_only=True)
+    assert workbook.sheetnames == ["备用金汇总", "借款记录", "使用明细"]
+    assert workbook["备用金汇总"]["B2"].value == "备用金项目"
+    assert workbook["备用金汇总"]["B3"].value == "运费"
+    assert workbook["借款记录"].max_row == 2
+    usage_sheet = workbook["使用明细"]
+    assert usage_sheet.max_row == 2
+    assert usage_sheet["A2"].value.startswith("BYJMX-")
+    assert usage_sheet["E2"].value == "运费"
+    assert usage_sheet["F2"].value == 250
