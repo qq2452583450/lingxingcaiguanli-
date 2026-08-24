@@ -192,3 +192,62 @@ class TestMaterialAPI:
         material = next(row for row in data['data'] if row['id'] == material_id)
         assert material['last_purchase_project'] == '最新采购项目'
         assert material['last_purchase_time'] == '2026-07-20 15:30:00'
+
+    def test_material_price_history_uses_approved_selected_or_lowest_quotes(self, client, test_db):
+        cursor = test_db.cursor()
+        cursor.execute(
+            "INSERT INTO materials (material_code, material_name, create_time) VALUES (?, ?, ?)",
+            ("KM-PRICE-HISTORY", "价格历史测试材料", "2026-01-01 09:00:00"),
+        )
+        material_id = cursor.lastrowid
+        cursor.execute("INSERT INTO suppliers (supplier_name) VALUES (?)", ("历史供应商A",))
+        supplier_a_id = cursor.lastrowid
+        cursor.execute("INSERT INTO suppliers (supplier_name) VALUES (?)", ("历史供应商B",))
+        supplier_b_id = cursor.lastrowid
+        cursor.execute(
+            "INSERT INTO projects (project_code, project_name, create_time) VALUES (?, ?, ?)",
+            ("KM-HISTORY", "历史价格项目", "2026-01-01 09:00:00"),
+        )
+        project_id = cursor.lastrowid
+
+        def add_quote(inquiry_no, status, approve_time, is_cash_price, quotes):
+            cursor.execute("""
+                INSERT INTO purchase_inquiries (
+                    inquiry_no, inquiry_date, project_id, approval_status, approve_time, create_time
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            """, (inquiry_no, approve_time[:10], project_id, status, approve_time, approve_time))
+            inquiry_id = cursor.lastrowid
+            cursor.execute("""
+                INSERT INTO purchase_inquiry_items (inquiry_id, material_id, quantity, is_cash_price, create_time)
+                VALUES (?, ?, ?, ?, ?)
+            """, (inquiry_id, material_id, 3, is_cash_price, approve_time))
+            item_id = cursor.lastrowid
+            for supplier_id, tax_price, is_selected, is_lowest in quotes:
+                cursor.execute("""
+                    INSERT INTO purchase_inquiry_quotes (
+                        item_id, supplier_id, tax_price, tax_rate, is_selected, is_lowest, create_time
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (item_id, supplier_id, tax_price, 0.01, is_selected, is_lowest, approve_time))
+
+        add_quote("XJ-REGULAR", "已同意", "2026-07-01 10:00:00", 0, [
+            (supplier_a_id, 10, 0, 1),
+            (supplier_b_id, 12, 1, 0),
+        ])
+        add_quote("XJ-CASH", "已同意", "2026-08-01 10:00:00", 1, [
+            (supplier_a_id, 9, 1, 1),
+        ])
+        add_quote("XJ-DRAFT", "草稿", "2026-08-02 10:00:00", 0, [
+            (supplier_a_id, 1, 1, 1),
+        ])
+        test_db.commit()
+
+        response = client.get(f'/api/materials/{material_id}/price-history')
+        data = response.get_json()
+
+        assert response.status_code == 200
+        assert data['success'] is True
+        assert data['material']['material_name'] == '价格历史测试材料'
+        assert [(row['inquiry_no'], row['tax_price'], row['is_cash_price'], row['supplier_name']) for row in data['data']] == [
+            ('XJ-CASH', 9, 1, '历史供应商A'),
+            ('XJ-REGULAR', 12, 0, '历史供应商B'),
+        ]

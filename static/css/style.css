@@ -380,6 +380,16 @@ tbody tr:hover { background: #eff6ff; }
 .material-row:nth-child(even) td { background: #f8fafc; }
 .material-row:hover td { background: #eff6ff; }
 .material-row .col-actions .btn { padding: 4px 8px; font-size: 12px; margin: 0 2px; white-space: nowrap; }
+.price-history-link { border: 0; padding: 0; margin-left: 4px; background: transparent; color: var(--pri); font-size: 12px; cursor: pointer; }
+.price-history-link:hover { text-decoration: underline; }
+.price-history-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin: 0 0 14px; }
+.price-history-summary > div { padding: 10px 12px; background: #f8fafc; border: 1px solid var(--bdr); border-radius: 6px; }
+.price-history-summary span { display: block; color: var(--txt2); font-size: 12px; margin-bottom: 4px; }
+.price-history-summary strong { color: var(--txt); font-size: 15px; }
+.price-history-tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+.price-history-tabs button { border: 1px solid var(--bdr); border-radius: 5px; padding: 6px 12px; background: #fff; color: var(--txt2); cursor: pointer; }
+.price-history-tabs button.active { background: var(--pri); border-color: var(--pri); color: #fff; }
+.price-history-empty { padding: 24px; text-align: center; color: var(--txt2); }
 
 /* ============ Inquiry Quote Cards ============ */
 .inquiry-item-card { border: 1px solid var(--bdr); border-radius: var(--radius-lg); margin-bottom: 20px; background: #fafbfc; }
@@ -765,6 +775,7 @@ td input[type="checkbox"] {
     .modal-header { margin-bottom: 12px; padding-bottom: 10px; }
     .modal-header h2 { font-size: 16px; }
     .modal-close { font-size: 24px; }
+    .price-history-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
     /* ---- 表单 ---- */
     .form-row { grid-template-columns: 1fr; gap: 12px; }

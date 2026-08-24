@@ -32,6 +32,8 @@ let editingPettyCashUsageId = null;
 const PETTY_CASH_MAX_PROOF_FILES = 9;
 let pettyCashSelectedProofFiles = [];
 let pettyCashExistingProofFileCount = 0;
+let materialPriceHistory = [];
+let materialPriceHistoryType = 'tax';
 
 // ==================== CSRF Token 管理 ====================
 async function fetchCsrfToken() {
@@ -1091,9 +1093,9 @@ function renderMaterialTable() {
             <td class="col-brand">${escapeHtml(m.brand) || '-'}</td>
             <td class="col-national-standard">${formatNationalStandard(m.is_national_standard)}</td>
             <td class="col-rate">${safeRate(m.tax_rate)}</td>
-            <td class="col-price">¥${safeNum(m.tax_price)}</td>
+            <td class="col-price">¥${safeNum(m.tax_price)} <button type="button" class="price-history-link" onclick="openMaterialPriceHistory(${m.id}, 'tax')" title="查看含税采购价历史">历史</button></td>
             <td class="col-no-tax">¥${safeNum(m.tax_exempt_price)}</td>
-            <td class="col-no-tax">¥${safeNum(m.cash_price)}</td>
+            <td class="col-no-tax">¥${safeNum(m.cash_price)} <button type="button" class="price-history-link" onclick="openMaterialPriceHistory(${m.id}, 'cash')" title="查看现金含税采购价历史">历史</button></td>
             <td class="col-price">¥${safeNum(m.cash_tax_price)}</td>
             <td class="col-supplier">${escapeHtml(m.supplier_name) || '-'}</td>
             <td class="col-last-purchase-project" title="${escapeHtml(m.last_purchase_project) || '-'}">${escapeHtml(m.last_purchase_project) || '-'}</td>
@@ -1118,6 +1120,79 @@ function renderMaterialTable() {
     // 清空并重新填充，保留tbody结构
     tbody.innerHTML = '';
     tbody.appendChild(fragment);
+}
+
+async function openMaterialPriceHistory(materialId, type = 'tax') {
+    try {
+        const res = await api(`/api/materials/${materialId}/price-history`, { credentials: 'same-origin' });
+        const data = await res.json();
+        if (!data.success) {
+            showToast(data.message || '加载价格历史失败', 'error');
+            return;
+        }
+
+        materialPriceHistory = data.data || [];
+        materialPriceHistoryType = type;
+        const material = data.material || {};
+        const materialTitle = [material.material_name, material.specification, material.detail_spec, material.brand]
+            .filter(Boolean)
+            .join(' / ');
+        document.getElementById('materialPriceHistoryTitle').textContent = `${materialTitle || '材料'} - 价格历史`;
+        renderMaterialPriceHistory();
+        openModal('modal-material-price-history');
+    } catch (e) {
+        console.error('加载材料价格历史失败', e);
+        showToast('加载价格历史失败', 'error');
+    }
+}
+
+function switchMaterialPriceHistory(type) {
+    materialPriceHistoryType = type;
+    renderMaterialPriceHistory();
+}
+
+function renderMaterialPriceHistory() {
+    const tbody = document.getElementById('materialPriceHistoryTable');
+    const summary = document.getElementById('materialPriceHistorySummary');
+    if (!tbody || !summary) return;
+
+    const selectedRows = materialPriceHistory.filter(row => (
+        materialPriceHistoryType === 'all'
+        || (materialPriceHistoryType === 'cash' ? Number(row.is_cash_price) === 1 : Number(row.is_cash_price) !== 1)
+    ));
+    const labels = { tax: '含税采购价', cash: '现金含税采购价', all: '全部价格' };
+    const prices = selectedRows.map(row => Number(row.tax_price || 0)).filter(price => price > 0);
+    const latest = selectedRows[0]?.tax_price;
+
+    summary.innerHTML = `
+        <div><span>当前查看</span><strong>${labels[materialPriceHistoryType]}</strong></div>
+        <div><span>记录数</span><strong>${selectedRows.length}</strong></div>
+        <div><span>最近审批价</span><strong>${latest == null ? '-' : `¥${safeNum(latest)}`}</strong></div>
+        <div><span>最低价</span><strong>${prices.length ? `¥${safeNum(Math.min(...prices))}` : '-'}</strong></div>
+        <div><span>最高价</span><strong>${prices.length ? `¥${safeNum(Math.max(...prices))}` : '-'}</strong></div>
+    `;
+
+    document.querySelectorAll('.price-history-tabs button').forEach(button => {
+        button.classList.toggle('active', button.id === `materialPriceHistory${materialPriceHistoryType.charAt(0).toUpperCase()}${materialPriceHistoryType.slice(1)}Tab`);
+    });
+
+    if (!selectedRows.length) {
+        tbody.innerHTML = '<tr><td colspan="8" class="price-history-empty">暂无审批通过的采购价格记录</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = selectedRows.map(row => `
+        <tr>
+            <td>${escapeHtml(row.purchase_time || '-')}</td>
+            <td>${escapeHtml(row.inquiry_no || '-')}</td>
+            <td>${escapeHtml(row.project_name || '-')}</td>
+            <td>${escapeHtml(row.supplier_name || '-')}</td>
+            <td>${Number(row.is_cash_price) === 1 ? '现金含税价' : '含税价'}</td>
+            <td>${safeRate(row.tax_rate)}</td>
+            <td>¥${safeNum(row.tax_price)}</td>
+            <td>${safeNum(row.quantity)}</td>
+        </tr>
+    `).join('');
 }
 
 function updateMaterialStats() {

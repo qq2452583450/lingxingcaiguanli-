@@ -1699,6 +1699,39 @@
         </div>
     </div>
 
+    <!-- 材料价格历史模态框 -->
+    <div id="modal-material-price-history" class="modal">
+        <div class="modal-content" style="max-width:1100px;">
+            <div class="modal-header">
+                <h2 id="materialPriceHistoryTitle">材料价格历史</h2>
+                <button class="modal-close" onclick="closeModal('modal-material-price-history')">&times;</button>
+            </div>
+            <div class="price-history-summary" id="materialPriceHistorySummary"></div>
+            <div class="price-history-tabs" role="tablist" aria-label="价格类型">
+                <button type="button" id="materialPriceHistoryTaxTab" onclick="switchMaterialPriceHistory('tax')">含税采购价</button>
+                <button type="button" id="materialPriceHistoryCashTab" onclick="switchMaterialPriceHistory('cash')">现金含税采购价</button>
+                <button type="button" id="materialPriceHistoryAllTab" onclick="switchMaterialPriceHistory('all')">全部</button>
+            </div>
+            <div class="table-container">
+                <table class="detail-table">
+                    <thead>
+                        <tr>
+                            <th>审批时间</th>
+                            <th>询价单号</th>
+                            <th>项目</th>
+                            <th>供应商</th>
+                            <th>价格类型</th>
+                            <th>税率</th>
+                            <th>含税单价</th>
+                            <th>数量</th>
+                        </tr>
+                    </thead>
+                    <tbody id="materialPriceHistoryTable"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
     <!-- 审批模态框 -->
     <div id="modal-approval" class="modal">
         <div class="modal-content" style="max-width:1000px;">

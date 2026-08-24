@@ -24,3 +24,13 @@ def test_material_table_shows_latest_purchase_columns_before_actions():
     assert table.index("最后采购时间") < table.index("操作")
     assert "m.last_purchase_project" in source
     assert "m.last_purchase_time" in source
+
+
+def test_material_price_history_is_available_from_both_tax_inclusive_prices():
+    html = Path("index.html").read_text(encoding="utf-8")
+    source = Path("static/js/app.js").read_text(encoding="utf-8")
+
+    assert 'id="modal-material-price-history"' in html
+    assert "openMaterialPriceHistory(${m.id}, 'tax')" in source
+    assert "openMaterialPriceHistory(${m.id}, 'cash')" in source
+    assert "/api/materials/${materialId}/price-history" in source

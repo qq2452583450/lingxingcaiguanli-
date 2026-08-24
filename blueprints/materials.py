@@ -127,6 +127,74 @@ def get_material(material_id):
     return jsonify({'success': True, 'data': material})
 
 
+@material_bp.route('/materials/<int:material_id>/price-history', methods=['GET'])
+def get_material_price_history(material_id):
+    """获取材料审批通过后的采购价格历史。"""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT m.id, m.material_code, m.material_name, m.specification, m.detail_spec, m.brand, u.unit_name
+        FROM materials m
+        LEFT JOIN units u ON u.id = m.unit_id
+        WHERE m.id = ?
+    """, (material_id,))
+    material_row = cursor.fetchone()
+    if not material_row:
+        conn.close()
+        return jsonify({'success': False, 'message': '材料不存在'}), 404
+
+    cursor.execute("""
+        WITH ranked_quotes AS (
+            SELECT
+                pii.id AS item_id,
+                pii.is_cash_price,
+                pii.quantity,
+                pi.id AS inquiry_id,
+                pi.inquiry_no,
+                pi.project_id,
+                COALESCE(NULLIF(pi.approve_time, ''), NULLIF(pi.inquiry_date, ''), pi.create_time) AS purchase_time,
+                q.tax_price,
+                q.tax_rate,
+                q.supplier_id,
+                ROW_NUMBER() OVER (
+                    PARTITION BY pii.id
+                    ORDER BY q.is_selected DESC, q.is_lowest DESC, q.id ASC
+                ) AS quote_rank
+            FROM purchase_inquiry_items pii
+            JOIN purchase_inquiries pi ON pi.id = pii.inquiry_id
+            JOIN purchase_inquiry_quotes q ON q.item_id = pii.id
+            WHERE pii.material_id = ?
+              AND pi.approval_status = '已同意'
+              AND q.tax_price > 0
+              AND (q.is_selected = 1 OR q.is_lowest = 1)
+        )
+        SELECT
+            rq.inquiry_id,
+            rq.inquiry_no,
+            rq.purchase_time,
+            rq.quantity,
+            rq.tax_price,
+            rq.tax_rate,
+            rq.is_cash_price,
+            COALESCE(p.project_name, p.project_code, '') AS project_name,
+            COALESCE(s.supplier_name, '') AS supplier_name
+        FROM ranked_quotes rq
+        LEFT JOIN projects p ON p.id = rq.project_id
+        LEFT JOIN suppliers s ON s.id = rq.supplier_id
+        WHERE rq.quote_rank = 1
+        ORDER BY rq.purchase_time DESC, rq.inquiry_id DESC, rq.item_id DESC
+    """, (material_id,))
+    history = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+
+    return jsonify({
+        'success': True,
+        'material': dict(material_row),
+        'data': history,
+    })
+
+
 @material_bp.route('/next-material-code', methods=['GET'])
 @login_required
 def get_next_material_code():
