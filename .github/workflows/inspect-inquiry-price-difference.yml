@@ -1,0 +1,86 @@
+name: Inspect inquiry price difference
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: lxclgl-inspect-inquiry-price-difference
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read inquiry price data
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_SSH_PORT || 22 }}
+          script_stop: true
+          command_timeout: 10m
+          script: |
+            powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& {
+            $ErrorActionPreference = 'Stop'
+            $AppDir = 'C:\wwwroot\lxclgl'
+            $Python = Join-Path $AppDir '.venv\Scripts\python.exe'
+            $Db = (Get-ChildItem -LiteralPath $AppDir -Filter '*.db' -File | Sort-Object Length -Descending | Select-Object -First 1).FullName
+            if (-not $Db) { throw 'Production database not found' }
+            @'
+            import json
+            import sqlite3
+            import sys
+
+            db_path, inquiry_no = sys.argv[1:]
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+
+            cur.execute('''
+                SELECT pi.id, pi.inquiry_no, pi.inquiry_date, pi.approval_status,
+                       pi.total_amount, pi.is_below_library_price, p.project_code,
+                       p.project_name, u.real_name AS applicant_name
+                FROM purchase_inquiries pi
+                LEFT JOIN projects p ON p.id = pi.project_id
+                LEFT JOIN users u ON u.id = pi.applicant_id
+                WHERE pi.inquiry_no = ?
+            ''', (inquiry_no,))
+            inquiry = cur.fetchone()
+            if not inquiry:
+                raise SystemExit('Inquiry not found: ' + inquiry_no)
+
+            cur.execute('''
+                SELECT i.id AS item_id, i.material_id, i.quantity, i.library_price,
+                       i.is_cash_price AS item_is_cash_price, m.material_code,
+                       m.material_name, m.specification, m.detail_spec, m.brand,
+                       m.tax_price AS current_tax_price, m.cash_price AS current_cash_price,
+                       m.is_cash_price AS material_is_cash_price
+                FROM purchase_inquiry_items i
+                LEFT JOIN materials m ON m.id = i.material_id
+                WHERE i.inquiry_id = ?
+                ORDER BY i.id
+            ''', (inquiry['id'],))
+            items = [dict(row) for row in cur.fetchall()]
+
+            for item in items:
+                cur.execute('''
+                    SELECT q.id AS quote_id, s.supplier_name, q.tax_price,
+                           q.tax_exempt_price, q.tax_rate, q.total_amount,
+                           q.is_lowest, q.is_selected
+                    FROM purchase_inquiry_quotes q
+                    LEFT JOIN suppliers s ON s.id = q.supplier_id
+                    WHERE q.item_id = ?
+                    ORDER BY q.id
+                ''', (item['item_id'],))
+                item['quotes'] = [dict(row) for row in cur.fetchall()]
+                for quote in item['quotes']:
+                    quote['display_price_diff'] = round(
+                        float(quote.get('tax_price') or 0) - float(item.get('library_price') or 0), 2
+                    )
+
+            print(json.dumps({'inquiry': dict(inquiry), 'items': items}, ensure_ascii=True, indent=2))
+            conn.close()
+            '@ | & $Python - $Db 'KMXXW1Q-20260824-001'
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }"
