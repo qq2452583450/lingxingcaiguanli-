@@ -76,3 +76,14 @@ def test_inquiry_form_uses_one_supplier_freight_and_landed_total():
     assert "selectedInquirySupplierId" in source
     assert "supplier_freights" in submit_body
     assert "selected_supplier_id" in submit_body
+
+
+def test_cart_generated_inquiry_refreshes_library_price_after_material_cache_loads():
+    source = Path("static/js/app.js").read_text(encoding="utf-8")
+    cart_body = _function_body(source, "generateInquiryFromCart")
+    sync_body = _function_body(source, "syncCartInquiryItemsWithMaterialCache")
+
+    assert "function syncCartInquiryItemsWithMaterialCache()" in source
+    assert "syncCartInquiryItemsWithMaterialCache();" in cart_body
+    assert "item.tax_price = material.tax_price || 0;" in sync_body
+    assert "item.library_price = item.is_cash_price === 1 ? item.cash_price : item.tax_price;" in sync_body

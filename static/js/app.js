@@ -4805,6 +4805,20 @@ function openInquiryWithItems(items) {
 
 // 重写购物车生成询价单的逻辑（适配新结构）
 let _generatingFromCart = false;
+
+function syncCartInquiryItemsWithMaterialCache() {
+    if (allMaterialsCache.length === 0) return;
+
+    inquiryItems.forEach(item => {
+        const material = allMaterialsCache.find(entry => entry?.id == item.material_id);
+        if (!material) return;
+
+        item.tax_price = material.tax_price || 0;
+        item.cash_price = material.cash_price || 0;
+        item.library_price = item.is_cash_price === 1 ? item.cash_price : item.tax_price;
+    });
+}
+
 async function generateInquiryFromCart() {
     if (_generatingFromCart) return;
     const rawCart = cartItems || [];
@@ -4865,6 +4879,7 @@ async function generateInquiryFromCart() {
         allMaterialsCache.length === 0 ? loadAllMaterialsForSelect() : Promise.resolve()
     ]).then(() => {
         console.log('后台数据加载完成：供应商', suppliers.length, '材料缓存', allMaterialsCache.length);
+        syncCartInquiryItemsWithMaterialCache();
         // 供应商加载完成后，为没有供应商的 quote 重新填充默认供应商
         const defaultQuotes = buildDefaultQuotes();
         inquiryItems.forEach(item => {
