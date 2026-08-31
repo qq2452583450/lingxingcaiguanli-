@@ -1288,7 +1288,9 @@ async function generateInquiryFromSelection() {
         brand: m.brand || '',
         unit_name: m.unit_name || '',
         is_national_standard: m.is_national_standard || 0,
-        is_cash_price: m.is_cash_price || 0,
+        // 现金价是本次询价的选择，不继承材料主档上一次采购的价格类型。
+        // 否则主档标记为现金价的材料会把正常含税价询价错误地按现金价比较。
+        is_cash_price: 0,
         tax_rate: m.tax_rate || 0.01,
         tax_price: m.tax_price || 0,
         tax_exempt_price: m.tax_exempt_price || 0,

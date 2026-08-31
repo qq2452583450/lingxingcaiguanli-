@@ -34,3 +34,13 @@ def test_material_price_history_is_available_from_both_tax_inclusive_prices():
     assert "openMaterialPriceHistory(${m.id}, 'tax')" in source
     assert "openMaterialPriceHistory(${m.id}, 'cash')" in source
     assert "/api/materials/${materialId}/price-history" in source
+
+
+def test_new_inquiry_from_material_selection_defaults_to_normal_tax_price():
+    source = Path("static/js/app.js").read_text(encoding="utf-8")
+    start = source.index("async function generateInquiryFromSelection()")
+    end = source.index("function saveCartToStorage()", start)
+    selected_inquiry_source = source[start:end]
+
+    assert "is_cash_price: 0," in selected_inquiry_source
+    assert "is_cash_price: m.is_cash_price || 0" not in selected_inquiry_source
