@@ -56,13 +56,31 @@ function Stop-AppPythonProcesses {
 }
 
 function Invoke-ExamScoreRegrade {
-    Write-Host "Regrading exam scores and normalizing paper totals"
-    & $VenvPython "tools\regrade_practice_attempts.py" --apply --backup
-    if ($LASTEXITCODE -ne 0) { throw "exam score regrade failed" }
+    # Active users can briefly hold SQLite locks while a deployment is starting.
+    # Keep the regrade/data-fix work mandatory, but retry instead of abandoning
+    # the whole deployment on a transient lock.
+    for ($Attempt = 1; $Attempt -le 5; $Attempt++) {
+        Write-Host "Regrading exam scores and normalizing paper totals (attempt $Attempt/5)"
+        & $VenvPython "tools\regrade_practice_attempts.py" --apply --backup
+        $RegradeExit = $LASTEXITCODE
 
-    Write-Host "Applying one-time exam data fixes"
-    & $VenvPython "tools\apply_exam_data_fixes.py" --apply
-    if ($LASTEXITCODE -ne 0) { throw "exam data fixes failed" }
+        if ($RegradeExit -eq 0) {
+            Write-Host "Applying one-time exam data fixes (attempt $Attempt/5)"
+            & $VenvPython "tools\apply_exam_data_fixes.py" --apply
+            if ($LASTEXITCODE -eq 0) {
+                return
+            }
+            $Failure = "exam data fixes failed"
+        } else {
+            $Failure = "exam score regrade failed"
+        }
+
+        if ($Attempt -lt 5) {
+            Write-Host "$Failure; retrying in 15 seconds."
+            Start-Sleep -Seconds 15
+        }
+    }
+    throw $Failure
 }
 
 $LocalEnv = Join-Path $AppDir "deploy\server.env.ps1"
