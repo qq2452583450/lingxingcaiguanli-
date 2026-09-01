@@ -13,6 +13,7 @@ from services.exam_service import (
     clear_practice_draft,
     DAILY_PRACTICE_QUESTION_COUNT,
     delete_exam_attempt,
+    get_active_attempt_for_user,
     get_attempt,
     get_attempt_review,
     list_attendance_calendar,
@@ -649,8 +650,16 @@ def create_attempt():
     if not _paper_exists(paper_id):
         return _json_error("Paper not found", 404)
 
-    attempt_id = start_attempt(user["id"], paper_id)
-    attempt = get_attempt(attempt_id)
+    try:
+        attempt_id = start_attempt(user["id"], paper_id)
+        attempt = get_attempt(attempt_id)
+    except ValueError as exc:
+        if "exam in progress" not in str(exc):
+            return _json_error(str(exc), 400)
+        attempt = get_active_attempt_for_user(user["id"])
+        if not attempt:
+            return _json_error(str(exc), 400)
+        attempt_id = attempt["id"]
     attempt["attempt_id"] = attempt_id
     return jsonify({"success": True, "attempt_id": attempt_id, "data": attempt})
 

@@ -1606,6 +1606,27 @@ def start_attempt(user_id, paper_id, retake_eligibility_id: int | None = None) -
             conn.close()
 
 
+def get_active_attempt_for_user(user_id) -> dict | None:
+    conn, should_close = _connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT id, user_id, paper_id, status, objective_score,
+                   suggested_subjective_score, final_subjective_score,
+                   final_score, started_at, submitted_at, retake_eligibility_id
+            FROM exam_attempts
+            WHERE user_id = ? AND status = 'in_progress'
+            ORDER BY started_at DESC, id DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+        return _dict_or_none(row)
+    finally:
+        if should_close:
+            conn.close()
+
+
 def get_attempt(attempt_id) -> dict | None:
     conn, should_close = _connection()
     try:

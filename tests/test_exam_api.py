@@ -527,6 +527,28 @@ def test_clerk_cannot_start_attempt_for_non_current_paper(client, test_db):
     assert attempts_for_paper == 0
 
 
+def test_clerk_duplicate_in_progress_attempt_resumes_existing_attempt(client, test_db):
+    seed_exam()
+    select_current_paper(test_db)
+    clerk_id = seed_user(test_db, "active_clerk", "正在考试材料员", ROLE_CLERK)
+    login(client, clerk_id, "active_clerk", "正在考试材料员", ROLE_CLERK)
+
+    first = client.post("/api/exam/attempts", json={}, headers=csrf_headers()).get_json()
+    response = client.post("/api/exam/attempts", json={}, headers=csrf_headers())
+    data = response.get_json()
+    attempt_count = test_db.execute(
+        "SELECT COUNT(*) AS count FROM exam_attempts WHERE user_id = ? AND status = 'in_progress'",
+        (clerk_id,),
+    ).fetchone()["count"]
+
+    assert first["success"] is True
+    assert response.status_code == 200
+    assert data["success"] is True
+    assert data["attempt_id"] == first["attempt_id"]
+    assert data["data"]["id"] == first["attempt_id"]
+    assert attempt_count == 1
+
+
 def test_clerk_cannot_start_formal_exam_before_manager_selects_current_paper(client, test_db):
     seed_exam()
     clerk_id = seed_user(test_db, "no_current", "\u672a\u9009\u8bd5\u5377", ROLE_CLERK)
