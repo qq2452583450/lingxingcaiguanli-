@@ -410,10 +410,17 @@ def test_sync_missing_question_bank_papers_adds_only_absent_titles(test_db):
     assert result == {
         "inserted": len(initial_files) - 1,
         "archived": 0,
+        "migrated_attempts": 0,
         "skipped": 0,
         "source_files": len(initial_files),
     }
-    assert second == {"inserted": 0, "archived": 0, "skipped": 0, "source_files": len(initial_files)}
+    assert second == {
+        "inserted": 0,
+        "archived": 0,
+        "migrated_attempts": 0,
+        "skipped": 0,
+        "source_files": len(initial_files),
+    }
     assert len([paper for paper in papers if paper["source_type"] == "exam"]) == len(initial_files)
     assert len([paper for paper in papers if paper["title"] == first_paper["title"]]) == 1
 
@@ -446,8 +453,60 @@ def test_sync_missing_question_bank_papers_refreshes_changed_title(test_db):
 
     assert result["inserted"] == len(list(source_dir.glob("*.docx")))
     assert result["archived"] == 1
+    assert result["migrated_attempts"] == 0
     assert any(option["key"] == "E" for question in questions for option in question["options"])
     assert any("E" in question["correct_answer"] for question in questions)
+
+
+def test_sync_missing_question_bank_papers_moves_active_attempts_to_refreshed_paper(test_db):
+    source_dir = Path("docs/exam_sources/question_bank")
+    source_path = source_dir / "综合题库四（满分100分）.docx"
+    if not source_path.exists():
+        pytest.skip("Fourth comprehensive bank source is not available")
+    paper = parse_literature_question_bank_docx(source_path)
+    paper_without_e = {
+        **paper,
+        "questions": [
+            {
+                **question,
+                "options": [
+                    option for option in question.get("options", []) if option.get("key") != "E"
+                ],
+                "correct_answer": str(question.get("correct_answer", "")).replace("E", ""),
+            }
+            for question in paper["questions"]
+        ],
+    }
+    old_paper_id = insert_paper(test_db.cursor(), paper_without_e, source_type="exam")
+    user_id = 1
+    test_db.execute(
+        """
+        INSERT INTO users (id, username, password, real_name, create_time)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (user_id, "active_old_paper", "password", "旧卷开考人员", "2026-09-01 00:00:00"),
+    )
+    test_db.execute(
+        """
+        INSERT INTO exam_attempts (user_id, paper_id, status, started_at)
+        VALUES (?, ?, 'in_progress', ?)
+        """,
+        (user_id, old_paper_id, "2026-09-01 00:00:00"),
+    )
+    test_db.commit()
+
+    result = sync_missing_question_bank_papers(source_dir)
+    attempt = test_db.execute(
+        "SELECT paper_id FROM exam_attempts WHERE user_id = ? AND status = 'in_progress'",
+        (user_id,),
+    ).fetchone()
+    active_paper = next(p for p in list_papers() if p["title"] == paper["title"])
+    questions = get_paper_questions(active_paper["id"])
+
+    assert result["migrated_attempts"] == 1
+    assert attempt["paper_id"] == active_paper["id"]
+    assert attempt["paper_id"] != old_paper_id
+    assert any(option["key"] == "E" for question in questions for option in question["options"])
 
 
 def test_startup_exam_source_hook_uses_import_helper(monkeypatch):

@@ -1093,6 +1093,7 @@ def replace_exam_paper_from_question_bank_docx(path: Path) -> dict:
         existing_ids = [row["id"] for row in existing_rows]
         _archive_existing_exam_papers(cursor, existing_ids)
         inserted_id = insert_paper(cursor, paper, source_type="exam")
+        _move_in_progress_attempts(cursor, existing_ids, inserted_id)
         conn.commit()
         return {"inserted": 1, "archived": len(existing_ids), "removed": 0, "paper_id": inserted_id}
     except Exception:
@@ -1108,7 +1109,13 @@ def sync_missing_question_bank_papers(path: Path | None = None) -> dict:
     source_dir = get_question_bank_dir(path)
     docx_files = sorted(source_dir.glob("*.docx"))
     if not docx_files:
-        return {"inserted": 0, "archived": 0, "skipped": 0, "source_files": 0}
+        return {
+            "inserted": 0,
+            "archived": 0,
+            "migrated_attempts": 0,
+            "skipped": 0,
+            "source_files": 0,
+        }
 
     papers = []
     skipped = 0
@@ -1122,6 +1129,7 @@ def sync_missing_question_bank_papers(path: Path | None = None) -> dict:
     cursor = conn.cursor()
     inserted = 0
     archived = 0
+    migrated_attempts = 0
     try:
         active_rows_by_title = {
             row["title"]: row["id"]
@@ -1137,13 +1145,20 @@ def sync_missing_question_bank_papers(path: Path | None = None) -> dict:
             if active_id:
                 _archive_existing_exam_papers(cursor, [active_id])
                 archived += 1
-            insert_paper(cursor, paper, source_type="exam")
-            active_rows_by_title[paper["title"]] = cursor.lastrowid
+            inserted_id = insert_paper(cursor, paper, source_type="exam")
+            if active_id:
+                migrated_attempts += _move_in_progress_attempts(cursor, [active_id], inserted_id)
+            active_rows_by_title[paper["title"]] = inserted_id
             inserted += 1
+        migrated_attempts += _migrate_in_progress_attempts_from_archived_versions(
+            cursor,
+            active_rows_by_title,
+        )
         conn.commit()
         return {
             "inserted": inserted,
             "archived": archived,
+            "migrated_attempts": migrated_attempts,
             "skipped": skipped,
             "source_files": len(docx_files),
         }
@@ -1153,6 +1168,46 @@ def sync_missing_question_bank_papers(path: Path | None = None) -> dict:
     finally:
         if should_close:
             conn.close()
+
+
+def _move_in_progress_attempts(cursor, old_paper_ids: list[int], new_paper_id: int) -> int:
+    if not old_paper_ids:
+        return 0
+    placeholders = ",".join("?" for _ in old_paper_ids)
+    cursor.execute(
+        f"""
+        UPDATE exam_attempts
+        SET paper_id = ?
+        WHERE status = 'in_progress'
+          AND paper_id IN ({placeholders})
+        """,
+        [new_paper_id, *old_paper_ids],
+    )
+    return cursor.rowcount or 0
+
+
+def _migrate_in_progress_attempts_from_archived_versions(
+    cursor,
+    active_rows_by_title: dict[str, int],
+) -> int:
+    migrated = 0
+    for title, active_id in active_rows_by_title.items():
+        archived_rows = cursor.execute(
+            """
+            SELECT id
+            FROM exam_papers
+            WHERE source_type = 'archived_exam'
+              AND title = ?
+              AND id != ?
+            """,
+            (title, active_id),
+        ).fetchall()
+        migrated += _move_in_progress_attempts(
+            cursor,
+            [row["id"] for row in archived_rows],
+            active_id,
+        )
+    return migrated
 
 
 def _active_paper_matches(cursor, paper_id: int, paper: dict) -> bool:
