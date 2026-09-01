@@ -95,7 +95,41 @@ def test_sync_formal_exam_pool_is_idempotent_and_excludes_it_from_practice(test_
     assert get_random_practice_questions(limit=100, paper_id=papers[0]["id"]) == []
 
 
-def test_imported_choice_questions_remove_option_e_and_answer_e(test_db):
+def test_imported_choice_questions_keep_source_option_e(test_db):
+    paper_id = insert_paper(
+        test_db.cursor(),
+        {
+            "title": "With E option paper",
+            "duration_minutes": 60,
+            "questions": [
+                {
+                    "question_type": "multiple_choice",
+                    "order_no": 1,
+                    "stem": "Multiple choice",
+                    "correct_answer": "ABCE",
+                    "reference_answer": "Explanation",
+                    "keywords": "",
+                    "score": 3,
+                    "options": [
+                        {"key": "A", "text": "Option A"},
+                        {"key": "B", "text": "Option B"},
+                        {"key": "C", "text": "Option C"},
+                        {"key": "D", "text": "Option D"},
+                        {"key": "E", "text": "Option E"},
+                    ],
+                }
+            ],
+        },
+    )
+    test_db.commit()
+
+    question = get_paper_questions(paper_id)[0]
+
+    assert question["correct_answer"] == "ABCE"
+    assert [option["key"] for option in question["options"]] == ["A", "B", "C", "D", "E"]
+
+
+def test_imported_choice_questions_drop_answers_without_matching_options(test_db):
     paper_id = insert_paper(
         test_db.cursor(),
         {
@@ -115,7 +149,6 @@ def test_imported_choice_questions_remove_option_e_and_answer_e(test_db):
                         {"key": "B", "text": "Option B"},
                         {"key": "C", "text": "Option C"},
                         {"key": "D", "text": "Option D"},
-                        {"key": "E", "text": "Option E"},
                     ],
                 }
             ],
@@ -374,10 +407,47 @@ def test_sync_missing_question_bank_papers_adds_only_absent_titles(test_db):
     second = sync_missing_question_bank_papers(source_dir)
     papers = list_papers()
 
-    assert result == {"inserted": len(initial_files) - 1, "skipped": 0, "source_files": len(initial_files)}
-    assert second == {"inserted": 0, "skipped": 0, "source_files": len(initial_files)}
+    assert result == {
+        "inserted": len(initial_files) - 1,
+        "archived": 0,
+        "skipped": 0,
+        "source_files": len(initial_files),
+    }
+    assert second == {"inserted": 0, "archived": 0, "skipped": 0, "source_files": len(initial_files)}
     assert len([paper for paper in papers if paper["source_type"] == "exam"]) == len(initial_files)
     assert len([paper for paper in papers if paper["title"] == first_paper["title"]]) == 1
+
+
+def test_sync_missing_question_bank_papers_refreshes_changed_title(test_db):
+    source_dir = Path("docs/exam_sources/question_bank")
+    source_path = source_dir / "综合题库四（满分100分）.docx"
+    if not source_path.exists():
+        pytest.skip("Fourth comprehensive bank source is not available")
+    paper = parse_literature_question_bank_docx(source_path)
+    paper_without_e = {
+        **paper,
+        "questions": [
+            {
+                **question,
+                "options": [
+                    option for option in question.get("options", []) if option.get("key") != "E"
+                ],
+                "correct_answer": str(question.get("correct_answer", "")).replace("E", ""),
+            }
+            for question in paper["questions"]
+        ],
+    }
+    insert_paper(test_db.cursor(), paper_without_e, source_type="exam")
+    test_db.commit()
+
+    result = sync_missing_question_bank_papers(source_dir)
+    active_paper = next(p for p in list_papers() if p["title"] == paper["title"])
+    questions = get_paper_questions(active_paper["id"])
+
+    assert result["inserted"] == len(list(source_dir.glob("*.docx")))
+    assert result["archived"] == 1
+    assert any(option["key"] == "E" for question in questions for option in question["options"])
+    assert any("E" in question["correct_answer"] for question in questions)
 
 
 def test_startup_exam_source_hook_uses_import_helper(monkeypatch):

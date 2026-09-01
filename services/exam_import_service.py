@@ -1104,11 +1104,11 @@ def replace_exam_paper_from_question_bank_docx(path: Path) -> dict:
 
 
 def sync_missing_question_bank_papers(path: Path | None = None) -> dict:
-    """Insert bundled question-bank papers that are not active yet."""
+    """Insert or refresh bundled question-bank papers that are not active yet."""
     source_dir = get_question_bank_dir(path)
     docx_files = sorted(source_dir.glob("*.docx"))
     if not docx_files:
-        return {"inserted": 0, "skipped": 0, "source_files": 0}
+        return {"inserted": 0, "archived": 0, "skipped": 0, "source_files": 0}
 
     papers = []
     skipped = 0
@@ -1121,28 +1121,85 @@ def sync_missing_question_bank_papers(path: Path | None = None) -> dict:
     conn, should_close = _connection()
     cursor = conn.cursor()
     inserted = 0
+    archived = 0
     try:
-        active_titles = {
-            row["title"]
+        active_rows_by_title = {
+            row["title"]: row["id"]
             for row in cursor.execute(
-                "SELECT title FROM exam_papers WHERE source_type = ?",
+                "SELECT id, title FROM exam_papers WHERE source_type = ?",
                 ("exam",),
             ).fetchall()
         }
         for paper in papers:
-            if paper["title"] in active_titles:
+            active_id = active_rows_by_title.get(paper["title"])
+            if active_id and _active_paper_matches(cursor, active_id, paper):
                 continue
+            if active_id:
+                _archive_existing_exam_papers(cursor, [active_id])
+                archived += 1
             insert_paper(cursor, paper, source_type="exam")
-            active_titles.add(paper["title"])
+            active_rows_by_title[paper["title"]] = cursor.lastrowid
             inserted += 1
         conn.commit()
-        return {"inserted": inserted, "skipped": skipped, "source_files": len(docx_files)}
+        return {
+            "inserted": inserted,
+            "archived": archived,
+            "skipped": skipped,
+            "source_files": len(docx_files),
+        }
     except Exception:
         conn.rollback()
         raise
     finally:
         if should_close:
             conn.close()
+
+
+def _active_paper_matches(cursor, paper_id: int, paper: dict) -> bool:
+    rows = cursor.execute(
+        """
+        SELECT id, question_type, order_no, stem, correct_answer, score
+        FROM exam_questions
+        WHERE paper_id = ?
+        ORDER BY order_no
+        """,
+        (paper_id,),
+    ).fetchall()
+    if len(rows) != len(paper.get("questions", [])):
+        return False
+    for row, question in zip(rows, paper.get("questions", [])):
+        if (
+            row["question_type"] != question["question_type"]
+            or row["order_no"] != question["order_no"]
+            or str(row["stem"] or "") != str(question["stem"] or "")
+            or str(row["correct_answer"] or "") != _clean_choice_answer(
+                question["question_type"],
+                question.get("correct_answer", ""),
+                question.get("options", []),
+            )
+            or float(row["score"] or 0) != float(question["score"] or 0)
+        ):
+            return False
+        option_rows = cursor.execute(
+            """
+            SELECT option_key, option_text
+            FROM exam_question_options
+            WHERE question_id = ?
+            ORDER BY option_key
+            """,
+            (row["id"],),
+        ).fetchall()
+        stored_options = [
+            (option["option_key"], option["option_text"])
+            for option in option_rows
+        ]
+        expected_options = [
+            (option["key"], option["text"])
+            for option in question.get("options", [])
+        ]
+        if stored_options != expected_options:
+            return False
+    return True
 
 
 def sync_question_bank_reference_answers(path: Path | None = None) -> dict:
@@ -1327,6 +1384,18 @@ def _archive_existing_exam_papers(cursor, paper_ids: list[int]) -> None:
     )
 
 
+def _clean_choice_answer(question_type: str, correct_answer: str, options: list[dict]) -> str:
+    normalized_answer = str(correct_answer or "").replace(" ", "").upper()
+    if question_type not in {"single_choice", "multiple_choice"}:
+        return normalized_answer
+    option_keys = {
+        str(option.get("key") or "").strip().upper()
+        for option in options
+        if str(option.get("key") or "").strip()
+    }
+    return "".join(letter for letter in normalized_answer if letter in option_keys)
+
+
 def insert_paper(cursor, paper: dict, source_type: str = "exam") -> int:
     """Insert one parsed paper and its questions/options."""
     cursor.execute(
@@ -1349,10 +1418,9 @@ def insert_paper(cursor, paper: dict, source_type: str = "exam") -> int:
         options = question.get("options", [])
         correct_answer = str(question.get("correct_answer", ""))
         if question_type in {"single_choice", "multiple_choice"}:
-            options = [option for option in options if option.get("key") != "E"]
-            correct_answer = correct_answer.replace("E", "")
+            correct_answer = _clean_choice_answer(question_type, correct_answer, options)
             if not correct_answer:
-                raise ValueError("Choice question has no A-D correct answer after removing option E")
+                raise ValueError("Choice question has no valid answer matching its options")
         cursor.execute(
             """
             INSERT INTO exam_questions (
