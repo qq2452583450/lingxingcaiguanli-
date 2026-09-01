@@ -42,8 +42,10 @@ PAPER_TITLE_RE = re.compile(r"^第[一二三四五]套(?!.*参考答案)")
 ANSWER_TOKEN_RE = re.compile(r"(\d+)\s*[.．、]\s*([A-E√×]+)")
 NUMBERED_TEXT_RE = re.compile(r"^(\d+)\s*[.．、]\s*(.*)")
 OPTION_RE = re.compile(r"([A-E])[.．、](.*?)(?=\s+[A-E][.．、]|$)")
-BANK_OPTION_RE = re.compile(r"^([A-D])[\s.．、]+(.+)$")
-BANK_ANSWER_TOKEN_RE = re.compile(r"(\d+)\s*[.．、]?\s*([A-D]+|[√×])")
+# Some source Word files place each option on its own line.  Do not silently
+# discard a valid E option in that layout.
+BANK_OPTION_RE = re.compile(r"^([A-E])[\s.．、]+(.+)$")
+BANK_ANSWER_TOKEN_RE = re.compile(r"(\d+)\s*[.．、]?\s*([A-E]+|[√×])")
 FORMAL_EXAM_POOL_TITLE_RE = re.compile(r"^综合题库[一二三]（满分\s*100\s*分）$")
 
 
@@ -1131,15 +1133,19 @@ def sync_missing_question_bank_papers(path: Path | None = None) -> dict:
     archived = 0
     migrated_attempts = 0
     try:
+        # Word titles have historically differed only by spaces around "100 分".
+        # Treat those as the same paper so an unfinished old attempt is moved to
+        # the refreshed paper instead of continuing to serve stale A-D options.
         active_rows_by_title = {
-            row["title"]: row["id"]
+            _normalized_paper_title(row["title"]): row["id"]
             for row in cursor.execute(
                 "SELECT id, title FROM exam_papers WHERE source_type = ?",
                 ("exam",),
             ).fetchall()
         }
         for paper in papers:
-            active_id = active_rows_by_title.get(paper["title"])
+            title_key = _normalized_paper_title(paper["title"])
+            active_id = active_rows_by_title.get(title_key)
             if active_id and _active_paper_matches(cursor, active_id, paper):
                 continue
             if active_id:
@@ -1148,7 +1154,7 @@ def sync_missing_question_bank_papers(path: Path | None = None) -> dict:
             inserted_id = insert_paper(cursor, paper, source_type="exam")
             if active_id:
                 migrated_attempts += _move_in_progress_attempts(cursor, [active_id], inserted_id)
-            active_rows_by_title[paper["title"]] = inserted_id
+            active_rows_by_title[title_key] = inserted_id
             inserted += 1
         migrated_attempts += _migrate_in_progress_attempts_from_archived_versions(
             cursor,
@@ -1191,23 +1197,28 @@ def _migrate_in_progress_attempts_from_archived_versions(
     active_rows_by_title: dict[str, int],
 ) -> int:
     migrated = 0
-    for title, active_id in active_rows_by_title.items():
-        archived_rows = cursor.execute(
-            """
-            SELECT id
-            FROM exam_papers
-            WHERE source_type = 'archived_exam'
-              AND title = ?
-              AND id != ?
-            """,
-            (title, active_id),
-        ).fetchall()
+    archived_rows_by_title: dict[str, list[int]] = {}
+    for row in cursor.execute(
+        """
+        SELECT id, title
+        FROM exam_papers
+        WHERE source_type = 'archived_exam'
+        """
+    ).fetchall():
+        archived_rows_by_title.setdefault(_normalized_paper_title(row["title"]), []).append(row["id"])
+
+    for title_key, active_id in active_rows_by_title.items():
         migrated += _move_in_progress_attempts(
             cursor,
-            [row["id"] for row in archived_rows],
+            [paper_id for paper_id in archived_rows_by_title.get(title_key, []) if paper_id != active_id],
             active_id,
         )
     return migrated
+
+
+def _normalized_paper_title(title: str) -> str:
+    """Match source and database titles regardless of formatting whitespace."""
+    return re.sub(r"\s+", "", str(title or ""))
 
 
 def _active_paper_matches(cursor, paper_id: int, paper: dict) -> bool:

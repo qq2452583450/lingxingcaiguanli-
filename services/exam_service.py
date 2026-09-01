@@ -62,9 +62,14 @@ def _sync_question_bank_references_once() -> None:
         return
     try:
         from services.exam_import_service import (
+            sync_missing_question_bank_papers,
             sync_question_bank_reference_answers,
         )
 
+        # Refresh the bundled sources before a user resumes an unfinished exam.
+        # This is also the recovery path for attempts started before an option E
+        # was imported into the active paper.
+        sync_missing_question_bank_papers()
         sync_question_bank_reference_answers()
     except Exception:
         return
@@ -293,6 +298,7 @@ def get_random_formal_exam_paper() -> dict | None:
 
 
 def get_paper_questions(paper_id: int) -> list[dict]:
+    _sync_question_bank_references_once()
     conn, should_close = _connection()
     try:
         question_rows = conn.execute(
@@ -1607,6 +1613,7 @@ def start_attempt(user_id, paper_id, retake_eligibility_id: int | None = None) -
 
 
 def get_active_attempt_for_user(user_id) -> dict | None:
+    _sync_question_bank_references_once()
     conn, should_close = _connection()
     try:
         row = conn.execute(
@@ -1628,6 +1635,7 @@ def get_active_attempt_for_user(user_id) -> dict | None:
 
 
 def get_attempt(attempt_id) -> dict | None:
+    _sync_question_bank_references_once()
     conn, should_close = _connection()
     try:
         row = conn.execute(

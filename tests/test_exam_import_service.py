@@ -509,6 +509,56 @@ def test_sync_missing_question_bank_papers_moves_active_attempts_to_refreshed_pa
     assert any(option["key"] == "E" for question in questions for option in question["options"])
 
 
+def test_sync_moves_in_progress_attempt_when_paper_title_spacing_differs(test_db):
+    source_dir = Path("docs/exam_sources/question_bank")
+    source_path = source_dir / "综合题库四（满分100分）.docx"
+    if not source_path.exists():
+        pytest.skip("Fourth comprehensive bank source is not available")
+    paper = parse_literature_question_bank_docx(source_path)
+    old_paper = {
+        **paper,
+        "title": paper["title"].replace(" ", ""),
+        "questions": [
+            {
+                **question,
+                "options": [
+                    option for option in question.get("options", []) if option.get("key") != "E"
+                ],
+                "correct_answer": str(question.get("correct_answer", "")).replace("E", ""),
+            }
+            for question in paper["questions"]
+        ],
+    }
+    old_paper_id = insert_paper(test_db.cursor(), old_paper, source_type="exam")
+    test_db.execute(
+        """
+        INSERT INTO users (id, username, password, real_name, create_time)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (1, "title_spacing_user", "password", "题名空格用户", "2026-09-01 00:00:00"),
+    )
+    test_db.execute(
+        """
+        INSERT INTO exam_attempts (user_id, paper_id, status, started_at)
+        VALUES (?, ?, 'in_progress', ?)
+        """,
+        (1, old_paper_id, "2026-09-01 00:00:00"),
+    )
+    test_db.commit()
+
+    result = sync_missing_question_bank_papers(source_dir)
+    attempt = test_db.execute(
+        "SELECT paper_id FROM exam_attempts WHERE user_id = ? AND status = 'in_progress'",
+        (1,),
+    ).fetchone()
+    active_paper = next(p for p in list_papers() if p["title"] == paper["title"])
+    questions = get_paper_questions(active_paper["id"])
+
+    assert result["migrated_attempts"] == 1
+    assert attempt["paper_id"] == active_paper["id"]
+    assert any(option["key"] == "E" for question in questions for option in question["options"])
+
+
 def test_startup_exam_source_hook_uses_import_helper(monkeypatch):
     calls = []
 
