@@ -2,6 +2,7 @@ from pathlib import Path
 import importlib
 
 import pytest
+from docx import Document
 
 from services.exam_import_service import (
     BUNDLED_FORMAL_EXAM_POOL_DIR,
@@ -15,6 +16,7 @@ from services.exam_import_service import (
     parse_formal_exam_pool_docx,
     parse_literature_question_bank_docx,
     replace_exam_paper_from_question_bank_docx,
+    sync_missing_question_bank_papers,
     sync_formal_exam_pool_papers,
     sync_question_bank_reference_answers,
     import_exam_papers_from_docx,
@@ -125,6 +127,29 @@ def test_imported_choice_questions_remove_option_e_and_answer_e(test_db):
 
     assert question["correct_answer"] == "ABC"
     assert [option["key"] for option in question["options"]] == ["A", "B", "C", "D"]
+
+
+def test_literature_question_bank_uses_section_scores(tmp_path):
+    source_path = tmp_path / "scored-bank.docx"
+    doc = Document()
+    doc.add_paragraph("综合题库四（满分100分）")
+    doc.add_paragraph("一、单项选择题（每题 3 分）")
+    doc.add_paragraph("1. 单选题？")
+    doc.add_paragraph("A. 甲 B. 乙 C. 丙 D. 丁")
+    doc.add_paragraph("答案：A")
+    doc.add_paragraph("二、多项选择题（每题 3 分）")
+    doc.add_paragraph("1. 多选题？")
+    doc.add_paragraph("A. 甲 B. 乙 C. 丙 D. 丁 E. 戊")
+    doc.add_paragraph("答案：AB")
+    doc.add_paragraph("三、判断题（每题 2 分）")
+    doc.add_paragraph("1. 判断题。")
+    doc.add_paragraph("答案：√")
+    doc.save(source_path)
+
+    paper = parse_literature_question_bank_docx(source_path)
+
+    assert [question["score"] for question in paper["questions"]] == [3, 3, 2]
+    assert paper["total_score"] == 8
 
 
 def test_sync_formal_exam_pool_preserves_current_exam_and_daily_practice_bank(test_db):
@@ -278,9 +303,9 @@ def test_ensure_exam_sources_imported_is_idempotent(test_db):
     first = ensure_exam_sources_imported()
     second = ensure_exam_sources_imported()
 
-    assert first == {"created": True, "paper_count": 8}
-    assert second == {"created": False, "paper_count": 8}
-    assert len([paper for paper in list_papers() if paper["source_type"] == "exam"]) == 5
+    assert first == {"created": True, "paper_count": 9}
+    assert second == {"created": False, "paper_count": 9}
+    assert len([paper for paper in list_papers() if paper["source_type"] == "exam"]) == 6
     assert len(
         [paper for paper in list_papers() if paper["source_type"] == FORMAL_EXAM_POOL_SOURCE_TYPE]
     ) == 3
@@ -295,7 +320,7 @@ def test_ensure_exam_sources_imported_keeps_missing_current_setting(test_db):
 
     result = ensure_exam_sources_imported()
 
-    assert result == {"created": True, "paper_count": 8}
+    assert result == {"created": True, "paper_count": 9}
     assert get_current_exam_paper() is None
 
 
@@ -319,7 +344,7 @@ def test_ensure_exam_sources_imported_does_not_replace_non_exam_current_setting(
 
     result = ensure_exam_sources_imported()
 
-    assert result == {"created": True, "paper_count": 8}
+    assert result == {"created": True, "paper_count": 9}
     assert get_current_exam_paper() is None
 
 
@@ -332,9 +357,27 @@ def test_ensure_exam_sources_imported_does_not_replace_stale_current_setting(tes
 
     result = ensure_exam_sources_imported()
 
-    assert result == {"created": True, "paper_count": 8}
+    assert result == {"created": True, "paper_count": 9}
     assert get_current_exam_paper() is None
-    assert len([paper for paper in list_papers() if paper["source_type"] == "exam"]) == 5
+    assert len([paper for paper in list_papers() if paper["source_type"] == "exam"]) == 6
+
+
+def test_sync_missing_question_bank_papers_adds_only_absent_titles(test_db):
+    source_dir = Path("docs/exam_sources/question_bank")
+    initial_files = sorted(source_dir.glob("*.docx"))
+    first_path = initial_files[0]
+    first_paper = parse_literature_question_bank_docx(first_path)
+    insert_paper(test_db.cursor(), first_paper, source_type="exam")
+    test_db.commit()
+
+    result = sync_missing_question_bank_papers(source_dir)
+    second = sync_missing_question_bank_papers(source_dir)
+    papers = list_papers()
+
+    assert result == {"inserted": len(initial_files) - 1, "skipped": 0, "source_files": len(initial_files)}
+    assert second == {"inserted": 0, "skipped": 0, "source_files": len(initial_files)}
+    assert len([paper for paper in papers if paper["source_type"] == "exam"]) == len(initial_files)
+    assert len([paper for paper in papers if paper["title"] == first_paper["title"]]) == 1
 
 
 def test_startup_exam_source_hook_uses_import_helper(monkeypatch):

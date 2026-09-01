@@ -165,6 +165,7 @@ def parse_literature_question_bank_docx(path: Path) -> dict:
     title = lines[0] if lines else path.stem
     questions: list[dict] = []
     current_type = "single_choice"
+    current_score = QUESTION_SCORES[current_type]
     current: dict | None = None
 
     def flush() -> None:
@@ -191,6 +192,7 @@ def parse_literature_question_bank_docx(path: Path) -> dict:
                 current_type = "multiple_choice"
             else:
                 current_type = "single_choice"
+            current_score = _score_from_section_heading(line, current_type)
             continue
 
         answer = _prefixed_text(line, "答案")
@@ -228,6 +230,7 @@ def parse_literature_question_bank_docx(path: Path) -> dict:
             correct_answer="",
             reference_answer="",
             keywords="",
+            score=current_score,
         )
 
     flush()
@@ -339,6 +342,14 @@ def _is_literature_section_heading(line: str) -> bool:
     return bool(re.match(r"^[一二三四五六七八九十]+[、.．]", line)) and (
         "单" in line or "多" in line or "判断" in line
     )
+
+
+def _score_from_section_heading(line: str, question_type: str) -> float:
+    match = re.search(r"每\s*[题道]\s*([0-9]+(?:\.[0-9]+)?)\s*分", line)
+    if not match:
+        return QUESTION_SCORES[question_type]
+    value = float(match.group(1))
+    return int(value) if value.is_integer() else value
 
 
 def _prefixed_text(line: str, prefix: str) -> str | None:
@@ -833,6 +844,7 @@ def _question(
     correct_answer: str,
     reference_answer: str = "",
     keywords: str = "",
+    score: float | int | None = None,
 ) -> dict:
     return {
         "question_type": question_type,
@@ -843,7 +855,7 @@ def _question(
         "correct_answer": correct_answer,
         "reference_answer": reference_answer,
         "keywords": keywords,
-        "score": QUESTION_SCORES[question_type],
+        "score": QUESTION_SCORES[question_type] if score is None else score,
     }
 
 
@@ -1091,6 +1103,48 @@ def replace_exam_paper_from_question_bank_docx(path: Path) -> dict:
             conn.close()
 
 
+def sync_missing_question_bank_papers(path: Path | None = None) -> dict:
+    """Insert bundled question-bank papers that are not active yet."""
+    source_dir = get_question_bank_dir(path)
+    docx_files = sorted(source_dir.glob("*.docx"))
+    if not docx_files:
+        return {"inserted": 0, "skipped": 0, "source_files": 0}
+
+    papers = []
+    skipped = 0
+    for docx_path in docx_files:
+        try:
+            papers.append(parse_literature_question_bank_docx(docx_path))
+        except (BadZipFile, ValueError):
+            skipped += 1
+
+    conn, should_close = _connection()
+    cursor = conn.cursor()
+    inserted = 0
+    try:
+        active_titles = {
+            row["title"]
+            for row in cursor.execute(
+                "SELECT title FROM exam_papers WHERE source_type = ?",
+                ("exam",),
+            ).fetchall()
+        }
+        for paper in papers:
+            if paper["title"] in active_titles:
+                continue
+            insert_paper(cursor, paper, source_type="exam")
+            active_titles.add(paper["title"])
+            inserted += 1
+        conn.commit()
+        return {"inserted": inserted, "skipped": skipped, "source_files": len(docx_files)}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        if should_close:
+            conn.close()
+
+
 def sync_question_bank_reference_answers(path: Path | None = None) -> dict:
     """Backfill missing question explanations from the desktop question bank."""
     source_dir = get_question_bank_dir(path)
@@ -1217,6 +1271,8 @@ def ensure_exam_sources_imported() -> dict:
     created = False
     if existing_count:
         if question_bank_dir.exists() and list(question_bank_dir.glob("*.docx")):
+            missing_result = sync_missing_question_bank_papers(question_bank_dir)
+            created = created or bool(missing_result["inserted"])
             sync_question_bank_reference_answers(question_bank_dir)
     elif question_bank_dir.exists() and list(question_bank_dir.glob("*.docx")):
         try:
