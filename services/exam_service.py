@@ -1562,7 +1562,7 @@ def start_attempt(user_id, paper_id, retake_eligibility_id: int | None = None) -
     try:
         active_attempt = conn.execute(
             """
-            SELECT id
+            SELECT id, paper_id
             FROM exam_attempts
             WHERE user_id = ? AND status = 'in_progress'
             ORDER BY started_at DESC, id DESC
@@ -1571,7 +1571,17 @@ def start_attempt(user_id, paper_id, retake_eligibility_id: int | None = None) -
             (user_id,),
         ).fetchone()
         if active_attempt:
-            raise ValueError("You already have an exam in progress")
+            # A never-answered attempt from an older paper must not permanently
+            # trap a clerk on that paper after the administrator switches to a
+            # refreshed exam bank.  Any attempt with answers remains protected.
+            has_answers = conn.execute(
+                "SELECT 1 FROM exam_answers WHERE attempt_id = ? LIMIT 1",
+                (active_attempt["id"],),
+            ).fetchone()
+            if int(active_attempt["paper_id"]) != int(paper_id) and not has_answers:
+                conn.execute("DELETE FROM exam_attempts WHERE id = ?", (active_attempt["id"],))
+            else:
+                raise ValueError("You already have an exam in progress")
         if retake_eligibility_id is not None:
             eligibility = conn.execute(
                 """
