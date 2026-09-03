@@ -661,7 +661,7 @@ def test_review_answer_completes_attempt_and_results_scope_by_viewer(test_db):
     assert manager_results[0]["paper_title"] == paper["title"]
 
 
-def test_results_keep_only_the_highest_score_per_user(test_db):
+def test_results_preserve_all_formal_attempts_for_each_user(test_db):
     paper, _, _ = load_exam(test_db)
     clerk_id = seed_user(test_db, "highest_result", "最高分材料员", "材料员")
     manager_id = seed_user(test_db, "highest_manager", "成绩管理员", "系统管理员")
@@ -699,9 +699,10 @@ def test_results_keep_only_the_highest_score_per_user(test_db):
     manager_results = list_results({"viewer": {"id": manager_id, "role_name": "系统管理员"}})
     clerk_results = list_results({"viewer": {"id": clerk_id, "role_name": "材料员"}})
 
-    assert [row["attempt_id"] for row in manager_results] == [tie_attempt_id]
-    assert [row["attempt_id"] for row in clerk_results] == [tie_attempt_id]
-    assert manager_results[0]["final_score"] == 90
+    expected_attempt_ids = [tie_attempt_id, high_attempt_id, low_attempt_id]
+    assert [row["attempt_id"] for row in manager_results] == expected_attempt_ids
+    assert [row["attempt_id"] for row in clerk_results] == expected_attempt_ids
+    assert [row["final_score"] for row in clerk_results] == [90, 90, 60]
 
 
 def test_start_attempt_rejects_a_second_in_progress_exam(test_db):

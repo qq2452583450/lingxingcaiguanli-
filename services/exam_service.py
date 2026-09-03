@@ -2180,34 +2180,18 @@ def list_results(filters=None) -> list[dict]:
     try:
         rows = conn.execute(
             f"""
-            WITH ranked_results AS (
-                SELECT att.id, att.id AS attempt_id, att.user_id,
-                       u.real_name AS user_name, u.username, r.role_name,
-                       att.paper_id, p.title AS paper_title, att.status,
-                       att.objective_score, att.suggested_subjective_score,
-                       att.final_subjective_score, att.final_score,
-                       att.started_at, att.submitted_at,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY att.user_id
-                           ORDER BY
-                               CASE WHEN att.final_score IS NULL THEN 1 ELSE 0 END,
-                               att.final_score DESC,
-                               COALESCE(att.submitted_at, att.started_at) DESC,
-                               att.id DESC
-                       ) AS result_rank
-                FROM exam_attempts att
-                JOIN users u ON u.id = att.user_id
-                LEFT JOIN roles r ON r.id = u.role_id
-                JOIN exam_papers p ON p.id = att.paper_id
-                {where_sql}
-            )
-            SELECT id, attempt_id, user_id, user_name, username, role_name,
-                   paper_id, paper_title, status, objective_score,
-                   suggested_subjective_score, final_subjective_score, final_score,
-                   started_at, submitted_at
-            FROM ranked_results
-            WHERE result_rank = 1
-            ORDER BY COALESCE(submitted_at, started_at) DESC, attempt_id DESC
+            SELECT att.id, att.id AS attempt_id, att.user_id,
+                   u.real_name AS user_name, u.username, r.role_name,
+                   att.paper_id, p.title AS paper_title, att.status,
+                   att.objective_score, att.suggested_subjective_score,
+                   att.final_subjective_score, att.final_score,
+                   att.started_at, att.submitted_at
+            FROM exam_attempts att
+            JOIN users u ON u.id = att.user_id
+            LEFT JOIN roles r ON r.id = u.role_id
+            JOIN exam_papers p ON p.id = att.paper_id
+            {where_sql}
+            ORDER BY COALESCE(att.submitted_at, att.started_at) DESC, att.id DESC
             """,
             params,
         ).fetchall()
