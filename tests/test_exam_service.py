@@ -716,6 +716,58 @@ def test_start_attempt_rejects_a_second_in_progress_exam(test_db):
     assert get_attempt(attempt_id)["status"] == "in_progress"
 
 
+def test_start_attempt_reuses_an_unanswered_ordinary_attempt_after_paper_switch(test_db):
+    first_paper, _, _ = load_exam(test_db)
+    clerk_id = seed_user(test_db, "switched_paper", "切换试卷材料员", "材料员")
+    old_attempt_id = start_attempt(clerk_id, first_paper["id"])
+    cursor = test_db.execute(
+        """
+        INSERT INTO exam_papers (title, duration_minutes, total_score, source_type, create_time)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("新正式考试卷", 60, 100, "exam", "2026-09-04 09:00:00"),
+    )
+
+    resumed_attempt_id = start_attempt(clerk_id, cursor.lastrowid)
+
+    assert resumed_attempt_id == old_attempt_id
+    assert get_attempt(resumed_attempt_id)["paper_id"] == cursor.lastrowid
+
+
+def test_start_attempt_keeps_an_unanswered_retake_attempt_when_paper_switches(test_db):
+    first_paper, _, _ = load_exam(test_db)
+    clerk_id = seed_user(test_db, "retake_switch", "补考切换材料员", "材料员")
+    old_attempt_id = start_attempt(clerk_id, first_paper["id"])
+    eligibility = test_db.execute(
+        """
+        INSERT INTO exam_retake_eligibilities (
+            user_id, paper_id, eligibility_type, status, used_attempt_id, reason, created_at, used_at
+        ) VALUES (?, ?, 'retake_failed', 'used', ?, '测试补考', '2026-09-04 09:00:00', '2026-09-04 09:00:00')
+        """,
+        (clerk_id, first_paper["id"], old_attempt_id),
+    )
+    test_db.execute(
+        "UPDATE exam_attempts SET retake_eligibility_id = ? WHERE id = ?",
+        (eligibility.lastrowid, old_attempt_id),
+    )
+    second_paper = test_db.execute(
+        """
+        INSERT INTO exam_papers (title, duration_minutes, total_score, source_type, create_time)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        ("另一套正式考试卷", 60, 100, "exam", "2026-09-04 09:00:00"),
+    )
+
+    with pytest.raises(ValueError, match="already have an exam in progress"):
+        start_attempt(clerk_id, second_paper.lastrowid)
+
+    assert get_attempt(old_attempt_id)["paper_id"] == first_paper["id"]
+    assert test_db.execute(
+        "SELECT used_attempt_id FROM exam_retake_eligibilities WHERE id = ?",
+        (eligibility.lastrowid,),
+    ).fetchone()["used_attempt_id"] == old_attempt_id
+
+
 def test_manager_results_include_material_clerks_without_an_exam_attempt(test_db):
     manager_id = seed_user(test_db, "result_manager", "成绩管理员", "系统管理员")
     clerk_id = seed_user(test_db, "no_exam_clerk", "刘光华", "材料员")

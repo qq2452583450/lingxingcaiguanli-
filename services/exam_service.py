@@ -1562,7 +1562,7 @@ def start_attempt(user_id, paper_id, retake_eligibility_id: int | None = None) -
     try:
         active_attempt = conn.execute(
             """
-            SELECT id, paper_id
+            SELECT id, paper_id, retake_eligibility_id
             FROM exam_attempts
             WHERE user_id = ? AND status = 'in_progress'
             ORDER BY started_at DESC, id DESC
@@ -1571,15 +1571,36 @@ def start_attempt(user_id, paper_id, retake_eligibility_id: int | None = None) -
             (user_id,),
         ).fetchone()
         if active_attempt:
-            # A never-answered attempt from an older paper must not permanently
-            # trap a clerk on that paper after the administrator switches to a
-            # refreshed exam bank.  Any attempt with answers remains protected.
+            # A never-answered ordinary attempt from an older paper must not
+            # permanently trap a clerk on that paper after an administrator
+            # switches to a refreshed exam bank.  Reuse that row instead of
+            # deleting it: an attempt can be referenced by a retake record and
+            # SQLite correctly refuses to delete a referenced row.
+            #
+            # A retake attempt itself must stay on its original paper, so the
+            # user can resume it rather than silently changing its exam.
             has_answers = conn.execute(
                 "SELECT 1 FROM exam_answers WHERE attempt_id = ? LIMIT 1",
                 (active_attempt["id"],),
             ).fetchone()
-            if int(active_attempt["paper_id"]) != int(paper_id) and not has_answers:
-                conn.execute("DELETE FROM exam_attempts WHERE id = ?", (active_attempt["id"],))
+            if (
+                int(active_attempt["paper_id"]) != int(paper_id)
+                and not has_answers
+                and active_attempt["retake_eligibility_id"] is None
+            ):
+                conn.execute(
+                    """
+                    UPDATE exam_attempts
+                    SET paper_id = ?, objective_score = 0,
+                        suggested_subjective_score = 0,
+                        final_subjective_score = NULL, final_score = NULL,
+                        started_at = ?, submitted_at = NULL
+                    WHERE id = ?
+                    """,
+                    (paper_id, _now(), active_attempt["id"]),
+                )
+                conn.commit()
+                return active_attempt["id"]
             else:
                 raise ValueError("You already have an exam in progress")
         if retake_eligibility_id is not None:
