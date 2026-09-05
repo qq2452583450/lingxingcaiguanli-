@@ -141,6 +141,85 @@ def _filters_from_request():
     return filters
 
 
+def _result_filters_from_request():
+    filters = _filters_from_request()
+    include_history = request.args.get("history", "").lower() in {"1", "true", "yes"}
+    current_paper = get_current_exam_paper()
+    if current_paper and not include_history:
+        filters["paper_id"] = current_paper["id"]
+        filters["current_only"] = True
+    filters["include_history"] = include_history
+    return filters
+
+
+def _exam_results_workbook(rows, include_history=False):
+    from datetime import datetime
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "正式考试成绩"
+    sheet.sheet_view.showGridLines = False
+    scope = "历史正式考试成绩" if include_history else "当前正式考试成绩"
+    sheet.append([scope])
+    sheet.merge_cells("A1:K1")
+    sheet["A1"].font = Font(name="等线", size=16, bold=True, color="FFFFFF")
+    sheet["A1"].fill = PatternFill("solid", fgColor="1F4E78")
+    sheet["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    sheet.row_dimensions[1].height = 26
+    sheet.append(["导出时间", datetime.now().strftime("%Y-%m-%d %H:%M")])
+    sheet.append([
+        "姓名", "账号", "角色", "试卷", "状态", "客观题", "主观题", "总分",
+        "开始时间", "提交时间", "备注",
+    ])
+    header_fill = PatternFill("solid", fgColor="1F4E78")
+    for cell in sheet[3]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    status_labels = {
+        "completed": "已完成",
+        "pending_review": "待阅卷",
+        "in_progress": "进行中",
+        "not_completed": "未完成",
+    }
+    for row in rows:
+        status = row.get("status") or ""
+        sheet.append([
+            row.get("user_name") or row.get("username") or "-",
+            row.get("username") or "-",
+            row.get("role_name") or "-",
+            row.get("paper_title") or "-",
+            status_labels.get(status, status or "-"),
+            row.get("objective_score"),
+            row.get("final_subjective_score")
+            if row.get("final_subjective_score") is not None
+            else row.get("suggested_subjective_score"),
+            row.get("final_score"),
+            row.get("started_at") or "-",
+            row.get("submitted_at") or "-",
+            "当前试卷尚未参加" if status == "not_completed" else "",
+        ])
+
+    for column, width in {
+        "A": 12, "B": 16, "C": 16, "D": 28, "E": 12, "F": 12,
+        "G": 12, "H": 12, "I": 20, "J": 20, "K": 24,
+    }.items():
+        sheet.column_dimensions[column].width = width
+    for row in sheet.iter_rows(min_row=2, max_row=sheet.max_row):
+        for cell in row:
+            cell.alignment = Alignment(vertical="center")
+    sheet.freeze_panes = "A4"
+    sheet.auto_filter.ref = f"A3:K{max(sheet.max_row, 3)}"
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
 def _monthly_checkins_workbook(rows, month):
     from calendar import monthrange
     from datetime import datetime
@@ -659,6 +738,11 @@ def create_attempt():
         attempt = get_active_attempt_for_user(user["id"])
         if not attempt:
             return _json_error(str(exc), 400)
+        if int(attempt["paper_id"]) != int(paper_id):
+            return _json_error(
+                "当前正式考试试卷已变更，请管理员先删除该未完成的旧试卷记录后重新开始考试",
+                409,
+            )
         attempt_id = attempt["id"]
     attempt["attempt_id"] = attempt_id
     return jsonify({"success": True, "attempt_id": attempt_id, "data": attempt})
@@ -727,7 +811,7 @@ def results():
     if denied:
         return denied
 
-    filters = _filters_from_request()
+    filters = _result_filters_from_request()
     filters["viewer"] = user
     return jsonify({"success": True, "data": list_results(filters)})
 
@@ -866,9 +950,28 @@ def admin_results():
     if denied:
         return denied
 
-    filters = _filters_from_request()
+    filters = _result_filters_from_request()
     filters["viewer"] = user
     return jsonify({"success": True, "data": list_results(filters)})
+
+
+@exam_bp.route("/admin/results/export", methods=["GET"])
+def export_admin_results():
+    user, denied = _require_exam_manager()
+    if denied:
+        return denied
+
+    filters = _result_filters_from_request()
+    filters["viewer"] = user
+    include_history = filters.pop("include_history", False)
+    output = _exam_results_workbook(list_results(filters), include_history=include_history)
+    filename = "历史正式考试成绩.xlsx" if include_history else "当前正式考试成绩.xlsx"
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 @exam_bp.route("/admin/checkins", methods=["GET"])

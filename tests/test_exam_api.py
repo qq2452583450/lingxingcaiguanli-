@@ -549,6 +549,43 @@ def test_clerk_duplicate_in_progress_attempt_resumes_existing_attempt(client, te
     assert attempt_count == 1
 
 
+def test_clerk_cannot_resume_an_answered_attempt_from_a_previous_paper(client, test_db):
+    seed_exam()
+    old_paper, current_paper = papers(test_db)[:2]
+    select_current_paper(test_db, current_paper["id"])
+    clerk_id = seed_user(test_db, "old_paper_clerk", "旧试卷材料员", ROLE_CLERK)
+    old_question = get_paper_questions(old_paper["id"])[0]
+    old_attempt_id = test_db.execute(
+        """
+        INSERT INTO exam_attempts (user_id, paper_id, status, started_at)
+        VALUES (?, ?, 'in_progress', ?)
+        """,
+        (clerk_id, old_paper["id"], "2026-09-04 09:00:00"),
+    ).lastrowid
+    test_db.execute(
+        """
+        INSERT INTO exam_answers (attempt_id, question_id, answer_text)
+        VALUES (?, ?, ?)
+        """,
+        (old_attempt_id, old_question["id"], "A"),
+    )
+    test_db.commit()
+    login(client, clerk_id, "old_paper_clerk", "旧试卷材料员", ROLE_CLERK)
+
+    response = client.post("/api/exam/attempts", json={}, headers=csrf_headers())
+    data = response.get_json()
+    stored_attempt = test_db.execute(
+        "SELECT paper_id, status FROM exam_attempts WHERE id = ?",
+        (old_attempt_id,),
+    ).fetchone()
+
+    assert response.status_code == 409
+    assert data["success"] is False
+    assert "旧试卷记录" in data["message"]
+    assert stored_attempt["paper_id"] == old_paper["id"]
+    assert stored_attempt["status"] == "in_progress"
+
+
 def test_clerk_cannot_start_formal_exam_before_manager_selects_current_paper(client, test_db):
     seed_exam()
     clerk_id = seed_user(test_db, "no_current", "\u672a\u9009\u8bd5\u5377", ROLE_CLERK)
@@ -1054,6 +1091,72 @@ def test_manager_results_include_material_clerk_without_an_exam(client, test_db)
     row = next(item for item in data["data"] if item["user_id"] == clerk_id)
     assert row["status"] == "not_completed"
     assert row["attempt_id"] is None
+
+
+def test_current_results_exclude_history_and_manager_can_export_both_scopes(client, test_db):
+    seed_exam()
+    historical_paper, current_paper = papers(test_db)[:2]
+    select_current_paper(test_db, current_paper["id"])
+    manager_id = seed_user(test_db, "current_results_manager", "当前成绩管理员", ROLE_MANAGER)
+    historical_clerk_id = seed_user(test_db, "history_results_clerk", "历史成绩材料员", ROLE_CLERK)
+    current_clerk_id = seed_user(test_db, "current_results_clerk", "本次成绩材料员", ROLE_CLERK)
+    test_db.execute(
+        """
+        INSERT INTO exam_attempts (user_id, paper_id, status, final_score, started_at, submitted_at)
+        VALUES (?, ?, 'completed', 88, ?, ?)
+        """,
+        (historical_clerk_id, historical_paper["id"], "2026-09-03 09:00:00", "2026-09-03 10:00:00"),
+    )
+    test_db.execute(
+        """
+        INSERT INTO exam_attempts (user_id, paper_id, status, final_score, started_at, submitted_at)
+        VALUES (?, ?, 'completed', 92, ?, ?)
+        """,
+        (current_clerk_id, current_paper["id"], "2026-09-05 09:00:00", "2026-09-05 10:00:00"),
+    )
+    test_db.commit()
+    login(client, manager_id, "current_results_manager", "当前成绩管理员", ROLE_MANAGER)
+
+    current_response = client.get("/api/exam/admin/results")
+    current_data = current_response.get_json()["data"]
+    history_response = client.get("/api/exam/admin/results?history=1")
+    history_data = history_response.get_json()["data"]
+    current_export = client.get("/api/exam/admin/results/export")
+    history_export = client.get("/api/exam/admin/results/export?history=1")
+    current_workbook = load_workbook(BytesIO(current_export.data), data_only=True)
+    history_workbook = load_workbook(BytesIO(history_export.data), data_only=True)
+
+    historical_current_row = next(row for row in current_data if row["user_id"] == historical_clerk_id)
+    assert current_response.status_code == 200
+    assert historical_current_row["status"] == "not_completed"
+    assert historical_current_row["paper_title"] == "-"
+    assert {row["paper_id"] for row in current_data if row["attempt_id"]} == {current_paper["id"]}
+    assert {row["paper_id"] for row in history_data} == {historical_paper["id"], current_paper["id"]}
+    assert current_export.status_code == 200
+    assert history_export.status_code == 200
+    assert current_workbook.active["A1"].value == "当前正式考试成绩"
+    assert history_workbook.active["A1"].value == "历史正式考试成绩"
+    assert current_workbook.active.max_row == 5
+    assert history_workbook.active.max_row == 5
+
+    login(client, historical_clerk_id, "history_results_clerk", "历史成绩材料员", ROLE_CLERK)
+    my_current = client.get("/api/exam/results").get_json()["data"]
+    my_history = client.get("/api/exam/results?history=1").get_json()["data"]
+
+    assert my_current == []
+    assert [row["paper_id"] for row in my_history] == [historical_paper["id"]]
+
+
+def test_material_approval_owner_can_export_current_exam_results(client, test_db):
+    owner_id = seed_user(test_db, "results_owner", "成绩导出负责人", ROLE_APPROVAL_OWNER)
+    login(client, owner_id, "results_owner", "成绩导出负责人", ROLE_APPROVAL_OWNER)
+
+    response = client.get("/api/exam/admin/results/export")
+
+    assert response.status_code == 200
+    assert response.headers["Content-Type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 
 def test_material_clerk_cannot_delete_exam_attempt_result(client, test_db):

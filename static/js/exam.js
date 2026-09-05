@@ -590,11 +590,11 @@ async function submitExamAttempt(event, attemptId) {
     }
 }
 
-async function loadMyExamResults() {
+async function loadMyExamResults(includeHistory = false) {
     examLoading('正在加载我的成绩...');
     try {
-        const data = await examJson('/api/exam/results');
-        renderResultsTable(data.data || [], { admin: false });
+        const data = await examJson(`/api/exam/results${includeHistory ? '?history=1' : ''}`);
+        renderResultsTable(data.data || [], { admin: false, includeHistory });
     } catch (e) {
         examError(e.message || '成绩加载失败');
     }
@@ -915,12 +915,12 @@ async function submitReviewScore(answerId) {
     }
 }
 
-async function loadAllExamResults() {
+async function loadAllExamResults(includeHistory = false) {
     if (!canManageExam(currentUser)) return;
     examLoading('正在加载成绩...');
     try {
-        const data = await examJson('/api/exam/admin/results');
-        renderResultsTable(data.data || [], { admin: true });
+        const data = await examJson(`/api/exam/admin/results${includeHistory ? '?history=1' : ''}`);
+        renderResultsTable(data.data || [], { admin: true, includeHistory });
     } catch (e) {
         examError(e.message || '成绩查询加载失败');
     }
@@ -1031,11 +1031,20 @@ function renderResultsTable(results, options = {}) {
             <td>${examDate(row.submitted_at || row.started_at)}</td>
             <td>${row.attempt_id || row.id ? `<button class="btn btn-secondary btn-sm" type="button" onclick="viewExamAttemptReview(${Number(row.attempt_id || row.id)})">查看明细</button>${options.admin ? `<button class="btn btn-danger btn-sm" type="button" onclick="deleteExamAttempt(${Number(row.attempt_id || row.id)})">删除</button>` : ''}` : '-'}</td>
         </tr>`).join('');
-    const heading = options.admin ? '成绩查询' : '我的成绩';
+    const heading = options.includeHistory
+        ? (options.admin ? '历史成绩' : '我的历史成绩')
+        : (options.admin ? '当前考试成绩' : '我的成绩');
     const adminHeaders = options.admin ? '<th>姓名</th><th>角色</th>' : '';
+    const reload = options.admin ? 'loadAllExamResults' : 'loadMyExamResults';
+    const historyButton = options.includeHistory
+        ? `<button class="btn btn-secondary" type="button" onclick="${reload}()">当前成绩</button>`
+        : `<button class="btn btn-secondary" type="button" onclick="${reload}(true)">历史成绩</button>`;
+    const exportButton = options.admin
+        ? `<button class="btn btn-secondary" type="button" onclick="exportExamResults(${options.includeHistory ? 'true' : 'false'})"><i data-lucide="download"></i>导出Excel</button>`
+        : '';
     examContent().innerHTML = `
         <div class="exam-panel">
-            <div class="exam-toolbar"><h2>${heading}</h2><button class="btn btn-secondary" type="button" onclick="${options.admin ? 'loadAllExamResults' : 'loadMyExamResults'}()"><i data-lucide="refresh-cw"></i>刷新</button></div>
+            <div class="exam-toolbar"><h2>${heading}</h2><div class="exam-actions">${historyButton}${exportButton}<button class="btn btn-secondary" type="button" onclick="${reload}(${options.includeHistory ? 'true' : 'false'})"><i data-lucide="refresh-cw"></i>刷新</button></div></div>
             <div class="table-container">
                 <table>
                     <thead><tr>${adminHeaders}<th>试卷</th><th>状态</th><th>客观题</th><th>主观题</th><th>总分</th><th>时间</th><th>操作</th></tr></thead>
@@ -1044,6 +1053,11 @@ function renderResultsTable(results, options = {}) {
             </div>
         </div>`;
     examRefreshIcons();
+}
+
+function exportExamResults(includeHistory = false) {
+    if (!canManageExam(currentUser)) return;
+    window.location.href = `/api/exam/admin/results/export${includeHistory ? '?history=1' : ''}`;
 }
 
 async function deleteExamAttempt(attemptId) {

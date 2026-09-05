@@ -2217,7 +2217,12 @@ def list_results(filters=None) -> list[dict]:
             params,
         ).fetchall()
         results = [dict(row) for row in rows]
-        if viewer and can_manage_exam(viewer) and not filters.get("paper_id") and not filters.get("status"):
+        if (
+            viewer
+            and can_manage_exam(viewer)
+            and not filters.get("status")
+            and (not filters.get("paper_id") or filters.get("current_only"))
+        ):
             listed_user_ids = {row["user_id"] for row in results}
             material_clerks = conn.execute(
                 """
