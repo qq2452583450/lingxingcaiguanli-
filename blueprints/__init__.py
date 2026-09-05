@@ -14,6 +14,7 @@ from .transfers import transfer_bp
 from .supplier_portal import supplier_bp
 from .petty_cash import petty_cash_bp
 from .exam import exam_bp
+from .reports import report_bp
 
 __all__ = [
     'auth_bp',
@@ -29,4 +30,5 @@ __all__ = [
     'supplier_bp',
     'petty_cash_bp',
     'exam_bp',
+    'report_bp',
 ]

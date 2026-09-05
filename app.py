@@ -86,7 +86,8 @@ from blueprints import (
     transfer_bp,
     supplier_bp,
     petty_cash_bp,
-    exam_bp
+    exam_bp,
+    report_bp
 )
 
 app.register_blueprint(auth_bp)
@@ -102,6 +103,7 @@ app.register_blueprint(transfer_bp)
 app.register_blueprint(supplier_bp)
 app.register_blueprint(petty_cash_bp)
 app.register_blueprint(exam_bp)
+app.register_blueprint(report_bp)
 
 # ==================== 静态文件 ====================
 

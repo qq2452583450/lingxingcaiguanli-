@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>零星材管理系统</title>
     <link rel="stylesheet" href="/static/css/style.css?v=2026072301">
+    <link rel="stylesheet" href="/static/css/reports.css?v=2026090501">
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 </head>
 <body>
@@ -728,47 +729,8 @@
 
             <!-- 报表统计 -->
             <div id="reportModule" class="module hidden">
-                <div class="page-header">
-                    <h1>报表统计</h1>
-                </div>
-                <div class="card" style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;">
-                    <div style="padding:20px;border:1px dashed var(--border);border-radius:8px;text-align:center">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.5" style="margin-bottom:8px"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-                        <p style="font-weight:600;margin-bottom:4px">采购统计表</p>
-                        <p style="font-size:12px;color:var(--text-muted)">按时间/供应商/材料统计</p>
-                        <span style="font-size:11px;color:var(--warning);background:#fffaf0;padding:2px 8px;border-radius:10px">即将上线</span>
-                    </div>
-                    <div style="padding:20px;border:1px dashed var(--border);border-radius:8px;text-align:center">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="1.5" style="margin-bottom:8px"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-                        <p style="font-weight:600;margin-bottom:4px">销售统计表</p>
-                        <p style="font-size:12px;color:var(--text-muted)">按时间/客户/销售员统计</p>
-                        <span style="font-size:11px;color:var(--warning);background:#fffaf0;padding:2px 8px;border-radius:10px">即将上线</span>
-                    </div>
-                    <div style="padding:20px;border:1px dashed var(--border);border-radius:8px;text-align:center">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--info)" stroke-width="1.5" style="margin-bottom:8px"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-                        <p style="font-weight:600;margin-bottom:4px">库存统计表</p>
-                        <p style="font-size:12px;color:var(--text-muted)">各仓库各材料当前库存</p>
-                        <span style="font-size:11px;color:var(--warning);background:#fffaf0;padding:2px 8px;border-radius:10px">即将上线</span>
-                    </div>
-                    <div style="padding:20px;border:1px dashed var(--border);border-radius:8px;text-align:center">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.5" style="margin-bottom:8px"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                        <p style="font-weight:600;margin-bottom:4px">出入库明细</p>
-                        <p style="font-size:12px;color:var(--text-muted)">某时间段内所有出入库记录</p>
-                        <span style="font-size:11px;color:var(--warning);background:#fffaf0;padding:2px 8px;border-radius:10px">即将上线</span>
-                    </div>
-                    <div style="padding:20px;border:1px dashed var(--border);border-radius:8px;text-align:center">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="1.5" style="margin-bottom:8px"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                        <p style="font-weight:600;margin-bottom:4px">利润统计表</p>
-                        <p style="font-size:12px;color:var(--text-muted)">销售收入 vs 采购成本毛利</p>
-                        <span style="font-size:11px;color:var(--warning);background:#fffaf0;padding:2px 8px;border-radius:10px">即将上线</span>
-                    </div>
-                    <div style="padding:20px;border:1px dashed var(--border);border-radius:8px;text-align:center">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="1.5" style="margin-bottom:8px"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-                        <p style="font-weight:600;margin-bottom:4px">供应商报价对比</p>
-                        <p style="font-size:12px;color:var(--text-muted)">同一材料不同供应商价格对比</p>
-                        <span style="font-size:11px;color:var(--warning);background:#fffaf0;padding:2px 8px;border-radius:10px">即将上线</span>
-                    </div>
-                </div>
+                <div class="page-header"><h1>报表统计</h1></div>
+                <div id="reportCenter"></div>
             </div>
 
             <!-- 项目管理 -->
@@ -1874,6 +1836,7 @@
     </div>
 
     <script src="/static/js/exam.js?v=2026062601"></script>
-    <script src="/static/js/app.js?v=2026080501"></script>
+    <script src="/static/js/reports.js?v=2026090501"></script>
+    <script src="/static/js/app.js?v=2026090501"></script>
 </body>
 </html>

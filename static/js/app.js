@@ -402,6 +402,7 @@ function showModule(module) {
         case 'owner_supplied': loadOwnerSupplied(); break;
         case 'petty_cash': loadPettyCash(); break;
         case 'exam': loadExamCenter(); break;
+        case 'report': loadReportCenter(); break;
         case 'system': loadUsers(); break;
     }
 }
