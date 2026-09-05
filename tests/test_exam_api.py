@@ -549,7 +549,7 @@ def test_clerk_duplicate_in_progress_attempt_resumes_existing_attempt(client, te
     assert attempt_count == 1
 
 
-def test_clerk_cannot_resume_an_answered_attempt_from_a_previous_paper(client, test_db):
+def test_clerk_starts_current_paper_after_an_answered_attempt_from_a_previous_paper(client, test_db):
     seed_exam()
     old_paper, current_paper = papers(test_db)[:2]
     select_current_paper(test_db, current_paper["id"])
@@ -575,15 +575,16 @@ def test_clerk_cannot_resume_an_answered_attempt_from_a_previous_paper(client, t
     response = client.post("/api/exam/attempts", json={}, headers=csrf_headers())
     data = response.get_json()
     stored_attempt = test_db.execute(
-        "SELECT paper_id, status FROM exam_attempts WHERE id = ?",
+        "SELECT paper_id, status, voided_at FROM exam_attempts WHERE id = ?",
         (old_attempt_id,),
     ).fetchone()
 
-    assert response.status_code == 409
-    assert data["success"] is False
-    assert "旧试卷记录" in data["message"]
+    assert response.status_code == 200
+    assert data["success"] is True
+    assert data["data"]["paper_id"] == current_paper["id"]
     assert stored_attempt["paper_id"] == old_paper["id"]
     assert stored_attempt["status"] == "in_progress"
+    assert stored_attempt["voided_at"] is not None
 
 
 def test_clerk_cannot_start_formal_exam_before_manager_selects_current_paper(client, test_db):

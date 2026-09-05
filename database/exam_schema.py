@@ -218,6 +218,10 @@ def init_exam_schema(conn):
         cursor.execute(
             "ALTER TABLE exam_attempts ADD COLUMN retake_eligibility_id INTEGER"
         )
+    if "voided_at" not in attempt_columns:
+        cursor.execute("ALTER TABLE exam_attempts ADD COLUMN voided_at TEXT")
+    if "void_reason" not in attempt_columns:
+        cursor.execute("ALTER TABLE exam_attempts ADD COLUMN void_reason TEXT")
 
     _require_manual_current_exam_selection(cursor)
 

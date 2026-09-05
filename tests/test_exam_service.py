@@ -716,7 +716,7 @@ def test_start_attempt_rejects_a_second_in_progress_exam(test_db):
     assert get_attempt(attempt_id)["status"] == "in_progress"
 
 
-def test_start_attempt_reuses_an_unanswered_ordinary_attempt_after_paper_switch(test_db):
+def test_start_attempt_voids_an_unanswered_ordinary_attempt_after_paper_switch(test_db):
     first_paper, _, _ = load_exam(test_db)
     clerk_id = seed_user(test_db, "switched_paper", "切换试卷材料员", "材料员")
     old_attempt_id = start_attempt(clerk_id, first_paper["id"])
@@ -730,11 +730,12 @@ def test_start_attempt_reuses_an_unanswered_ordinary_attempt_after_paper_switch(
 
     resumed_attempt_id = start_attempt(clerk_id, cursor.lastrowid)
 
-    assert resumed_attempt_id == old_attempt_id
+    assert resumed_attempt_id != old_attempt_id
     assert get_attempt(resumed_attempt_id)["paper_id"] == cursor.lastrowid
+    assert get_attempt(old_attempt_id)["status"] == "voided"
 
 
-def test_start_attempt_keeps_an_unanswered_retake_attempt_when_paper_switches(test_db):
+def test_start_attempt_voids_an_unanswered_retake_attempt_when_paper_switches(test_db):
     first_paper, _, _ = load_exam(test_db)
     clerk_id = seed_user(test_db, "retake_switch", "补考切换材料员", "材料员")
     old_attempt_id = start_attempt(clerk_id, first_paper["id"])
@@ -758,14 +759,17 @@ def test_start_attempt_keeps_an_unanswered_retake_attempt_when_paper_switches(te
         ("另一套正式考试卷", 60, 100, "exam", "2026-09-04 09:00:00"),
     )
 
-    with pytest.raises(ValueError, match="already have an exam in progress"):
-        start_attempt(clerk_id, second_paper.lastrowid)
+    new_attempt_id = start_attempt(clerk_id, second_paper.lastrowid)
 
+    assert new_attempt_id != old_attempt_id
     assert get_attempt(old_attempt_id)["paper_id"] == first_paper["id"]
-    assert test_db.execute(
-        "SELECT used_attempt_id FROM exam_retake_eligibilities WHERE id = ?",
+    assert get_attempt(old_attempt_id)["status"] == "voided"
+    eligibility_row = test_db.execute(
+        "SELECT status, used_attempt_id FROM exam_retake_eligibilities WHERE id = ?",
         (eligibility.lastrowid,),
-    ).fetchone()["used_attempt_id"] == old_attempt_id
+    ).fetchone()
+    assert eligibility_row["status"] == "open"
+    assert eligibility_row["used_attempt_id"] is None
 
 
 def test_manager_results_include_material_clerks_without_an_exam_attempt(test_db):

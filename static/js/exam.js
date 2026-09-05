@@ -38,6 +38,7 @@ function examStatusText(status) {
         in_progress: '进行中',
         pending_review: '待阅卷',
         completed: '已完成',
+        voided: '已作废',
         not_completed: '未完成'
     };
     return map[status] || status || '-';

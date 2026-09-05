@@ -15,7 +15,7 @@ def db():
         CREATE TABLE exam_papers (id INTEGER PRIMARY KEY, title TEXT, source_type TEXT);
         CREATE TABLE exam_attempts (
             id INTEGER PRIMARY KEY, user_id INTEGER, paper_id INTEGER, status TEXT,
-            started_at TEXT, retake_eligibility_id INTEGER
+            started_at TEXT, retake_eligibility_id INTEGER, voided_at TEXT, void_reason TEXT
         );
         CREATE TABLE exam_answers (id INTEGER PRIMARY KEY, attempt_id INTEGER);
         CREATE TABLE exam_subjective_reviews (id INTEGER PRIMARY KEY, answer_id INTEGER);
@@ -41,20 +41,25 @@ def db():
     )
     conn.execute("INSERT INTO exam_answers VALUES (21, 11)")
     conn.execute("INSERT INTO exam_subjective_reviews VALUES (31, 21)")
+    conn.execute(
+        "INSERT INTO exam_retake_eligibilities VALUES (7, 103, 1, 13, 'used', '2026-09-04 11:00:00')"
+    )
     conn.commit()
     yield conn
     conn.close()
 
 
-def test_releases_only_non_retake_stale_in_progress_attempts(db):
+def test_voids_all_stale_in_progress_attempts_and_keeps_their_history(db):
     result = release_stale_attempts(db, "综合题库四", apply_changes=True)
     db.commit()
 
     assert result["status"] == "applied"
-    assert [row["id"] for row in result["released_attempts"]] == [11]
-    assert [row["id"] for row in db.execute("SELECT id FROM exam_attempts ORDER BY id")] == [12, 13, 14]
-    assert db.execute("SELECT * FROM exam_answers").fetchall() == []
-    assert db.execute("SELECT * FROM exam_subjective_reviews").fetchall() == []
+    assert [row["id"] for row in result["released_attempts"]] == [11, 13]
+    assert [row["id"] for row in db.execute("SELECT id FROM exam_attempts ORDER BY id")] == [11, 12, 13, 14]
+    assert db.execute("SELECT * FROM exam_answers").fetchall()
+    assert db.execute("SELECT * FROM exam_subjective_reviews").fetchall()
+    assert [row["id"] for row in db.execute("SELECT id FROM exam_attempts WHERE voided_at IS NOT NULL ORDER BY id")] == [11, 13]
+    assert db.execute("SELECT status FROM exam_retake_eligibilities WHERE id = 7").fetchone()["status"] == "open"
     assert db.execute("SELECT id FROM data_fix_runs WHERE id = ?", (FIX_ID,)).fetchone()
     assert release_stale_attempts(db, "综合题库四", apply_changes=True)["status"] == "skipped"
 

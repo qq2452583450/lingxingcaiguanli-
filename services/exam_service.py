@@ -1557,6 +1557,26 @@ def _raw_paper_score_total(questions: list[dict]) -> float:
     return sum(float(question.get("score") or 0) for question in questions)
 
 
+def _void_attempt_after_paper_switch(conn, attempt_id: int, retake_eligibility_id: int | None) -> None:
+    if retake_eligibility_id is not None:
+        conn.execute(
+            """
+            UPDATE exam_retake_eligibilities
+            SET status = 'open', used_attempt_id = NULL, used_at = NULL
+            WHERE id = ? AND used_attempt_id = ?
+            """,
+            (retake_eligibility_id, attempt_id),
+        )
+    conn.execute(
+        """
+        UPDATE exam_attempts
+        SET voided_at = ?, void_reason = ?
+        WHERE id = ?
+        """,
+        (_now(), "Current formal exam paper changed", attempt_id),
+    )
+
+
 def start_attempt(user_id, paper_id, retake_eligibility_id: int | None = None) -> int:
     conn, should_close = _connection()
     try:
@@ -1564,43 +1584,19 @@ def start_attempt(user_id, paper_id, retake_eligibility_id: int | None = None) -
             """
             SELECT id, paper_id, retake_eligibility_id
             FROM exam_attempts
-            WHERE user_id = ? AND status = 'in_progress'
+            WHERE user_id = ? AND status = 'in_progress' AND voided_at IS NULL
             ORDER BY started_at DESC, id DESC
             LIMIT 1
             """,
             (user_id,),
         ).fetchone()
         if active_attempt:
-            # A never-answered ordinary attempt from an older paper must not
-            # permanently trap a clerk on that paper after an administrator
-            # switches to a refreshed exam bank.  Reuse that row instead of
-            # deleting it: an attempt can be referenced by a retake record and
-            # SQLite correctly refuses to delete a referenced row.
-            #
-            # A retake attempt itself must stay on its original paper, so the
-            # user can resume it rather than silently changing its exam.
-            has_answers = conn.execute(
-                "SELECT 1 FROM exam_answers WHERE attempt_id = ? LIMIT 1",
-                (active_attempt["id"],),
-            ).fetchone()
-            if (
-                int(active_attempt["paper_id"]) != int(paper_id)
-                and not has_answers
-                and active_attempt["retake_eligibility_id"] is None
-            ):
-                conn.execute(
-                    """
-                    UPDATE exam_attempts
-                    SET paper_id = ?, objective_score = 0,
-                        suggested_subjective_score = 0,
-                        final_subjective_score = NULL, final_score = NULL,
-                        started_at = ?, submitted_at = NULL
-                    WHERE id = ?
-                    """,
-                    (paper_id, _now(), active_attempt["id"]),
+            if int(active_attempt["paper_id"]) != int(paper_id) and retake_eligibility_id is None:
+                _void_attempt_after_paper_switch(
+                    conn,
+                    int(active_attempt["id"]),
+                    active_attempt["retake_eligibility_id"],
                 )
-                conn.commit()
-                return active_attempt["id"]
             else:
                 raise ValueError("You already have an exam in progress")
         if retake_eligibility_id is not None:
@@ -1651,9 +1647,10 @@ def get_active_attempt_for_user(user_id) -> dict | None:
             """
             SELECT id, user_id, paper_id, status, objective_score,
                    suggested_subjective_score, final_subjective_score,
-                   final_score, started_at, submitted_at, retake_eligibility_id
+                   final_score, started_at, submitted_at, retake_eligibility_id,
+                   voided_at, void_reason
             FROM exam_attempts
-            WHERE user_id = ? AND status = 'in_progress'
+            WHERE user_id = ? AND status = 'in_progress' AND voided_at IS NULL
             ORDER BY started_at DESC, id DESC
             LIMIT 1
             """,
@@ -1673,13 +1670,17 @@ def get_attempt(attempt_id) -> dict | None:
             """
             SELECT id, user_id, paper_id, status, objective_score,
                    suggested_subjective_score, final_subjective_score,
-                   final_score, started_at, submitted_at, retake_eligibility_id
+                   final_score, started_at, submitted_at, retake_eligibility_id,
+                   voided_at, void_reason
             FROM exam_attempts
             WHERE id = ?
             """,
             (attempt_id,),
         ).fetchone()
-        return _dict_or_none(row)
+        attempt = _dict_or_none(row)
+        if attempt and attempt.get("voided_at"):
+            attempt["status"] = "voided"
+        return attempt
     finally:
         if should_close:
             conn.close()
@@ -1689,10 +1690,10 @@ def submit_attempt(attempt_id, answers) -> None:
     conn, should_close = _connection()
     try:
         attempt = conn.execute(
-            "SELECT id, paper_id, status FROM exam_attempts WHERE id = ?",
+            "SELECT id, paper_id, status, voided_at FROM exam_attempts WHERE id = ?",
             (attempt_id,),
         ).fetchone()
-        if not attempt or attempt["status"] != "in_progress":
+        if not attempt or attempt["status"] != "in_progress" or attempt["voided_at"]:
             raise ValueError("考试已提交，不能重复交卷")
 
         objective_score = 0.0
@@ -2206,7 +2207,7 @@ def list_results(filters=None) -> list[dict]:
                    att.paper_id, p.title AS paper_title, att.status,
                    att.objective_score, att.suggested_subjective_score,
                    att.final_subjective_score, att.final_score,
-                   att.started_at, att.submitted_at
+                   att.started_at, att.submitted_at, att.voided_at, att.void_reason
             FROM exam_attempts att
             JOIN users u ON u.id = att.user_id
             LEFT JOIN roles r ON r.id = u.role_id
@@ -2217,6 +2218,9 @@ def list_results(filters=None) -> list[dict]:
             params,
         ).fetchall()
         results = [dict(row) for row in rows]
+        for result in results:
+            if result.get("voided_at"):
+                result["status"] = "voided"
         if (
             viewer
             and can_manage_exam(viewer)
