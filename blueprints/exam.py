@@ -474,7 +474,11 @@ def random_practice():
     limit = request.args.get("limit", default=DAILY_PRACTICE_QUESTION_COUNT, type=int)
     limit = max(1, min(limit or DAILY_PRACTICE_QUESTION_COUNT, 100))
     paper_id = request.args.get("paper_id", type=int)
-    questions = get_random_practice_questions(limit=limit, paper_id=paper_id)
+    questions = get_random_practice_questions(
+        limit=limit,
+        paper_id=paper_id,
+        user_id=user["id"],
+    )
     return jsonify({"success": True, "data": _questions_for_exam_flow(questions)})
 
 

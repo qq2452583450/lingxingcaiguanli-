@@ -40,7 +40,7 @@ function renderDailyStatus(status) {
     const target = document.getElementById('practiceDailyStatus');
     if (!target) return;
     if (!status || status.session_count === 0) {
-        target.textContent = '今日未打卡：完成30题，正确率达到80%即合格。';
+        target.textContent = '今日未打卡：每次优先随机抽取未练题，完成30题且正确率达到80%即合格。';
         return;
     }
     const percent = Math.round((status.best_accuracy || 0) * 100);
@@ -79,7 +79,7 @@ function renderQuestions(savedAnswers = {}, updatedAt = '') {
         <form id="practiceForm" onsubmit="submitPractice(event)">
             <div class="practice-card">
                 <strong>本次共 ${practiceQuestions.length} 题</strong>
-                <div class="practice-meta">${retroactiveDate ? `正在补打卡：${practiceEscape(retroactiveDate)}。` : ''}正确率达到 80% 视为合格打卡，未达标需要继续练习。</div>
+                <div class="practice-meta">${retroactiveDate ? `正在补打卡：${practiceEscape(retroactiveDate)}。` : ''}本轮优先抽取未练题；全题库完成后优先复练错题。正确率达到 80% 视为合格打卡。</div>
                 <div class="practice-meta" id="practiceDraftStatus">${updatedAt ? `已恢复暂存：${practiceEscape(updatedAt)}` : ''}</div>
             </div>
             ${questionCards}
@@ -95,7 +95,7 @@ function renderQuestions(savedAnswers = {}, updatedAt = '') {
 
 async function loadPractice(options = {}) {
     const root = document.getElementById('practiceRoot');
-    root.innerHTML = '<div class="practice-card">正在加载30道练习题...</div>';
+    root.innerHTML = '<div class="practice-card">正在加载未练题；全题库完成后将优先复练错题...</div>';
     if (options.clearDraft) {
         await practiceApi('/api/exam/practice/draft', { method: 'DELETE' });
     }

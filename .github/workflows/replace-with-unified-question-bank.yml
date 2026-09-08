@@ -1,0 +1,30 @@
+name: Replace with unified 220-question bank
+
+on:
+  push:
+    branches: [prod]
+    paths:
+      - 'tools/replace_with_unified_question_bank.py'
+      - 'services/exam_import_service.py'
+      - 'docs/exam_sources/unified_question_bank/**'
+      - '.github/workflows/replace-with-unified-question-bank.yml'
+
+concurrency:
+  group: lxclgl-prod-deploy
+  cancel-in-progress: false
+
+jobs:
+  replace:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Back up and replace active exam sources
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_SSH_PORT || 22 }}
+          script_stop: true
+          command_timeout: 15m
+          script: |
+            powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& { $AppDir = 'C:\wwwroot\lxclgl'; $Python = Join-Path $AppDir '.venv\Scripts\python.exe'; $Db = Join-Path $AppDir '零星材管理系统.db'; Set-Location -LiteralPath $AppDir; git fetch origin prod; git checkout prod; git pull --ff-only origin prod; & $Python tools\replace_with_unified_question_bank.py --db $Db --apply --backup; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }"

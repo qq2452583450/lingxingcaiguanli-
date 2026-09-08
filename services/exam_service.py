@@ -18,6 +18,8 @@ MONTHLY_ATTENDANCE_REQUIRED_DAYS = 22
 FORMAL_EXAM_POOL_SETTING_KEY = "formal_exam_pool_enabled"
 FORMAL_EXAM_POOL_SOURCE_TYPE = "formal_exam_pool"
 FORMAL_EXAM_POOL_REQUIRED_COUNT = 3
+# Retained only for historical-report compatibility.  New practice selection
+# never reads this list; it is limited to the unified practice source type.
 DAILY_PRACTICE_PAPER_TITLES = {
     "第一套（新编实操版）",
     "第二套（新编案例版）",
@@ -61,15 +63,10 @@ def _sync_question_bank_references_once() -> None:
     if _QUESTION_BANK_REFERENCE_SYNCED_FOR == database_path:
         return
     try:
-        from services.exam_import_service import (
-            sync_missing_question_bank_papers,
-            sync_question_bank_reference_answers,
-        )
+        from services.exam_import_service import sync_question_bank_reference_answers
 
-        # Refresh the bundled sources before a user resumes an unfinished exam.
-        # This is also the recovery path for attempts started before an option E
-        # was imported into the active paper.
-        sync_missing_question_bank_papers()
+        # Reference text can be safely refreshed; importing a new paper here
+        # would make a legacy question bank reappear after it was retired.
         sync_question_bank_reference_answers()
     except Exception:
         return
@@ -146,6 +143,7 @@ def _load_practice_questions_by_ids(conn, question_ids: list[int]) -> list[dict]
         JOIN exam_papers p ON p.id = q.paper_id
         WHERE q.id IN ({placeholders})
           AND q.question_type IN ('single_choice', 'multiple_choice', 'true_false')
+          AND p.source_type = 'practice_unified_bank'
         """,
         question_ids,
     ).fetchall()
@@ -334,32 +332,49 @@ def get_paper_questions(paper_id: int) -> list[dict]:
             conn.close()
 
 
-def get_random_practice_questions(limit=10, paper_id=None) -> list[dict]:
+def get_random_practice_questions(limit=10, paper_id=None, user_id=None) -> list[dict]:
     conn, should_close = _connection()
     try:
         params = []
-        where_parts = ["q.question_type IN ('single_choice', 'multiple_choice', 'true_false')"]
-        title_placeholders = ",".join("?" for _ in DAILY_PRACTICE_PAPER_TITLES)
-        where_parts.append(f"p.title IN ({title_placeholders})")
-        params.extend(sorted(DAILY_PRACTICE_PAPER_TITLES))
+        where_parts = [
+            "q.question_type IN ('single_choice', 'multiple_choice', 'true_false')",
+            "p.source_type = 'practice_unified_bank'",
+        ]
         if paper_id is not None:
             where_parts.append("q.paper_id = ?")
             params.append(paper_id)
         where = "WHERE " + " AND ".join(where_parts)
-        params.append(limit)
-        question_rows = conn.execute(
-            f"""
+        select_sql = """
             SELECT q.id, q.paper_id, p.title AS paper_title, q.question_type,
                    q.order_no, q.stem, q.correct_answer, q.reference_answer,
                    q.keywords, q.score
             FROM exam_questions q
             JOIN exam_papers p ON p.id = q.paper_id
-            {where}
-            ORDER BY RANDOM()
-            LIMIT ?
-            """,
-            params,
-        ).fetchall()
+        """
+
+        # Each user finishes one random pass over all active question types
+        # before an unresolved wrong answer is served again.  If no mistakes
+        # remain after that pass, a fresh random pass begins.
+        question_rows = []
+        if user_id is not None:
+            unseen_where = where + " AND NOT EXISTS (SELECT 1 FROM exam_practice_attempts pa WHERE pa.user_id = ? AND pa.question_id = q.id)"
+            unseen_rows = conn.execute(
+                select_sql + unseen_where + " ORDER BY RANDOM() LIMIT ?",
+                [*params, user_id, limit],
+            ).fetchall()
+            if unseen_rows:
+                question_rows = unseen_rows
+            else:
+                wrong_where = where + " AND EXISTS (SELECT 1 FROM exam_practice_wrong_questions w WHERE w.user_id = ? AND w.question_id = q.id)"
+                question_rows = conn.execute(
+                    select_sql + wrong_where + " ORDER BY RANDOM() LIMIT ?",
+                    [*params, user_id, limit],
+                ).fetchall()
+        if not question_rows:
+            question_rows = conn.execute(
+                select_sql + where + " ORDER BY RANDOM() LIMIT ?",
+                [*params, limit],
+            ).fetchall()
         questions = [dict(row) for row in question_rows]
         for question in questions:
             option_rows = conn.execute(
@@ -390,10 +405,11 @@ def _load_objective_questions_by_ids(conn, question_ids: list[int]) -> dict[int,
         SELECT q.id, q.paper_id, p.title AS paper_title, q.question_type,
                q.order_no, q.stem, q.correct_answer, q.reference_answer,
                q.keywords, q.score
-        FROM exam_questions q
-        JOIN exam_papers p ON p.id = q.paper_id
-        WHERE q.id IN ({placeholders})
-          AND q.question_type IN ('single_choice', 'multiple_choice', 'true_false')
+            FROM exam_questions q
+            JOIN exam_papers p ON p.id = q.paper_id
+            WHERE q.id IN ({placeholders})
+              AND q.question_type IN ('single_choice', 'multiple_choice', 'true_false')
+              AND p.source_type = 'practice_unified_bank'
         """,
         question_ids,
     ).fetchall()
@@ -1129,7 +1145,7 @@ def list_wrong_practice_questions(user_id: int, limit: int = 100) -> list[dict]:
             JOIN exam_questions q ON q.id = w.question_id
             JOIN exam_papers p ON p.id = q.paper_id
             WHERE w.user_id = ?
-              AND p.source_type = 'exam'
+              AND p.source_type = 'practice_unified_bank'
             ORDER BY w.last_wrong_at DESC, w.question_id DESC
             LIMIT ?
             """,
@@ -1198,7 +1214,7 @@ def list_material_clerk_wrong_questions(
                 JOIN exam_questions q ON q.id = pa.question_id
                 JOIN exam_papers p ON p.id = q.paper_id
                 WHERE pa.is_correct = 0
-                  AND p.source_type = 'exam'
+                  AND p.source_type = 'practice_unified_bank'
     """ if date_conditions else """
                 SELECT w.question_id, w.user_id, w.wrong_count,
                        w.last_answer_text AS answer_text,
@@ -1207,7 +1223,7 @@ def list_material_clerk_wrong_questions(
                 FROM exam_practice_wrong_questions w
                 JOIN exam_questions q ON q.id = w.question_id
                 JOIN exam_papers p ON p.id = q.paper_id
-                WHERE p.source_type = 'exam'
+                WHERE p.source_type = 'practice_unified_bank'
     """
     conn, should_close = _connection()
     try:
@@ -1329,7 +1345,7 @@ def get_wrong_practice_questions_for_retry(user_id: int, limit: int = 100) -> li
                   SELECT q.id
                   FROM exam_questions q
                   JOIN exam_papers p ON p.id = q.paper_id
-                  WHERE p.source_type = 'exam'
+                  WHERE p.source_type = 'practice_unified_bank'
               )
             ORDER BY last_wrong_at DESC, question_id DESC
             LIMIT ?

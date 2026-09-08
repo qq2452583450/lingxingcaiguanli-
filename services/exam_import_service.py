@@ -22,11 +22,14 @@ QUESTION_SCORES = {
 }
 EXAM_SOURCE_PATTERN = "*材料进场验收标准专项考试卷*.docx"
 DESKTOP_QUESTION_BANK_DIR = Path.home() / "Desktop" / "题库"
-BUNDLED_QUESTION_BANK_DIR = Path(__file__).resolve().parents[1] / "docs" / "exam_sources" / "question_bank"
+BUNDLED_QUESTION_BANK_DIR = (
+    Path(__file__).resolve().parents[1] / "docs" / "exam_sources" / "unified_question_bank"
+)
 BUNDLED_FORMAL_EXAM_POOL_DIR = (
     Path(__file__).resolve().parents[1] / "docs" / "exam_sources" / "formal_exam_pool"
 )
 FORMAL_EXAM_POOL_SOURCE_TYPE = "formal_exam_pool"
+PRACTICE_UNIFIED_SOURCE_TYPE = "practice_unified_bank"
 FORMAL_EXAM_POOL_TITLES = (
     "综合题库一（满分 100 分）",
     "综合题库二（满分 100 分）",
@@ -355,6 +358,12 @@ def _score_from_section_heading(line: str, question_type: str) -> float:
 
 
 def _prefixed_text(line: str, prefix: str) -> str | None:
+    bracketed = re.match(
+        rf"^[【\[]\s*{re.escape(prefix)}\s*[】\]]\s*(.*)$",
+        line,
+    )
+    if bracketed:
+        return bracketed.group(1).strip()
     for separator in (":", "："):
         marker = prefix + separator
         if line.startswith(marker):
@@ -976,6 +985,94 @@ def import_exam_papers_from_question_bank_dir(path: Path | None = None) -> dict:
             conn.close()
 
 
+def get_unified_question_bank_path(path: Path | None = None) -> Path:
+    """Return the single approved source file for the active question bank."""
+    source_dir = Path(path) if path is not None else BUNDLED_QUESTION_BANK_DIR
+    files = sorted(source_dir.glob("*.docx"))
+    if len(files) != 1:
+        raise ValueError(f"Unified question bank requires exactly one .docx file in {source_dir}")
+    return files[0]
+
+
+def replace_active_practice_sources_with_unified_question_bank(
+    path: Path | None = None,
+    conn=None,
+    commit: bool = True,
+) -> dict:
+    """Retire the old *practice* bank and install the supplied unified bank.
+
+    Formal-exam papers, formal attempts, current-exam settings and formal
+    scores are deliberately not read or changed here.  Historical practice
+    records remain linked to their archived questions; drafts and unresolved
+    old-practice wrong questions are cleared so they cannot reappear.
+    """
+    source_path = get_unified_question_bank_path(path)
+    bank = parse_literature_question_bank_docx(source_path)
+    should_close = False
+    if conn is None:
+        conn, should_close = _connection()
+    cursor = conn.cursor()
+    try:
+        daily_titles = (
+            "第一套（新编实操版）",
+            "第二套（新编案例版）",
+            "第三套（新编内控版）",
+            "第四套（新编实操易错版）",
+            "第五套（新编综合押题版）",
+        )
+        placeholders = ",".join("?" for _ in daily_titles)
+        active_rows = cursor.execute(
+            f"""
+            SELECT id
+            FROM exam_papers
+            WHERE source_type = ?
+               OR (source_type = 'exam' AND title IN ({placeholders}))
+            """,
+            (PRACTICE_UNIFIED_SOURCE_TYPE, *daily_titles),
+        ).fetchall()
+        old_paper_ids = [int(row["id"]) for row in active_rows]
+        _archive_existing_exam_papers(cursor, old_paper_ids)
+
+        cursor.execute("DELETE FROM exam_practice_drafts")
+        cleared_drafts = cursor.rowcount
+        cursor.execute("DELETE FROM exam_practice_wrong_questions")
+        cleared_wrong_questions = cursor.rowcount
+
+        bank_id = insert_paper(cursor, bank, source_type=PRACTICE_UNIFIED_SOURCE_TYPE)
+        if commit:
+            conn.commit()
+        return {
+            "source": str(source_path),
+            "bank_id": bank_id,
+            "bank_question_count": len(bank["questions"]),
+            "archived_papers": len(old_paper_ids),
+            "cleared_drafts": max(0, cleared_drafts or 0),
+            "cleared_wrong_questions": max(0, cleared_wrong_questions or 0),
+        }
+    except Exception:
+        if commit:
+            conn.rollback()
+        raise
+    finally:
+        if should_close:
+            conn.close()
+
+
+def unified_practice_question_bank_is_active(path: Path | None = None) -> bool:
+    """Check that the configured active bank still exactly matches the source."""
+    bank = parse_literature_question_bank_docx(get_unified_question_bank_path(path))
+    conn, should_close = _connection()
+    try:
+        row = conn.execute(
+            "SELECT id FROM exam_papers WHERE source_type = ? AND title = ?",
+            (PRACTICE_UNIFIED_SOURCE_TYPE, bank["title"]),
+        ).fetchone()
+        return bool(row and _active_paper_matches(conn.cursor(), int(row["id"]), bank))
+    finally:
+        if should_close:
+            conn.close()
+
+
 def sync_formal_exam_pool_papers(path: Path | None = None) -> dict:
     """Replace the managed formal-only papers while preserving historical attempts."""
     source_dir = Path(path) if path is not None else BUNDLED_FORMAL_EXAM_POOL_DIR
@@ -1377,54 +1474,32 @@ def _question_option_reference_key(question, options: list[dict] | None = None):
 
 
 def ensure_exam_sources_imported() -> dict:
-    """Import bundled formal exam papers only when the database has none."""
+    """Keep source references fresh without changing configured formal exams."""
     conn, should_close = _connection()
     try:
-        formal_rows = conn.execute(
-            "SELECT id FROM exam_papers WHERE source_type = ? ORDER BY id",
-            ("exam",),
+        practice_rows = conn.execute(
+            "SELECT id, title FROM exam_papers WHERE source_type = ? ORDER BY id",
+            (PRACTICE_UNIFIED_SOURCE_TYPE,),
         ).fetchall()
-        existing_count = len(formal_rows)
     finally:
         if should_close:
             conn.close()
 
-    question_bank_dir = get_question_bank_dir()
-
+    # A running system may contain legacy practice papers.  They are replaced
+    # only by the explicit, backed-up migration script, never on restart.
     created = False
-    if existing_count:
-        if question_bank_dir.exists() and list(question_bank_dir.glob("*.docx")):
-            missing_result = sync_missing_question_bank_papers(question_bank_dir)
-            created = created or bool(missing_result["inserted"])
-            sync_question_bank_reference_answers(question_bank_dir)
-    elif question_bank_dir.exists() and list(question_bank_dir.glob("*.docx")):
-        try:
-            import_exam_papers_from_question_bank_dir(question_bank_dir)
-            created = True
-        except ValueError:
-            pass
+    if practice_rows and unified_practice_question_bank_is_active():
+        sync_question_bank_reference_answers(BUNDLED_QUESTION_BANK_DIR)
 
-    if not existing_count and not created:
-        source_dir = Path(__file__).resolve().parents[1] / "docs" / "exam_sources"
-        try:
-            source_path = next(source_dir.glob(EXAM_SOURCE_PATTERN))
-        except StopIteration as exc:
-            raise FileNotFoundError(
-                f"No exam source matching {EXAM_SOURCE_PATTERN!r} in {source_dir}"
-            ) from exc
-        import_exam_papers_from_docx(source_path)
-        created = True
-
-    formal_pool_result = sync_formal_exam_pool_papers()
-    created = created or bool(formal_pool_result["inserted"])
     conn, should_close = _connection()
     try:
         paper_count = conn.execute(
             """
             SELECT COUNT(*)
             FROM exam_papers
-            WHERE source_type IN ('exam', 'formal_exam_pool')
+            WHERE source_type IN ('exam', 'formal_exam_pool', ?)
             """
+            , (PRACTICE_UNIFIED_SOURCE_TYPE,)
         ).fetchone()[0]
     finally:
         if should_close:
