@@ -110,7 +110,7 @@ if ($DbFiles) {
 Write-Host "Pulling latest code from origin/$Branch"
 Invoke-NativeCommandWithRetry "git fetch origin $Branch" { git fetch origin $Branch } "git fetch origin $Branch failed"
 Invoke-NativeCommandWithRetry "git checkout $Branch" { git checkout $Branch } "git checkout $Branch failed"
-Invoke-NativeCommandWithRetry "git pull --ff-only origin $Branch" { git pull --ff-only origin $Branch } "git pull origin $Branch failed"
+Invoke-NativeCommandWithRetry "git rebase origin/$Branch" { git rebase "origin/$Branch" } "git rebase origin/$Branch failed"
 
 $VenvPython = Join-Path $AppDir ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $VenvPython)) {
