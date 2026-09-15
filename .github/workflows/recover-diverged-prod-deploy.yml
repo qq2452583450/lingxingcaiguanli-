@@ -1,0 +1,50 @@
+name: Recover diverged production checkout and deploy
+
+on:
+  push:
+    branches: [prod]
+    paths:
+      - '.github/workflows/recover-diverged-prod-deploy.yml'
+
+concurrency:
+  group: lxclgl-prod-deploy
+  cancel-in-progress: false
+
+jobs:
+  recover-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Preserve superseded deployment revision and recover production checkout
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_SSH_PORT || 22 }}
+          script_stop: true
+          command_timeout: 20m
+          script: |
+            powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& {
+              $AppDir = 'C:\wwwroot\lxclgl'
+              Set-Location -LiteralPath $AppDir
+              git rebase --abort *>$null
+              git fetch origin prod
+              if ($LASTEXITCODE -ne 0) { throw 'Unable to fetch production branch' }
+              git checkout prod
+              if ($LASTEXITCODE -ne 0) { throw 'Unable to select production branch' }
+              $Superseded = @(git rev-list origin/prod..HEAD)
+              if ($Superseded.Count -ne 1) { throw ('Expected exactly one superseded deployment commit, found ' + $Superseded.Count) }
+              $BackupBranch = 'deploy-recovery-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
+              git branch $BackupBranch HEAD
+              if ($LASTEXITCODE -ne 0) { throw 'Unable to preserve superseded deployment revision' }
+              git rebase origin/prod
+              if ($LASTEXITCODE -ne 0) {
+                git rebase --skip
+                if ($LASTEXITCODE -ne 0) { throw 'Unable to skip the superseded deployment revision' }
+              }
+              $Head = (git rev-parse HEAD).Trim()
+              $Remote = (git rev-parse origin/prod).Trim()
+              if ($Head -ne $Remote) { throw 'Recovered checkout does not match origin/prod' }
+              & C:\wwwroot\lxclgl\deploy\deploy.ps1 -AppDir C:\wwwroot\lxclgl -ServiceName lxclgl -Branch prod -Port 5000
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }"
