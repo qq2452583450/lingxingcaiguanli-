@@ -139,6 +139,18 @@ def init_exam_schema(conn):
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS exam_daily_checkin_approvals (
+            user_id INTEGER NOT NULL,
+            target_date TEXT NOT NULL,
+            approved_accuracy REAL,
+            reason TEXT NOT NULL,
+            approved_by TEXT NOT NULL,
+            approved_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, target_date),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS exam_monthly_checkin_reports (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -183,6 +195,7 @@ def init_exam_schema(conn):
         "CREATE INDEX IF NOT EXISTS idx_exam_practice_drafts_user ON exam_practice_drafts(user_id)",
         "CREATE INDEX IF NOT EXISTS idx_exam_practice_wrong_questions_user ON exam_practice_wrong_questions(user_id, last_wrong_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_exam_retroactive_user_month ON exam_retroactive_checkins(user_id, month)",
+        "CREATE INDEX IF NOT EXISTS idx_exam_daily_checkin_approvals_date ON exam_daily_checkin_approvals(target_date)",
         "CREATE INDEX IF NOT EXISTS idx_exam_monthly_checkin_reports_month ON exam_monthly_checkin_reports(month)",
         "CREATE INDEX IF NOT EXISTS idx_exam_retake_user_status ON exam_retake_eligibilities(user_id, status)",
     ]

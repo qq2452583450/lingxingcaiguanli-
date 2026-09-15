@@ -20,6 +20,7 @@ def test_exam_schema_creates_required_tables(test_db):
         "exam_practice_attempts",
         "exam_settings",
         "exam_retroactive_checkins",
+        "exam_daily_checkin_approvals",
         "exam_monthly_checkin_reports",
         "exam_retake_eligibilities",
     }.issubset(names)

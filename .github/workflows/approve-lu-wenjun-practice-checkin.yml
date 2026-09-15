@@ -1,0 +1,28 @@
+name: Approve Lu Wenjun daily practice check-in
+
+on:
+  push:
+    branches: [prod]
+    paths:
+      - 'tools/approve_lu_wenjun_practice_checkin.py'
+      - '.github/workflows/approve-lu-wenjun-practice-checkin.yml'
+
+concurrency:
+  group: lxclgl-lu-wenjun-practice-approval
+  cancel-in-progress: false
+
+jobs:
+  approve:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Back up and approve the authorized check-in
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_SSH_PORT || 22 }}
+          script_stop: true
+          command_timeout: 10m
+          script: |
+            powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& { $AppDir = 'C:\wwwroot\lxclgl'; $Python = Join-Path $AppDir '.venv\Scripts\python.exe'; $Db = Join-Path $AppDir '零星材管理系统.db'; Set-Location -LiteralPath $AppDir; git fetch origin prod; git checkout prod; git pull --ff-only origin prod; & $Python tools\approve_lu_wenjun_practice_checkin.py --db $Db --target-date 2026-09-15 --apply --backup; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }"

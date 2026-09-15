@@ -356,6 +356,21 @@ def get_random_practice_questions(limit=10, paper_id=None, user_id=None) -> list
         # before an unresolved wrong answer is served again.  If no mistakes
         # remain after that pass, a fresh random pass begins.
         question_rows = []
+
+        def append_random_rows(base_where, base_params, remaining):
+            if remaining <= 0:
+                return []
+            selected_ids = [row["id"] for row in question_rows]
+            exclusion_sql = ""
+            exclusion_params = []
+            if selected_ids:
+                exclusion_sql = f" AND q.id NOT IN ({','.join('?' for _ in selected_ids)})"
+                exclusion_params = selected_ids
+            return conn.execute(
+                select_sql + base_where + exclusion_sql + " ORDER BY RANDOM() LIMIT ?",
+                [*base_params, *exclusion_params, remaining],
+            ).fetchall()
+
         if user_id is not None:
             unseen_where = where + " AND NOT EXISTS (SELECT 1 FROM exam_practice_attempts pa WHERE pa.user_id = ? AND pa.question_id = q.id)"
             unseen_rows = conn.execute(
@@ -363,18 +378,22 @@ def get_random_practice_questions(limit=10, paper_id=None, user_id=None) -> list
                 [*params, user_id, limit],
             ).fetchall()
             if unseen_rows:
-                question_rows = unseen_rows
+                # The final unseen batch can be smaller than the daily 30-question
+                # requirement. Keep every unseen question, then fill the remainder
+                # from unresolved mistakes before using an ordinary random refresh.
+                question_rows.extend(unseen_rows)
+                remaining = limit - len(question_rows)
+                wrong_where = where + " AND EXISTS (SELECT 1 FROM exam_practice_wrong_questions w WHERE w.user_id = ? AND w.question_id = q.id)"
+                question_rows.extend(append_random_rows(wrong_where, [*params, user_id], remaining))
+                remaining = limit - len(question_rows)
+                question_rows.extend(append_random_rows(where, params, remaining))
             else:
                 wrong_where = where + " AND EXISTS (SELECT 1 FROM exam_practice_wrong_questions w WHERE w.user_id = ? AND w.question_id = q.id)"
-                question_rows = conn.execute(
-                    select_sql + wrong_where + " ORDER BY RANDOM() LIMIT ?",
-                    [*params, user_id, limit],
-                ).fetchall()
+                question_rows.extend(append_random_rows(wrong_where, [*params, user_id], limit))
         if not question_rows:
-            question_rows = conn.execute(
-                select_sql + where + " ORDER BY RANDOM() LIMIT ?",
-                [*params, limit],
-            ).fetchall()
+            question_rows.extend(append_random_rows(where, params, limit))
+        elif len(question_rows) < limit:
+            question_rows.extend(append_random_rows(where, params, limit - len(question_rows)))
         questions = [dict(row) for row in question_rows]
         for question in questions:
             option_rows = conn.execute(
@@ -687,6 +706,26 @@ def clear_practice_draft(user_id: int, conn=None) -> None:
             conn.close()
 
 
+def _approved_checkin_dates(conn, user_id: int, start_day: date, end_day: date) -> set[str]:
+    """Return explicitly approved daily check-ins without mutating answer history."""
+    table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'exam_daily_checkin_approvals'"
+    ).fetchone()
+    if not table_exists:
+        return set()
+    rows = conn.execute(
+        """
+        SELECT target_date
+        FROM exam_daily_checkin_approvals
+        WHERE user_id = ?
+          AND target_date >= ?
+          AND target_date <= ?
+        """,
+        (user_id, start_day.strftime("%Y-%m-%d"), end_day.strftime("%Y-%m-%d")),
+    ).fetchall()
+    return {str(row["target_date"]) for row in rows}
+
+
 def get_daily_practice_status(user_id: int, conn=None) -> dict:
     should_close = False
     if conn is None:
@@ -727,9 +766,12 @@ def get_daily_practice_status(user_id: int, conn=None) -> dict:
                 }
             )
         best_accuracy = max((session["accuracy"] for session in sessions), default=0.0)
+        today = date.today()
+        approval_applied = _today_prefix() in _approved_checkin_dates(conn, user_id, today, today)
         return {
             "date": _today_prefix(),
-            "passed": any(session["passed"] for session in sessions),
+            "passed": any(session["passed"] for session in sessions) or approval_applied,
+            "approval_applied": approval_applied,
             "best_accuracy": best_accuracy,
             "session_count": len(sessions),
             "answered_count": sum(session["total_count"] for session in sessions),
@@ -793,6 +835,18 @@ def list_daily_checkins(target_date: str | None = None) -> list[dict]:
             }
             sessions_by_user.setdefault(row["user_id"], []).append(session)
 
+        approval_rows = conn.execute(
+            """
+            SELECT user_id
+            FROM exam_daily_checkin_approvals
+            WHERE target_date = ?
+            """,
+            (date_prefix,),
+        ).fetchall() if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'exam_daily_checkin_approvals'"
+        ).fetchone() else []
+        approved_user_ids = {int(row["user_id"]) for row in approval_rows}
+
         report = []
         for user in users:
             sessions = sessions_by_user.get(user["id"], [])
@@ -802,7 +856,8 @@ def list_daily_checkins(target_date: str | None = None) -> list[dict]:
                 (session["latest_at"] for session in sessions if session["latest_at"]),
                 default=None,
             )
-            passed = any(session["passed"] for session in sessions)
+            approval_applied = user["id"] in approved_user_ids
+            passed = any(session["passed"] for session in sessions) or approval_applied
             practiced = bool(sessions)
             report.append(
                 {
@@ -813,6 +868,7 @@ def list_daily_checkins(target_date: str | None = None) -> list[dict]:
                     "date": date_prefix,
                     "practiced": practiced,
                     "passed": passed,
+                    "approval_applied": approval_applied,
                     "status": "passed" if passed else ("failed" if practiced else "missing"),
                     "answered_count": answered_count,
                     "session_count": len(sessions),
@@ -872,7 +928,12 @@ def _practice_sessions_for_range(conn, user_id: int, start_day: date, end_day: d
     return sessions_by_date
 
 
-def _summarize_calendar_days(sessions_by_date: dict[str, list[dict]], start_day: date, end_day: date) -> dict:
+def _summarize_calendar_days(
+    sessions_by_date: dict[str, list[dict]],
+    start_day: date,
+    end_day: date,
+    approved_dates: set[str] | None = None,
+) -> dict:
     today = date.today()
     days = []
     actual_days = 0
@@ -881,7 +942,8 @@ def _summarize_calendar_days(sessions_by_date: dict[str, list[dict]], start_day:
     while cursor_day <= end_day:
         day_key = cursor_day.strftime("%Y-%m-%d")
         sessions = sessions_by_date.get(day_key, [])
-        passed = any(session["passed"] for session in sessions)
+        approval_applied = day_key in (approved_dates or set())
+        passed = any(session["passed"] for session in sessions) or approval_applied
         practiced = bool(sessions)
         if cursor_day > today:
             status = "future"
@@ -898,6 +960,7 @@ def _summarize_calendar_days(sessions_by_date: dict[str, list[dict]], start_day:
                 "date": day_key,
                 "status": status,
                 "passed": passed,
+                "approval_applied": approval_applied,
                 "practiced": practiced,
                 "retroactive_allowed": cursor_day < today and not passed,
                 "answered_count": sum(session["total_count"] for session in sessions),
@@ -920,7 +983,10 @@ def list_attendance_calendar(user_id: int, month: str | None = None) -> dict:
     conn, should_close = _connection()
     try:
         sessions_by_date = _practice_sessions_for_range(conn, user_id, start_day, end_day)
-        summary = _summarize_calendar_days(sessions_by_date, start_day, end_day)
+        approved_dates = _approved_checkin_dates(conn, user_id, start_day, end_day)
+        summary = _summarize_calendar_days(
+            sessions_by_date, start_day, end_day, approved_dates
+        )
         retroactive_used = conn.execute(
             """
             SELECT COUNT(*)
@@ -947,7 +1013,10 @@ def list_attendance_calendar(user_id: int, month: str | None = None) -> dict:
 
 def _has_passed_practice_on_date(conn, user_id: int, target_day: date) -> bool:
     sessions = _practice_sessions_for_range(conn, user_id, target_day, target_day)
-    return any(session["passed"] for session in sessions.get(target_day.strftime("%Y-%m-%d"), []))
+    return (
+        any(session["passed"] for session in sessions.get(target_day.strftime("%Y-%m-%d"), []))
+        or target_day.strftime("%Y-%m-%d") in _approved_checkin_dates(conn, user_id, target_day, target_day)
+    )
 
 
 def submit_retroactive_checkin(user_id: int, target_date: str, answers: dict) -> dict:
@@ -996,7 +1065,10 @@ def list_monthly_checkin_reports(month: str | None = None) -> list[dict]:
         reports = []
         for user in users:
             sessions_by_date = _practice_sessions_for_range(conn, user["id"], start_day, end_day)
-            summary = _summarize_calendar_days(sessions_by_date, start_day, end_day)
+            approved_dates = _approved_checkin_dates(conn, user["id"], start_day, end_day)
+            summary = _summarize_calendar_days(
+                sessions_by_date, start_day, end_day, approved_dates
+            )
             retroactive_dates = {
                 row["target_date"]
                 for row in conn.execute(

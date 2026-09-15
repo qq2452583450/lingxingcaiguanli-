@@ -377,6 +377,103 @@ def test_daily_practice_status_passes_at_eighty_percent(test_db):
     assert status["answered_count"] == 30
 
 
+def test_final_unseen_practice_batch_is_topped_up_to_daily_requirement(test_db):
+    from database.exam_schema import init_exam_schema
+
+    user_id = seed_user(test_db, "final_unseen", "末批未做题", "材料员")
+    cursor = test_db.cursor()
+    cursor.execute(
+        """
+        INSERT INTO exam_papers (title, duration_minutes, total_score, source_type, create_time)
+        VALUES (?, 60, 100, 'practice_unified_bank', '2026-09-15 00:00:00')
+        """,
+        ("统一练习题库",),
+    )
+    paper_id = cursor.lastrowid
+    for order_no in range(1, 36):
+        cursor.execute(
+            """
+            INSERT INTO exam_questions (paper_id, question_type, order_no, stem, correct_answer, score)
+            VALUES (?, 'single_choice', ?, ?, 'A', 1)
+            """,
+            (paper_id, order_no, f"统一练习题{order_no}"),
+        )
+        question_id = cursor.lastrowid
+        cursor.execute(
+            "INSERT INTO exam_question_options (question_id, option_key, option_text) VALUES (?, 'A', '正确')",
+            (question_id,),
+        )
+        if order_no <= 10:
+            cursor.execute(
+                """
+                INSERT INTO exam_practice_attempts (
+                    user_id, question_id, answer_text, is_correct, accuracy_credit, created_at, practice_session_id
+                ) VALUES (?, ?, 'A', 1, 1, '2026-09-14 09:00:00', 'previous')
+                """,
+                (user_id, question_id),
+            )
+    test_db.commit()
+    init_exam_schema(test_db)
+    test_db.commit()
+
+    questions = get_random_practice_questions(limit=30, user_id=user_id)
+
+    assert len(questions) == 30
+    assert len({question["id"] for question in questions}) == 30
+    assert {question["order_no"] for question in questions} >= set(range(11, 36))
+
+
+def test_daily_checkin_approval_preserves_answers_and_marks_today_passed(test_db):
+    user_id = seed_user(test_db, "approved_daily", "审批打卡", "材料员")
+    cursor = test_db.cursor()
+    cursor.execute(
+        """
+        INSERT INTO exam_papers (title, duration_minutes, total_score, source_type, create_time)
+        VALUES (?, 60, 100, 'practice_unified_bank', '2026-09-15 00:00:00')
+        """,
+        ("审批测试统一练习题库",),
+    )
+    paper_id = cursor.lastrowid
+    for order_no in range(1, 11):
+        cursor.execute(
+            """
+            INSERT INTO exam_questions (paper_id, question_type, order_no, stem, correct_answer, score)
+            VALUES (?, 'single_choice', ?, ?, 'A', 1)
+            """,
+            (paper_id, order_no, f"审批测试题{order_no}"),
+        )
+        cursor.execute(
+            "INSERT INTO exam_question_options (question_id, option_key, option_text) VALUES (?, 'A', '正确')",
+            (cursor.lastrowid,),
+        )
+    test_db.commit()
+    questions = get_random_practice_questions(limit=10, user_id=user_id)
+    answers = {str(question["id"]): question["correct_answer"] for question in questions[:8]}
+    answers.update({str(question["id"]): definitely_wrong_objective_answer(question) for question in questions[8:]})
+    result = record_practice_answers(user_id, answers)
+    assert result["passed"] is False
+
+    today = date.today().strftime("%Y-%m-%d")
+    test_db.execute(
+        """
+        INSERT INTO exam_daily_checkin_approvals (
+            user_id, target_date, approved_accuracy, reason, approved_by, approved_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (user_id, today, result["accuracy"], "末批题数不足30题，按实际正确率审批", "系统管理员", f"{today} 12:00:00"),
+    )
+    test_db.commit()
+
+    status = get_daily_practice_status(user_id)
+    report = {row["user_id"]: row for row in list_daily_checkins(today)}
+
+    assert status["passed"] is True
+    assert status["approval_applied"] is True
+    assert status["answered_count"] == 10
+    assert report[user_id]["passed"] is True
+    assert report[user_id]["approval_applied"] is True
+
+
 def test_daily_practice_status_requires_continued_practice_below_eighty_percent(test_db):
     paper, _, _ = load_exam(test_db)
     user_id = seed_user(test_db, "daily_retry", "\u672a\u8fbe\u6807\u6750\u6599\u5458", "\u6750\u6599\u5458")
