@@ -1019,6 +1019,20 @@ function clearMaterialFilters() {
     loadMaterials();
 }
 
+function exportMaterials() {
+    const params = new URLSearchParams();
+    const filters = {
+        filter_name: document.getElementById('filterName')?.value || '',
+        filter_spec: document.getElementById('filterSpec')?.value || '',
+        filter_brand: document.getElementById('filterBrand')?.value || '',
+        filter_region: document.getElementById('filterRegion')?.value || ''
+    };
+    Object.entries(filters).forEach(([key, value]) => {
+        if (value) params.set(key, value);
+    });
+    window.location.href = `/api/materials/export?${params.toString()}`;
+}
+
 // 加载更多材料（触底懒加载）
 async function loadMoreMaterials() {
     if (materialState.loading || materialState.allLoaded) return;

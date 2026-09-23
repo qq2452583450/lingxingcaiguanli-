@@ -1,31 +1,25 @@
 """
 材料管理蓝图
 """
-from flask import Blueprint, request, jsonify, session
+from io import BytesIO
+
+from flask import Blueprint, request, jsonify, send_file, session
 from datetime import datetime
 from helpers import get_db
 from helpers.auth_decorators import login_required, require_role, require_admin
-from helpers.material_regions import generate_material_code
+from helpers.material_regions import generate_material_code, get_region_name
 
 material_bp = Blueprint('materials', __name__, url_prefix='/api')
 
 
-@material_bp.route('/materials', methods=['GET'])
-def get_materials():
-    """获取材料列表（支持分页和筛选）"""
+def _material_filter_clause():
+    """Build the shared material-list filters for the page and Excel export."""
     keyword = request.args.get('keyword', '')
     filter_name = request.args.get('filter_name', '')
     filter_spec = request.args.get('filter_spec', '')
     filter_brand = request.args.get('filter_brand', '')
     filter_region = request.args.get('filter_region', '')
-    page = request.args.get('page', 1, type=int)
-    page_size = request.args.get('page_size', 50, type=int)
-    offset = (page - 1) * page_size
 
-    conn = get_db()
-    cursor = conn.cursor()
-
-    # 构建 WHERE 条件
     where_clause = ''
     params = []
     if filter_name:
@@ -46,6 +40,99 @@ def get_materials():
         params.extend([like, like, like, like, like])
     if where_clause:
         where_clause = 'WHERE ' + where_clause[4:]
+    return where_clause, params
+
+
+def _material_export_workbook(rows, filters):
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    workbook = Workbook()
+    info = workbook.active
+    info.title = '导出说明'
+    info.append(['材料信息导出'])
+    info.append(['导出时间', datetime.now().strftime('%Y-%m-%d %H:%M:%S')])
+    info.append(['材料数量', len(rows)])
+    for label, key in [('材料名称', 'filter_name'), ('规格', 'filter_spec'), ('品牌', 'filter_brand'), ('地区', 'filter_region')]:
+        info.append([label, filters.get(key) or '全部'])
+
+    sheet = workbook.create_sheet('材料信息')
+    headers = [
+        '材料编号', '地区', '项目', '材料名称', '规格', '详细规格', '品牌', '单位', '是否国标',
+        '税率', '含税价', '不含税价', '现金含税价', '现金不含税价', '默认供应商', '运费',
+        '库存下限', '库存上限', '重量', '最后采购项目', '最后采购时间', '创建时间', '备注',
+    ]
+    sheet.append(headers)
+    for row in rows:
+        sheet.append([
+            row.get('material_code') or '',
+            get_region_name(row.get('material_code')) or '',
+            row.get('project_name') or '',
+            row.get('material_name') or '',
+            row.get('specification') or '',
+            row.get('detail_spec') or '',
+            row.get('brand') or '',
+            row.get('unit_name') or '',
+            '是' if row.get('is_national_standard') else '否',
+            row.get('tax_rate') or 0,
+            row.get('tax_price') or 0,
+            row.get('tax_exempt_price') or 0,
+            row.get('cash_price') or 0,
+            row.get('cash_tax_price') or 0,
+            row.get('supplier_name') or '',
+            row.get('freight') or 0,
+            row.get('inventory_min') or 0,
+            row.get('inventory_max') or 0,
+            row.get('weight') or 0,
+            row.get('last_purchase_project') or '',
+            row.get('last_purchase_time') or '',
+            row.get('create_time') or '',
+            row.get('remark') or '',
+        ])
+
+    title_fill = PatternFill('solid', fgColor='1F4E78')
+    for sheet_item in (info, sheet):
+        sheet_item.sheet_view.showGridLines = False
+        sheet_item.freeze_panes = 'A2'
+        for cell in sheet_item[1]:
+            cell.font = Font(color='FFFFFF', bold=True)
+            cell.fill = title_fill
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+    info.column_dimensions['A'].width = 18
+    info.column_dimensions['B'].width = 30
+    sheet.auto_filter.ref = sheet.dimensions
+    widths = [16, 10, 22, 24, 22, 26, 16, 10, 12, 10, 13, 13, 15, 15, 26, 12, 12, 12, 10, 22, 20, 20, 34]
+    for column, width in enumerate(widths, 1):
+        sheet.column_dimensions[get_column_letter(column)].width = width
+    for row in sheet.iter_rows(min_row=2):
+        for cell in row:
+            if isinstance(cell.value, str):
+                cell.data_type = 's'
+            cell.alignment = Alignment(vertical='center', wrap_text=True)
+    for column in (11, 12, 13, 14, 16, 17, 18, 19):
+        for row in sheet.iter_rows(min_row=2, min_col=column, max_col=column):
+            row[0].number_format = '#,##0.00'
+    for row in sheet.iter_rows(min_row=2, min_col=10, max_col=10):
+        row[0].number_format = '0.00%'
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
+@material_bp.route('/materials', methods=['GET'])
+def get_materials():
+    """获取材料列表（支持分页和筛选）"""
+    page = request.args.get('page', 1, type=int)
+    page_size = request.args.get('page_size', 50, type=int)
+    offset = (page - 1) * page_size
+
+    conn = get_db()
+    cursor = conn.cursor()
+
+    where_clause, params = _material_filter_clause()
 
     # 查询总数
     count_sql = f'SELECT COUNT(*) FROM materials m {where_clause}'
@@ -193,6 +280,67 @@ def get_material_price_history(material_id):
         'material': dict(material_row),
         'data': history,
     })
+
+
+@material_bp.route('/materials/export', methods=['GET'])
+@login_required
+def export_materials():
+    """Export every material matching the current material-list filters."""
+    where_clause, params = _material_filter_clause()
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(f"""
+        WITH ranked_purchases AS (
+            SELECT
+                pii.material_id,
+                pi.project_id,
+                COALESCE(
+                    NULLIF(pi.approve_time, ''),
+                    NULLIF(pi.inquiry_date, ''),
+                    pi.create_time
+                ) AS purchase_time,
+                ROW_NUMBER() OVER (
+                    PARTITION BY pii.material_id
+                    ORDER BY
+                        COALESCE(
+                            NULLIF(pi.approve_time, ''),
+                            NULLIF(pi.inquiry_date, ''),
+                            pi.create_time
+                        ) DESC,
+                        pi.id DESC,
+                        pii.id DESC
+                ) AS purchase_rank
+            FROM purchase_inquiry_items pii
+            JOIN purchase_inquiries pi ON pi.id = pii.inquiry_id
+            WHERE pi.approval_status = '已同意'
+        )
+        SELECT
+            m.*,
+            u.unit_name,
+            s.supplier_name,
+            COALESCE(mp.project_name, mp.project_code, '') AS project_name,
+            COALESCE(lp.project_name, lp.project_code, '') AS last_purchase_project,
+            rp.purchase_time AS last_purchase_time
+        FROM materials m
+        LEFT JOIN units u ON m.unit_id = u.id
+        LEFT JOIN suppliers s ON m.default_supplier_id = s.id
+        LEFT JOIN projects mp ON mp.id = m.project_id
+        LEFT JOIN ranked_purchases rp
+            ON rp.material_id = m.id AND rp.purchase_rank = 1
+        LEFT JOIN projects lp ON lp.id = rp.project_id
+        {where_clause}
+        ORDER BY m.material_code
+    """, params)
+    rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+
+    output = _material_export_workbook(rows, request.args)
+    return send_file(
+        output,
+        as_attachment=True,
+        download_name='材料信息导出.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
 
 
 @material_bp.route('/next-material-code', methods=['GET'])
