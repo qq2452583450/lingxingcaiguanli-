@@ -4859,9 +4859,33 @@ function selectSupplierOption(option, itemIndex, quoteIndex) {
         quote.supplier_id = supplierId;
         quote.supplier_name = supplierName;
         updateLowestFlag(itemIndex);
+
+        // 多材料询价时，以第一个材料的同一报价列为准同步后续材料。
+        // 后续材料仍可单独调整，不会反向覆盖其他材料。
+        const syncedFollowingItems = itemIndex === 0
+            && syncSupplierFromFirstInquiryItem(quoteIndex, supplierId, supplierName);
+        if (syncedFollowingItems) {
+            renderInquiryItems();
+        }
         updateInquiryTotal();
     }
 
+}
+
+function syncSupplierFromFirstInquiryItem(quoteIndex, supplierId, supplierName) {
+    if (inquiryItems.length < 2) return false;
+
+    let synced = false;
+    for (let itemIndex = 1; itemIndex < inquiryItems.length; itemIndex++) {
+        const quote = inquiryItems[itemIndex]?.quotes?.[quoteIndex];
+        if (!quote) continue;
+
+        quote.supplier_id = supplierId;
+        quote.supplier_name = supplierName;
+        updateLowestFlag(itemIndex);
+        synced = true;
+    }
+    return synced;
 }
 
 function toggleSupplierDropdown(input) {
