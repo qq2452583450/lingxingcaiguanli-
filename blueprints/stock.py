@@ -40,6 +40,18 @@ def get_stock_in():
     if role_name != '系统管理员':
         where.append("si.project_id IN (SELECT project_id FROM user_projects WHERE user_id = ?)")
         params.append(user['id'])
+    filters = [
+        ('filter_material', '(m.material_name LIKE ? OR m.material_code LIKE ?)', 2),
+        ('filter_supplier', "COALESCE(s2.supplier_name, s.supplier_name, '') LIKE ?", 1),
+        ('filter_project', '(p.project_name LIKE ? OR p.project_code LIKE ?)', 2),
+        ('filter_order_no', '(si.order_no LIKE ? OR si.related_order_no LIKE ?)', 2),
+        ('filter_spec', '(m.specification LIKE ? OR m.detail_spec LIKE ?)', 2),
+    ]
+    for key, condition, parameter_count in filters:
+        value = (request.args.get(key) or '').strip()
+        if value:
+            where.append(condition)
+            params.extend([f'%{value}%'] * parameter_count)
     if keyword:
         like = f'%{keyword}%'
         where.append("""(

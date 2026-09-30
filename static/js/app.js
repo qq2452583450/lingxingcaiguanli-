@@ -2551,11 +2551,20 @@ async function printInquiryApproval(id) {
 
 async function loadStockIn(page = 1) {
     const tbody = document.getElementById('stockInTable');
-    const keyword = document.getElementById('stockInSearch')?.value.trim() || '';
     const params = new URLSearchParams({
         page: String(page),
-        page_size: String(STOCK_PAGE_SIZE),
-        keyword
+        page_size: String(STOCK_PAGE_SIZE)
+    });
+    const filters = {
+        filter_material: 'stockInFilterMaterial',
+        filter_supplier: 'stockInFilterSupplier',
+        filter_project: 'stockInFilterProject',
+        filter_order_no: 'stockInFilterOrderNo',
+        filter_spec: 'stockInFilterSpec'
+    };
+    Object.entries(filters).forEach(([key, id]) => {
+        const value = document.getElementById(id)?.value.trim() || '';
+        if (value) params.set(key, value);
     });
     if (tbody) tbody.innerHTML = '<tr><td colspan="11" class="loading">加载中...</td></tr>';
     try {
@@ -2636,6 +2645,14 @@ function renderStockInTable(stockIn, page = 1) {
 }
 
 function searchStockIn() {
+    loadStockIn(1);
+}
+
+function clearStockInFilters() {
+    ['stockInFilterMaterial', 'stockInFilterSupplier', 'stockInFilterProject',
+        'stockInFilterOrderNo', 'stockInFilterSpec'].forEach(id => {
+        document.getElementById(id).value = '';
+    });
     loadStockIn(1);
 }
 

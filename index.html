@@ -467,10 +467,15 @@
                     <h1>入库管理</h1>
                 </div>
                 <div class="toolbar">
-                    <div class="search-box">
-                        <input type="text" id="stockInSearch" placeholder="搜索材料、供应商、项目或单号" onkeydown="if(event.key==='Enter') searchStockIn()" style="width:280px;">
-                        <button class="btn btn-primary" type="button" onclick="searchStockIn()">搜索</button>
-                    </div>
+                    <form class="search-box" style="flex-wrap:wrap;" onsubmit="event.preventDefault(); searchStockIn();">
+                        <input type="text" id="stockInFilterMaterial" aria-label="材料筛选" placeholder="材料名称 / 编码" style="width:160px;">
+                        <input type="text" id="stockInFilterSupplier" aria-label="供应商筛选" placeholder="供应商" style="width:160px;">
+                        <input type="text" id="stockInFilterProject" aria-label="项目筛选" placeholder="项目名称 / 编码" style="width:160px;">
+                        <input type="text" id="stockInFilterOrderNo" aria-label="单号筛选" placeholder="入库单号 / 关联询价单号" style="width:210px;">
+                        <input type="text" id="stockInFilterSpec" aria-label="型号筛选" placeholder="型号 / 规格" style="width:160px;">
+                        <button class="btn btn-primary" type="submit">查询</button>
+                        <button class="btn btn-secondary" type="button" onclick="clearStockInFilters()">清空筛选</button>
+                    </form>
                     <button class="btn btn-secondary" onclick="loadStockIn()">刷新</button>
                 </div>
                 <div class="table-container">

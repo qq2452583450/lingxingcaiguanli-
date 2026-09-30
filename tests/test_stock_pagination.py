@@ -100,10 +100,71 @@ def test_stock_frontend_has_search_and_fifty_item_pagination():
     html = Path("index.html").read_text(encoding="utf-8")
     javascript = Path("static/js/app.js").read_text(encoding="utf-8")
 
-    assert 'id="stockInSearch"' in html
+    for field in ('Material', 'Supplier', 'Project', 'OrderNo', 'Spec'):
+        assert f'id="stockInFilter{field}"' in html
     assert 'id="inventorySearch"' in html
     assert 'id="stockInPagination"' in html
     assert 'id="inventoryPagination"' in html
     assert "const STOCK_PAGE_SIZE = 50" in javascript
     assert "function searchStockIn()" in javascript
     assert "function searchInventory()" in javascript
+
+
+def test_stock_in_field_filters_combine_and_preserve_pagination_and_project_access(client, test_db):
+    user_id = _seed_stock_records(test_db)
+    cursor = test_db.cursor()
+    order_supplier = cursor.execute(
+        "INSERT INTO suppliers (supplier_name) VALUES ('单据供应商')"
+    ).lastrowid
+    detail_supplier = cursor.execute(
+        "INSERT INTO suppliers (supplier_name) VALUES ('明细供应商')"
+    ).lastrowid
+    cursor.execute(
+        "UPDATE stock_in_orders SET supplier_id=?, related_order_no='XJ-TEST-001'",
+        (order_supplier,),
+    )
+    cursor.execute(
+        "UPDATE stock_in_details SET supplier_id=? WHERE material_id=(SELECT id FROM materials WHERE material_code='QJ-055')",
+        (detail_supplier,),
+    )
+    test_db.commit()
+    _login(client, user_id)
+
+    checks = [
+        ({'filter_material': 'QJ-055'}, 1),
+        ({'filter_supplier': '单据供应商'}, 54),
+        ({'filter_supplier': '明细供应商'}, 1),
+        ({'filter_project': '曲靖项目'}, 55),
+        ({'filter_project': 'QJ001'}, 55),
+        ({'filter_order_no': 'RK-TEST'}, 55),
+        ({'filter_order_no': 'XJ-TEST'}, 55),
+        ({'filter_spec': '详细055'}, 1),
+        ({'filter_spec': '规格055'}, 1),
+        ({'filter_material': '测试材料055', 'filter_supplier': '明细供应商',
+          'filter_project': 'QJ001', 'filter_order_no': 'XJ-TEST', 'filter_spec': '规格055'}, 1),
+        ({'filter_material': '测试材料055', 'filter_supplier': '单据供应商'}, 0),
+    ]
+    for filters, expected_total in checks:
+        result = client.get('/api/stock-in', query_string=filters).get_json()
+        assert result['success'] is True
+        assert result['total'] == expected_total, filters
+        assert len(result['data']) == min(expected_total, 50), filters
+
+    page = client.get('/api/stock-in', query_string={
+        'filter_project': 'QJ001', 'filter_order_no': 'XJ-TEST', 'page': 2,
+    }).get_json()
+    assert page['total'] == 55
+    assert page['total_pages'] == 2
+    assert len(page['data']) == 5
+
+    # Filtering cannot expose records from an unassigned project to a material clerk.
+    role_id = cursor.execute("INSERT INTO roles (role_name) VALUES ('材料员')").lastrowid
+    cursor.execute('UPDATE users SET role_id=? WHERE id=?', (role_id, user_id))
+    test_db.commit()
+    result = client.get('/api/stock-in?filter_project=QJ001').get_json()
+    assert result['total'] == 0
+    project_id = cursor.execute('SELECT id FROM projects WHERE project_code=?', ('QJ001',)).fetchone()[0]
+    cursor.execute('INSERT INTO user_projects (user_id, project_id) VALUES (?, ?)', (user_id, project_id))
+    test_db.commit()
+    result = client.get('/api/stock-in?filter_project=QJ001&filter_spec=详细055').get_json()
+    assert result['total'] == 1
