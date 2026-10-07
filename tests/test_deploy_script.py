@@ -42,19 +42,16 @@ def test_workflow_uses_deploy_script_for_dependency_install_before_restart():
     assert 'Start-Service -Name $ServiceName' in deploy_script
 
 
-def test_production_workflow_transfers_bundle_and_does_not_fetch_github_on_server():
+def test_production_workflow_syncs_once_with_bounded_network_retries():
     workflow = Path('.github/workflows/deploy-prod.yml').read_text(encoding='utf-8')
-    assert 'actions/checkout@v4' in workflow
-    assert 'fetch-depth: 0' in workflow
-    assert 'git bundle create production.bundle HEAD' in workflow
-    assert 'timeout --foreground 120s scp' in workflow
-    assert 'OpenStandardInput' not in workflow
-    assert 'git fetch --no-tags $Bundle HEAD:refs/remotes/origin/prod' in workflow
-    assert 'git bundle verify $Bundle' in workflow
-    assert 'git fetch origin prod' not in workflow
+    assert workflow.count('fetch --no-tags origin prod') == 1
+    assert 'http.version=HTTP/1.1' in workflow
+    assert 'http.lowSpeedLimit=1' in workflow
+    assert 'http.lowSpeedTime=60' in workflow
+    assert 'git bundle' not in workflow
+    assert ' scp ' not in workflow
     assert '-SkipGitSync -ExpectedCommit ${{ github.sha }}' in workflow
-    assert 'StrictHostKeyChecking=yes' in workflow
-    assert 'BatchMode=yes' in workflow
+    assert "throw 'Production revision mismatch'" in workflow
 
 
 def test_deploy_skip_sync_requires_exact_expected_revision():

@@ -18,50 +18,6 @@ jobs:
     if: github.ref == 'refs/heads/prod'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout production revision
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Check production bundle destination
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.PROD_SSH_HOST }}
-          username: ${{ secrets.PROD_SSH_USER }}
-          key: ${{ secrets.PROD_SSH_KEY }}
-          port: ${{ secrets.PROD_SSH_PORT || 22 }}
-          script_stop: true
-          command_timeout: 2m
-          script: |
-            powershell -NoProfile -NonInteractive -Command "& { $ErrorActionPreference = 'Stop'; $Path = 'C:\wwwroot\lxclgl\deploy-production-${{ github.sha }}.bundle'; $File = [System.IO.File]::Create($Path); $File.Dispose(); Write-Output 'bundle_destination_ready' }"
-      - name: Transfer verified Git bundle
-        shell: bash
-        env:
-          PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-          PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
-          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
-          PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT || 22 }}
-        run: |
-          set -euo pipefail
-          git bundle create production.bundle HEAD
-          git bundle verify production.bundle
-          umask 077
-          key="$RUNNER_TEMP/lxclgl-deploy-key"
-          known_hosts="$RUNNER_TEMP/lxclgl-known-hosts"
-          trap 'rm -f "$key" "$known_hosts" production.bundle' EXIT
-          printf '%s\n' "$PROD_SSH_KEY" | tr -d '\r' > "$key"
-          ssh-keyscan -T 15 -p "$PROD_SSH_PORT" "$PROD_SSH_HOST" > "$known_hosts"
-          test -s "$known_hosts"
-          uploaded=0
-          for attempt in 1 2 3; do
-            echo "Uploading production bundle (attempt $attempt/3)"
-            if timeout --foreground 120s scp -i "$key" -P "$PROD_SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 production.bundle "$PROD_SSH_USER@$PROD_SSH_HOST:/C:/wwwroot/lxclgl/deploy-production-$GITHUB_SHA.bundle"; then
-              uploaded=1
-              break
-            fi
-            sleep 5
-          done
-          test "$uploaded" -eq 1
       - name: Sync prod source
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -72,7 +28,7 @@ jobs:
           script_stop: true
           command_timeout: 20m
           script: |
-            powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $ErrorActionPreference = 'Continue'; $AppDir = 'C:\wwwroot\lxclgl'; $Bundle = Join-Path $AppDir 'deploy-production-${{ github.sha }}.bundle'; $Diag = Join-Path $AppDir 'deploy-diagnostic.txt'; Set-Location -LiteralPath $AppDir; 'deploy_sha=${{ github.sha }}' | Set-Content -LiteralPath $Diag; git bundle verify $Bundle; if ($LASTEXITCODE -ne 0) { throw 'Invalid production bundle' }; git status --short *>&1 | Add-Content -LiteralPath $Diag; git stash push -m 'deploy-autostash-${{ github.sha }}' *>&1 | Add-Content -LiteralPath $Diag; if ($LASTEXITCODE -ne 0) { throw 'Unable to preserve local changes' }; function Invoke-Retry($Name, [scriptblock]$Command) { for ($i = 1; $i -le 5; $i++) { ('{0}_attempt={1}' -f $Name, $i) | Add-Content -LiteralPath $Diag; & $Command *>&1 | Add-Content -LiteralPath $Diag; $Exit = $LASTEXITCODE; ('{0}_exit={1}' -f $Name, $Exit) | Add-Content -LiteralPath $Diag; if ($Exit -eq 0) { return }; Start-Sleep -Seconds 15 }; throw ($Name + ' failed after retrying') }; Invoke-Retry 'bundle_fetch' { git fetch --no-tags $Bundle HEAD:refs/remotes/origin/prod }; Invoke-Retry 'checkout' { git checkout prod }; Invoke-Retry 'rebase' { git rebase origin/prod }; $Actual = (git rev-parse HEAD).Trim(); if ($LASTEXITCODE -ne 0 -or $Actual -ne '${{ github.sha }}') { throw 'Production revision mismatch' }; Remove-Item -LiteralPath $Bundle -ErrorAction Stop }"
+            powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $ErrorActionPreference = 'Continue'; $AppDir = 'C:\wwwroot\lxclgl'; $Diag = Join-Path $AppDir 'deploy-diagnostic.txt'; Set-Location -LiteralPath $AppDir; 'deploy_sha=${{ github.sha }}' | Set-Content -LiteralPath $Diag; git status --short *>&1 | Add-Content -LiteralPath $Diag; git stash push -m 'deploy-autostash-${{ github.sha }}' *>&1 | Add-Content -LiteralPath $Diag; if ($LASTEXITCODE -ne 0) { throw 'Unable to preserve local changes' }; function Invoke-Retry($Name, [scriptblock]$Command) { for ($i = 1; $i -le 5; $i++) { ('{0}_attempt={1}' -f $Name, $i) | Add-Content -LiteralPath $Diag; & $Command *>&1 | Add-Content -LiteralPath $Diag; $Exit = $LASTEXITCODE; ('{0}_exit={1}' -f $Name, $Exit) | Add-Content -LiteralPath $Diag; if ($Exit -eq 0) { return }; Start-Sleep -Seconds 15 }; throw ($Name + ' failed after retrying') }; Invoke-Retry 'fetch' { git -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1 -c http.lowSpeedTime=60 fetch --no-tags origin prod }; Invoke-Retry 'checkout' { git checkout prod }; Invoke-Retry 'rebase' { git rebase origin/prod }; $Actual = (git rev-parse HEAD).Trim(); if ($LASTEXITCODE -ne 0 -or $Actual -ne '${{ github.sha }}') { throw 'Production revision mismatch' } }"
       - name: Restart production service
         uses: appleboy/ssh-action@v1.0.3
         with:

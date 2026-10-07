@@ -13,7 +13,7 @@ def git(directory, *args):
 
 
 @pytest.fixture
-def bundle_repositories(tmp_path):
+def deployment_repositories(tmp_path):
     source = tmp_path / 'source'
     server = tmp_path / 'server'
     source.mkdir()
@@ -22,31 +22,19 @@ def bundle_repositories(tmp_path):
     git(source, 'add', 'app.txt')
     git(source, 'commit', '-m', 'initial')
     git(tmp_path, 'clone', str(source), str(server))
-    git(server, 'remote', 'set-url', 'origin', 'https://github.invalid/not-accessible.git')
     (source / 'app.txt').write_text('new', encoding='utf-8')
     git(source, 'commit', '-am', 'release')
-    bundle = server / f"deploy-production-{git(source, 'rev-parse', 'HEAD')}.bundle"
-    git(source, 'bundle', 'create', str(bundle), 'HEAD')
-    return source, server, bundle
+    return source, server
 
 
-def test_bundle_updates_revision_without_accessing_remote(bundle_repositories):
-    source, server, bundle = bundle_repositories
-    (server / 'runtime-data.txt').write_text('keep me', encoding='utf-8')
-    git(server, 'bundle', 'verify', str(bundle))
-    git(server, 'fetch', '--no-tags', str(bundle), 'HEAD:refs/remotes/origin/prod')
-    git(server, 'rebase', 'origin/prod')
-    assert git(server, 'rev-parse', 'HEAD') == git(source, 'rev-parse', 'HEAD')
-    assert (server / 'app.txt').read_text(encoding='utf-8') == 'new'
-    assert (server / 'runtime-data.txt').read_text(encoding='utf-8') == 'keep me'
-
-
-def test_windows_workflow_syncs_bundle_with_native_git_stderr(bundle_repositories):
+def test_windows_workflow_syncs_origin_with_native_git_stderr(deployment_repositories):
     powershell = shutil.which('powershell.exe')
     if not powershell:
         pytest.skip('Windows PowerShell integration test')
     yaml = pytest.importorskip('yaml')
-    source, server, bundle = bundle_repositories
+    source, server = deployment_repositories
+    (server / 'runtime-data.txt').write_text('keep me', encoding='utf-8')
+    (server / 'app.txt').write_text('local edit', encoding='utf-8')
     workflow = yaml.safe_load(Path('.github/workflows/deploy-prod.yml').read_text(encoding='utf-8'))
     step = next(step for step in workflow['jobs']['deploy']['steps'] if step['name'] == 'Sync prod source')
     command = step['with']['script'].strip()
@@ -59,26 +47,32 @@ def test_windows_workflow_syncs_bundle_with_native_git_stderr(bundle_repositorie
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert git(server, 'rev-parse', 'HEAD') == git(source, 'rev-parse', 'HEAD')
-    assert not bundle.exists()
+    assert (server / 'app.txt').read_text(encoding='utf-8') == 'new'
+    assert (server / 'runtime-data.txt').read_text(encoding='utf-8') == 'keep me'
+    assert 'local edit' in git(server, 'stash', 'show', '-p')
 
 
-def test_bundle_transfer_shell_has_valid_bash_syntax():
-    bash = shutil.which('bash')
-    if not bash:
-        pytest.skip('Bash is unavailable')
-    yaml = pytest.importorskip('yaml')
-    workflow = yaml.safe_load(Path('.github/workflows/deploy-prod.yml').read_text(encoding='utf-8'))
-    step = next(step for step in workflow['jobs']['deploy']['steps'] if step['name'] == 'Transfer verified Git bundle')
-    result = subprocess.run([bash, '-n'], input=step['run'], capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-
-
-@pytest.mark.parametrize('expected', ['', 'invalid-revision'])
-def test_skip_sync_rejects_missing_or_wrong_revision_before_installing(expected, bundle_repositories, monkeypatch):
+def test_workflow_rejects_wrong_revision(deployment_repositories):
     powershell = shutil.which('powershell.exe')
     if not powershell:
         pytest.skip('Windows PowerShell integration test')
-    source, server, bundle = bundle_repositories
+    source, server = deployment_repositories
+    yaml = pytest.importorskip('yaml')
+    workflow = yaml.safe_load(Path('.github/workflows/deploy-prod.yml').read_text(encoding='utf-8'))
+    step = next(step for step in workflow['jobs']['deploy']['steps'] if step['name'] == 'Sync prod source')
+    script = step['with']['script'].strip().split('-Command "', 1)[1].removesuffix('"')
+    script = script.replace('C:\\wwwroot\\lxclgl', str(server)).replace('${{ github.sha }}', 'invalid-revision')
+    result = subprocess.run([powershell, '-NoProfile', '-NonInteractive', '-Command', script], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert 'Production revision mismatch' in result.stderr
+
+
+@pytest.mark.parametrize('expected', ['', 'invalid-revision'])
+def test_skip_sync_rejects_missing_or_wrong_revision_before_installing(expected, deployment_repositories, monkeypatch):
+    powershell = shutil.which('powershell.exe')
+    if not powershell:
+        pytest.skip('Windows PowerShell integration test')
+    source, server = deployment_repositories
     monkeypatch.setenv('SECRET_KEY', 'test-only-not-a-production-secret')
     result = subprocess.run(
         [powershell, '-NoProfile', '-NonInteractive', '-File', str(Path('deploy/deploy.ps1').resolve()),
