@@ -128,3 +128,51 @@ def test_supplier_does_not_receive_other_suppliers_historical_deal_prices(client
 
     row = client.get(f'/api/purchase-inquiries/{current_id}').get_json()['items'][0]
     assert row.get('historical_lowest_price') is None
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_approval_print_shows_comparable_historical_price_after_library_price(
+    client, test_db, price_context, tmp_path, legacy
+):
+    cursor, material_id, supplier_id, inquiry, item = price_context
+    item(inquiry('PRINT-OLD'), 8.3456)
+    item(inquiry('PRINT-OTHER-SPEC'), 1, detail_spec='不同尺寸')
+    item(inquiry('PRINT-CASH-OLD'), 5.6789, cash=1)
+    current_id = inquiry('PRINT-CURRENT', date='2026-10-07', status='草稿')
+    if legacy:
+        cursor.execute(
+            "INSERT INTO purchase_inquiry_details (inquiry_id, material_id, supplier_id, this_price, library_price) VALUES (?, ?, ?, 10, 20)",
+            (current_id, material_id, supplier_id),
+        )
+    else:
+        item(current_id, 10)
+        item(current_id, 10, cash=1)
+        item(current_id, 10, detail_spec='没有历史成交')
+    test_db.commit()
+
+    response = client.get(f'/api/purchase-inquiries/{current_id}/approval-print')
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    (tmp_path / 'approval-print.html').write_text(html, encoding='utf-8')
+    assert html.index('库内价</th>') < html.index('历史最低价</th>') < html.index('class="supplier-col"')
+    assert '<td class="num historical-price">¥8.3456</td>' in html
+    if not legacy:
+        assert '<td class="num historical-price">¥5.6789</td>' in html
+        assert '<td class="num historical-price">—</td>' in html
+
+
+def test_approval_print_does_not_expose_historical_prices_to_suppliers(client, test_db, price_context):
+    cursor, material_id, supplier_id, inquiry, item = price_context
+    item(inquiry('PRINT-PRIVATE-OLD'), 8.3456)
+    current_id = inquiry('PRINT-SUPPLIER-CURRENT', date='2026-10-07', status='草稿')
+    item(current_id, 10)
+    cursor.execute("INSERT INTO roles (role_name) VALUES ('供应商')")
+    cursor.execute("INSERT INTO users (username, password, role_id) VALUES ('print_supplier', 'x', ?)", (cursor.lastrowid,))
+    supplier_user = cursor.lastrowid
+    test_db.commit()
+    with client.session_transaction() as session:
+        session['user'] = {'id': supplier_user, 'username': 'print_supplier'}
+
+    html = client.get(f'/api/purchase-inquiries/{current_id}/approval-print').get_data(as_text=True)
+    assert '¥8.3456' not in html
+    assert '<td class="num historical-price">—</td>' in html

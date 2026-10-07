@@ -1800,7 +1800,8 @@ def print_inquiry_approval(inquiry_id):
     # 如果没有新结构数据，使用旧结构
     if not items:
         cursor.execute("""
-            SELECT pd.*, m.material_name, m.specification, m.material_code, u.unit_name, s.supplier_name
+            SELECT pd.*, m.material_name, m.specification, m.material_code,
+                   m.detail_spec, 0 AS is_cash_price, u.unit_name, s.supplier_name
             FROM purchase_inquiry_details pd
             LEFT JOIN materials m ON pd.material_id = m.id
             LEFT JOIN units u ON m.unit_id = u.id
@@ -1810,6 +1811,17 @@ def print_inquiry_approval(inquiry_id):
         details = [dict(row) for row in cursor.fetchall()]
     else:
         details = None
+
+    user = session.get('user')
+    if user:
+        cursor.execute("""
+            SELECT r.role_name
+            FROM users u JOIN roles r ON r.id = u.role_id
+            WHERE u.id = ?
+        """, (user.get('id'),))
+        role = cursor.fetchone()
+        if role and role['role_name'] != '供应商':
+            add_historical_lowest_prices(cursor, inquiry, items or details or [])
 
     cursor.execute("""
         SELECT ar.*, u.real_name as approver_real_name
@@ -1831,6 +1843,12 @@ def print_inquiry_approval(inquiry_id):
     def text(value, default='-'):
         value = '' if value is None else str(value).strip()
         return escape(value if value else default)
+
+    def historical_price(value):
+        if value is None:
+            return '—'
+        whole, fraction = f"{float(value):,.4f}".split('.')
+        return f"¥{whole}.{fraction.rstrip('0').ljust(2, '0')}"
 
     project_display = format_project_display(
         inquiry.get('project_code'),
@@ -1936,6 +1954,7 @@ def print_inquiry_approval(inquiry_id):
                         <td class="center">{text(item.get('unit_name'))}</td>
                         <td class="center">{item.get('quantity', 1)}</td>
                         <td class="num">{money(item.get('library_price'))}</td>
+                        <td class="num historical-price">{historical_price(item.get('historical_lowest_price'))}</td>
                         {quote_cells}
                         <td>{text(selected_supplier, '')}</td>
                     </tr>
@@ -1954,6 +1973,7 @@ def print_inquiry_approval(inquiry_id):
                         <td class="center">{text(detail.get('unit_name'))}</td>
                         <td class="center">{detail.get('quantity', 1)}</td>
                         <td class="num">{money(detail.get('library_price'))}</td>
+                        <td class="num historical-price">{historical_price(detail.get('historical_lowest_price'))}</td>
                         <td>{text(detail.get('supplier_name'))}<br>{money(detail.get('this_price'))}</td>
                         <td>{text(detail.get('supplier_name'), '')}</td>
                     </tr>
@@ -2003,17 +2023,18 @@ def print_inquiry_approval(inquiry_id):
             table {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
             th, td {{ border: 1px solid #222; padding: 5px 6px; font-size: 10px; line-height: 1.25; word-break: break-word; overflow-wrap: anywhere; vertical-align: middle; }}
             th {{ background: #f2f2f2; font-weight: 700; text-align: center; }}
-            .col-seq {{ width: 4%; }}
-            .col-name {{ width: 12%; }}
-            .col-spec {{ width: 9%; }}
-            .col-detail {{ width: 12%; }}
-            .col-brand {{ width: 7%; }}
+            .col-seq {{ width: 3%; }}
+            .col-name {{ width: 11%; }}
+            .col-spec {{ width: 8%; }}
+            .col-detail {{ width: 11%; }}
+            .col-brand {{ width: 5%; }}
             .col-standard {{ width: 5%; }}
             .col-unit {{ width: 5%; }}
             .col-qty {{ width: 5%; }}
             .col-lib {{ width: 6%; }}
+            .col-historical {{ width: 7%; }}
             .supplier-col {{ min-width: 88px; }}
-            .col-selected {{ width: 8%; }}
+            .col-selected {{ width: 7%; }}
             .center {{ text-align: center; }}
             .num {{ text-align: right; }}
             .quote-cell {{ text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; word-break: break-word; }}
@@ -2067,6 +2088,7 @@ def print_inquiry_approval(inquiry_id):
                         <th class="col-unit">单位</th>
                         <th class="col-qty">数量</th>
                         <th class="col-lib">库内价</th>
+                        <th class="col-historical">历史最低价</th>
                         {supplier_headers}
                         <th class="col-selected">拟定供应商</th>
                     </tr>

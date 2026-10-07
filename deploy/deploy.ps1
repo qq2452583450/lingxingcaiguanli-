@@ -2,7 +2,9 @@ param(
     [string]$AppDir = "C:\wwwroot\lxclgl",
     [string]$ServiceName = "lxclgl",
     [string]$Branch = "main",
-    [int]$Port = 5000
+    [int]$Port = 5000,
+    [switch]$SkipGitSync,
+    [string]$ExpectedCommit = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -107,10 +109,21 @@ if ($DbFiles) {
     Write-Host "No .db files found, skipping backup"
 }
 
-Write-Host "Pulling latest code from origin/$Branch"
-Invoke-NativeCommandWithRetry "git fetch origin $Branch" { git fetch origin $Branch } "git fetch origin $Branch failed"
-Invoke-NativeCommandWithRetry "git checkout $Branch" { git checkout $Branch } "git checkout $Branch failed"
-Invoke-NativeCommandWithRetry "git rebase origin/$Branch" { git rebase "origin/$Branch" } "git rebase origin/$Branch failed"
+if ($SkipGitSync) {
+    if (-not $ExpectedCommit) {
+        throw "ExpectedCommit is required when skipping Git sync"
+    }
+    $ActualCommit = (git rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $ActualCommit -ne $ExpectedCommit) {
+        throw "Production revision does not match expected commit"
+    }
+    Write-Host "Using verified production revision $ActualCommit (Git sync already completed)"
+} else {
+    Write-Host "Pulling latest code from origin/$Branch"
+    Invoke-NativeCommandWithRetry "git fetch origin $Branch" { git fetch origin $Branch } "git fetch origin $Branch failed"
+    Invoke-NativeCommandWithRetry "git checkout $Branch" { git checkout $Branch } "git checkout $Branch failed"
+    Invoke-NativeCommandWithRetry "git rebase origin/$Branch" { git rebase "origin/$Branch" } "git rebase origin/$Branch failed"
+}
 
 $VenvPython = Join-Path $AppDir ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $VenvPython)) {
