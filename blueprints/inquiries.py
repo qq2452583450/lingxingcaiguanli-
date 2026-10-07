@@ -14,6 +14,7 @@ from helpers.material_regions import (
 import sys
 import logging
 import config
+from helpers.inquiry_nomination import default_item_nominations
 sys.path.insert(0, '.')
 from helpers.generate_inquiry_no import generate_inquiry_no_by_project
 
@@ -145,6 +146,7 @@ def _calculate_selected_item_freight_total(items_data, supplier_freights):
 
 def _apply_selected_supplier(items_data, selected_supplier_id):
     if not selected_supplier_id:
+        default_item_nominations(items_data)
         return
     for item in items_data:
         item['selected_quote_id'] = selected_supplier_id

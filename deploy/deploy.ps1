@@ -141,6 +141,8 @@ if ($Service) {
     Stop-AppPythonProcesses
     Stop-PythonListenerOnPort -TargetPort $Port
     Invoke-ExamScoreRegrade
+    & $VenvPython "tools\default_missing_inquiry_nominations.py" --apply
+    if ($LASTEXITCODE -ne 0) { throw "Inquiry nomination backfill failed" }
     Start-Service -Name $ServiceName
     Start-Sleep -Seconds 3
     $Service.Refresh()
@@ -153,6 +155,8 @@ if ($Service) {
     Stop-AppPythonProcesses
     Stop-PythonListenerOnPort -TargetPort $Port
     Invoke-ExamScoreRegrade
+    & $VenvPython "tools\default_missing_inquiry_nominations.py" --apply
+    if ($LASTEXITCODE -ne 0) { throw "Inquiry nomination backfill failed" }
     Start-ScheduledTask -TaskName $ServiceName
 } else {
     throw "Auto-start '$ServiceName' is not installed. Run deploy\install-service.ps1 once on the server first."

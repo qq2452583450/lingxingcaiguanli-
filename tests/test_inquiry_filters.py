@@ -199,6 +199,29 @@ def test_inquiry_detail_returns_supplier_freight_and_landed_total(client, test_d
     assert summary["landed_total"] == 170
 
 
+def test_create_inquiry_defaults_missing_nomination_and_counts_freight(client, test_db):
+    cursor = test_db.cursor()
+    create_inquiry_delete_tables(cursor)
+    clerk_id = seed_role_user(cursor, "材料员", "default_submitter", "材料员")
+    cursor.execute("INSERT INTO suppliers(supplier_name) VALUES ('默认最低供应商')")
+    supplier_id = cursor.lastrowid
+    cursor.execute("INSERT INTO units(unit_name) VALUES ('个')")
+    unit_id = cursor.lastrowid
+    cursor.execute("INSERT INTO materials(material_code,material_name,unit_id) VALUES ('DEFAULT-001','默认拟定材料',?)", (unit_id,))
+    material_id = cursor.lastrowid
+    test_db.commit()
+    set_session_user(client, clerk_id, "default_submitter", "材料员", "材料员")
+    result = client.post('/api/purchase-inquiries', json={
+        'supplier_freights': [{'supplier_id': supplier_id, 'tax_freight': 20}],
+        'items': [{'material_id': material_id, 'quantity': 3, 'library_price': 15,
+                   'quotes': [{'supplier_id': supplier_id, 'tax_price': 10, 'tax_rate': 0.13}]}],
+    }).get_json()
+    assert result['success'] is True
+    assert test_db.execute('SELECT total_amount FROM purchase_inquiries WHERE id=?', (result['id'],)).fetchone()[0] == 50
+    assert test_db.execute('SELECT selected_quote_id FROM purchase_inquiry_items WHERE inquiry_id=?', (result['id'],)).fetchone()[0] == supplier_id
+    assert test_db.execute('SELECT is_selected FROM purchase_inquiry_quotes').fetchone()[0] == 1
+
+
 def test_create_inquiry_uses_selected_supplier_landed_total(client, test_db):
     cursor = test_db.cursor()
     create_inquiry_delete_tables(cursor)
