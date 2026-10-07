@@ -167,7 +167,11 @@ def purchase_report(conn, f, scope):
             elif explicit:
                 candidates = explicit
             else:
-                candidates = [q for q in candidates if q['is_lowest']]
+                # Lowest is a comparison marker, not a procurement decision.
+                # Keep unselected lines visible for review without inventing a supplier.
+                issues.append({**common, 'material_name': item['material_name'],
+                               'note': '材料未选择拟定报价，未计入采购数量、金额及供应商笔数'})
+                continue
             if len(candidates) != 1 or number(candidates[0]['tax_price']) <= 0:
                 missing += 1
                 issues.append({**common, 'material_name': item['material_name'], 'note': '缺失或存在多个有效选定报价，未计入金额'})
@@ -193,7 +197,7 @@ def purchase_report(conn, f, scope):
                         'goods': 0, 'quantity': 0, 'freight': freights.get((h['id'], sid), 0)} for sid, name in suppliers.items()]
         calculated = money(sum(number(r['goods']) for r in selected) + sum(number(r['freight']) for r in all_freight))
         difference = money(number(h['total_amount']) - number(calculated))
-        if difference or missing:
+        if difference:
             issues.append({**common, 'note': '单据总额与选定明细及运费存在差异', 'recorded': h['total_amount'], 'calculated': calculated, 'difference': difference})
         filtered = [r for r in selected if matches(r, f)]
         selected_ids = {r['supplier_id'] for r in filtered}
@@ -208,6 +212,7 @@ def purchase_report(conn, f, scope):
     supplier_groups = groups(all_rows, ['supplier_id', 'supplier_name'])
     materials = groups(rows, ['material_id', 'material_name', 'material_code', 'specification', 'detail_spec', 'unit_name'])
     notes = ['采购按询价日期（含起止日）统计已同意单据；反映询价选定采购金额，不等同已入库或已付款金额。',
+             '仅统计明确拟定的供应商报价；最低报价不自动视为拟定。未拟定材料不计采购数量、金额或供应商笔数，单据仍计入已审批询价单数。',
              '金额按选定报价单价×询价数量逐行保留两位小数；供应商笔数按“供应商＋询价单”去重，一单多家供应商时笔数合计可大于询价单数。',
              '材料按材料编号、规格、详细规格、单位分组；数量按单位分别排名，未做吨/公斤、米/根等换算。',
              '运费按询价单及选定供应商计一次；材料金额不分摊运费。旧版数量缺失、报价不明和单据金额差异均在核对明细中列出。']

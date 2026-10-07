@@ -120,6 +120,45 @@ def test_supplier_filter_keeps_freight_once_and_material_filter_omits_freight(re
     assert summary(report(report_db,keyword='不存在'))['选定合计'] == 0
 
 
+def test_lowest_quote_without_selection_does_not_invent_purchase(report_db):
+    # Production: an approved 0-yuan order has 140 x 120 lowest quote,
+    # but no nominated supplier. It is an inquiry, not selected procurement.
+    report_db.execute("INSERT INTO purchase_inquiries VALUES (7,'UNSELECTED','2026-08-03',1,'已同意',NULL,0)")
+    report_db.execute("INSERT INTO purchase_inquiry_items VALUES (7,7,1,140,NULL,'')")
+    report_db.execute('INSERT INTO purchase_inquiry_quotes VALUES (70,7,11,120,0,1)')
+    report_db.execute('INSERT INTO purchase_inquiry_supplier_freights VALUES (7,11,99)')
+    result = report(report_db,scope=[1])
+    assert summary(result)['选定合计'] == 370
+    assert summary(result)['询价单数'] == 2
+    assert all(r['order_no'] != 'UNSELECTED' for r in dataset(result,'details'))
+    assert all(r['order_no'] != 'UNSELECTED' for r in dataset(result,'freights'))
+    assert sum(r['count'] for r in dataset(result,'supplier_counts')) == 2
+    checks = [r for r in dataset(result,'checks') if r['order_no'] == 'UNSELECTED']
+    assert len(checks) == 1 and '未选择拟定' in checks[0]['note']
+
+
+def test_partially_selected_order_excludes_unselected_lowest_line(report_db):
+    # Production: CDXXW had a 200 x 1.05 line not nominated; header was correct.
+    report_db.execute("INSERT INTO purchase_inquiry_items VALUES (7,1,2,200,NULL,'excluded')")
+    report_db.execute('INSERT INTO purchase_inquiry_quotes VALUES (70,7,11,1.05,0,1)')
+    result = report(report_db,scope=[1])
+    assert summary(result)['选定合计'] == 370
+    assert len(dataset(result,'details')) == 3
+    assert len(dataset(result,'checks')) == 1
+    assert '未选择拟定' in dataset(result,'checks')[0]['note']
+
+
+def test_explicit_selection_without_item_supplier_is_supported(report_db):
+    report_db.execute('UPDATE purchase_inquiry_items SET selected_quote_id=NULL WHERE id=1')
+    assert summary(report(report_db,scope=[1]))['选定合计'] == 370
+
+
+def test_real_header_difference_is_still_reported(report_db):
+    report_db.execute('UPDATE purchase_inquiries SET total_amount=369 WHERE id=1')
+    result = report(report_db,scope=[1])
+    assert dataset(result,'checks')[0]['difference'] == -1
+
+
 def test_scope_excludes_unbound_projects_and_empty_scope_sees_no_rows(report_db):
     assert summary(report(report_db,scope=[1]))['选定合计'] == 370
     assert summary(report(report_db,scope=[]))['选定合计'] == 0

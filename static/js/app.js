@@ -2084,30 +2084,17 @@ async function viewInquiry(id) {
                     calcTotal += d.this_price * (d.quantity || 1);
                 }
             });
-            // 如果没有选定的，用最低价计算
-            if (calcTotal === 0) {
-                flatDetails.forEach(d => {
-                    if (d.is_lowest == 1 && d.this_price > 0) {
-                        calcTotal += d.this_price * (d.quantity || 1);
-                    }
-                });
-            }
             const selectedSupplierIds = new Set(flatDetails
                 .filter(d => d.is_selected == 1 && d.supplier_id)
                 .map(d => String(d.supplier_id)));
-            if (!selectedSupplierIds.size) {
-                flatDetails.filter(d => d.is_lowest == 1 && d.supplier_id)
-                    .forEach(d => selectedSupplierIds.add(String(d.supplier_id)));
-            }
             const detailFreightRows = (data.supplier_summaries && data.supplier_summaries.length)
                 ? data.supplier_summaries
                 : (data.supplier_freights || []);
             const detailFreightTotal = detailFreightRows
                 .filter(summary => selectedSupplierIds.has(String(summary.supplier_id)))
                 .reduce((sum, summary) => sum + (Number(summary.tax_freight) || 0), 0);
-            const displayTotal = calcTotal > 0
-                ? calcTotal + detailFreightTotal
-                : (i.total_amount || 0);
+            // Modern inquiries require nomination. Lowest is only a comparison marker.
+            const displayTotal = isLegacy ? (i.total_amount || 0) : calcTotal + detailFreightTotal;
             const qs = i.quote_status || 'draft';
             const qsText = { draft: '未发布', collecting: '报价中', locked: '已锁定' }[qs] || qs;
             const qsClass = { draft: 'status-draft', collecting: 'status-pending', locked: 'status-agreed' }[qs] || '';
@@ -2328,29 +2315,16 @@ async function approveInquiry(id) {
                 approveCalcTotal += d.quote_price * (d.quantity || 1);
             }
         });
-        if (approveCalcTotal === 0) {
-            flatDetails.forEach(d => {
-                if (d.is_lowest == 1 && d.quote_price > 0) {
-                    approveCalcTotal += d.quote_price * (d.quantity || 1);
-                }
-            });
-        }
         const approveSelectedSupplierIds = new Set(flatDetails
             .filter(d => d.is_selected == 1 && d.supplier_id)
             .map(d => String(d.supplier_id)));
-        if (!approveSelectedSupplierIds.size) {
-            flatDetails.filter(d => d.is_lowest == 1 && d.supplier_id)
-                .forEach(d => approveSelectedSupplierIds.add(String(d.supplier_id)));
-        }
         const approveFreightRows = (detailData.supplier_summaries && detailData.supplier_summaries.length)
             ? detailData.supplier_summaries
             : (detailData.supplier_freights || []);
         const approveFreightTotal = approveFreightRows
             .filter(summary => approveSelectedSupplierIds.has(String(summary.supplier_id)))
             .reduce((sum, summary) => sum + (Number(summary.tax_freight) || 0), 0);
-        const approveDisplayTotal = approveCalcTotal > 0
-            ? approveCalcTotal + approveFreightTotal
-            : (inquiry.total_amount || 0);
+        const approveDisplayTotal = isLegacy ? (inquiry.total_amount || 0) : approveCalcTotal + approveFreightTotal;
         const approvalFreightEl = document.getElementById('approvalFreightAmount');
         if (approvalFreightEl) approvalFreightEl.textContent = '¥' + approveFreightTotal.toFixed(2);
         document.getElementById('approvalTotalAmount').textContent = '¥' + approveDisplayTotal.toFixed(2);
