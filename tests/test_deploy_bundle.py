@@ -25,7 +25,7 @@ def bundle_repositories(tmp_path):
     git(server, 'remote', 'set-url', 'origin', 'https://github.invalid/not-accessible.git')
     (source / 'app.txt').write_text('new', encoding='utf-8')
     git(source, 'commit', '-am', 'release')
-    bundle = server / 'deploy-production.bundle'
+    bundle = server / f"deploy-production-{git(source, 'rev-parse', 'HEAD')}.bundle"
     git(source, 'bundle', 'create', str(bundle), 'HEAD')
     return source, server, bundle
 
