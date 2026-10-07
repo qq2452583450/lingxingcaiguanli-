@@ -1027,7 +1027,6 @@ function renderResultsTable(results, options = {}) {
             <td>${examEscape(row.paper_title || '-')}</td>
             <td><span class="status ${examEscape(row.status || '')}">${examStatusText(row.status)}</span></td>
             <td>${examScore(row.objective_score)}</td>
-            <td>${examScore(row.final_subjective_score ?? row.suggested_subjective_score)}</td>
             <td><strong>${examScore(row.final_score)}</strong></td>
             <td>${examDate(row.submitted_at || row.started_at)}</td>
             <td>${row.attempt_id || row.id ? `<button class="btn btn-secondary btn-sm" type="button" onclick="viewExamAttemptReview(${Number(row.attempt_id || row.id)})">查看明细</button>${options.admin ? `<button class="btn btn-danger btn-sm" type="button" onclick="deleteExamAttempt(${Number(row.attempt_id || row.id)})">删除</button>` : ''}` : '-'}</td>
@@ -1048,8 +1047,8 @@ function renderResultsTable(results, options = {}) {
             <div class="exam-toolbar"><h2>${heading}</h2><div class="exam-actions">${historyButton}${exportButton}<button class="btn btn-secondary" type="button" onclick="${reload}(${options.includeHistory ? 'true' : 'false'})"><i data-lucide="refresh-cw"></i>刷新</button></div></div>
             <div class="table-container">
                 <table>
-                    <thead><tr>${adminHeaders}<th>试卷</th><th>状态</th><th>客观题</th><th>主观题</th><th>总分</th><th>时间</th><th>操作</th></tr></thead>
-                    <tbody>${rows || `<tr><td colspan="${options.admin ? 9 : 7}" class="empty-message">暂无成绩</td></tr>`}</tbody>
+                    <thead><tr>${adminHeaders}<th>试卷</th><th>状态</th><th>客观题</th><th>总分</th><th>时间</th><th>操作</th></tr></thead>
+                    <tbody>${rows || `<tr><td colspan="${options.admin ? 8 : 6}" class="empty-message">暂无成绩</td></tr>`}</tbody>
                 </table>
             </div>
         </div>`;

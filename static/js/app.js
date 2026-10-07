@@ -1864,16 +1864,16 @@ function exportSupplierOrders(id) {
 
 /**
  * 渲染合并后的明细比价表格
- * 材料名+规格相同的行合并（rowspan），每种材料只显示一次名称/规格/库内价
+ * 同一材料及价格口径的行合并（rowspan），每种材料只显示一次参考价格
  * @param {Array} flatDetails - 扁平化的明细行数据
  * @param {Object} options - {showSelected: bool, showLowest: bool}
  * @returns {string} 表格 HTML
  */
 function renderMergedDetailTable(flatDetails, options = {}) {
     if (!flatDetails || flatDetails.length === 0) {
-        const cols = 10 + (options.showSelected ? 1 : 0);
-        return `<table><thead><tr>
-            <th>材料</th><th>规格</th><th>详细规格</th><th>单位</th><th>数量</th><th>库内价</th><th>是否现金价</th>
+        const cols = 11 + (options.showSelected ? 1 : 0);
+        return `<table style="min-width:1120px;"><thead><tr>
+            <th>材料</th><th>规格</th><th>详细规格</th><th>单位</th><th>数量</th><th>库内价</th><th>历史最低价</th><th>是否现金价</th>
             <th>供应商</th><th>本次报价</th><th>价差</th>
             ${options.showSelected ? '<th>拟定</th>' : ''}
         </tr></thead><tbody>
@@ -1881,32 +1881,33 @@ function renderMergedDetailTable(flatDetails, options = {}) {
         </tbody></table>`;
     }
 
-    // 按材料名+规格分组
+    // 按材料、规格及现金价口径分组
     const groups = [];
     flatDetails.forEach(d => {
-        const key = (d.material_name || '-') + '||' + (d.specification || '-') + '||' + (d.detail_spec || '');
+        const key = [d.material_id || '', d.material_name || '-', d.specification || '-', d.detail_spec || '', d.is_cash_price || 0].join('||');
         let group = groups.find(g => g.key === key);
         if (!group) {
-            group = { key, material_name: d.material_name || '-', specification: d.specification || '-', detail_spec: d.detail_spec || '', unit_name: d.unit_name || '-', library_price: d.library_price || 0, is_cash_price: d.is_cash_price, rows: [] };
+            group = { key, material_name: d.material_name || '-', specification: d.specification || '-', detail_spec: d.detail_spec || '', unit_name: d.unit_name || '-', library_price: d.library_price || 0, historical_lowest_price: d.historical_lowest_price, is_cash_price: d.is_cash_price, rows: [] };
             groups.push(group);
         }
         group.rows.push(d);
     });
 
-    let html = `<table><colgroup>
+    let html = `<table style="min-width:1120px;"><colgroup>
         <col style="width:12%">
         <col style="width:8%">
-        <col style="width:14%">
+        <col style="width:13%">
         <col style="width:5%">
         <col style="width:6%">
         <col style="width:8%">
+        <col style="width:9%">
+        <col style="width:6%">
+        <col style="width:12%">
+        <col style="width:9%">
         <col style="width:7%">
-        <col style="width:14%">
-        <col style="width:10%">
-        <col style="width:10%">
-        ${options.showSelected ? '<col style="width:6%">' : ''}
+        ${options.showSelected ? '<col style="width:5%">' : ''}
     </colgroup><thead><tr>
-        <th>材料</th><th>规格</th><th>详细规格</th><th>单位</th><th>数量</th><th>库内价</th><th>是否现金价</th>
+        <th>材料</th><th>规格</th><th>详细规格</th><th>单位</th><th>数量</th><th>库内价</th><th>历史最低价</th><th>是否现金价</th>
         <th>供应商</th><th>本次报价</th><th>价差</th>
         ${options.showSelected ? '<th>拟定</th>' : ''}
     </tr></thead><tbody>`;
@@ -1922,7 +1923,7 @@ function renderMergedDetailTable(flatDetails, options = {}) {
 
             html += '<tr>';
             if (i === 0) {
-                // 第一行：显示合并的材料名/规格/详细规格/单位/数量/库内价
+                // 第一行显示共用的材料信息和参考价格
                 const rowspan = g.rows.length > 1 ? ` rowspan="${g.rows.length}"` : '';
                 html += `<td${rowspan} style="font-weight:500;vertical-align:middle;">${escapeHtml(g.material_name)}</td>`;
                 html += `<td${rowspan} style="vertical-align:middle;">${escapeHtml(g.specification)}</td>`;
@@ -1930,6 +1931,8 @@ function renderMergedDetailTable(flatDetails, options = {}) {
                 html += `<td${rowspan} style="vertical-align:middle;">${escapeHtml(g.unit_name)}</td>`;
                 html += `<td${rowspan} style="vertical-align:middle;text-align:center;">${quantity}</td>`;
                 html += `<td${rowspan} style="vertical-align:middle;">¥${g.library_price.toFixed(2)}</td>`;
+                const historicalPrice = g.historical_lowest_price == null ? '—' : `¥${Number(g.historical_lowest_price).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
+                html += `<td${rowspan} style="vertical-align:middle;white-space:nowrap;">${historicalPrice}</td>`;
                 html += `<td${rowspan} style="vertical-align:middle;text-align:center;">${g.is_cash_price === 1 ? '是' : '否'}</td>`;
             }
             html += `<td>${escapeHtml(d.supplier_name || '-')}</td>`;
@@ -2041,6 +2044,8 @@ async function viewInquiry(id) {
                     const quotes = item.quotes || [];
                     if (quotes.length === 0) {
                         flatDetails.push({
+                            material_id: item.material_id,
+                            historical_lowest_price: item.historical_lowest_price,
                             material_name: item.material_name || '-',
                             specification: item.specification || '-',
                             detail_spec: item.detail_spec || '',
@@ -2057,6 +2062,8 @@ async function viewInquiry(id) {
                         quotes.forEach(q => {
                             const priceDiff = (q.tax_price || 0) - (item.library_price || 0);
                             flatDetails.push({
+                                material_id: item.material_id,
+                                historical_lowest_price: item.historical_lowest_price,
                                 material_name: item.material_name || '-',
                                 specification: item.specification || '-',
                                 detail_spec: item.detail_spec || '',
@@ -2268,6 +2275,8 @@ async function approveInquiry(id) {
                 const quotes = item.quotes || [];
                 if (quotes.length === 0) {
                     flatDetails.push({
+                        material_id: item.material_id,
+                        historical_lowest_price: item.historical_lowest_price,
                         material_name: item.material_name || '-',
                         specification: item.specification || '-',
                         detail_spec: item.detail_spec || '',
@@ -2284,6 +2293,8 @@ async function approveInquiry(id) {
                     quotes.forEach(q => {
                         const priceDiff = (q.tax_price || 0) - (item.library_price || 0);
                         flatDetails.push({
+                            material_id: item.material_id,
+                            historical_lowest_price: item.historical_lowest_price,
                             material_name: item.material_name || '-',
                             specification: item.specification || '-',
                             detail_spec: item.detail_spec || '',

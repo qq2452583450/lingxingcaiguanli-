@@ -163,14 +163,14 @@ def _exam_results_workbook(rows, include_history=False):
     sheet.sheet_view.showGridLines = False
     scope = "历史正式考试成绩" if include_history else "当前正式考试成绩"
     sheet.append([scope])
-    sheet.merge_cells("A1:K1")
+    sheet.merge_cells("A1:J1")
     sheet["A1"].font = Font(name="等线", size=16, bold=True, color="FFFFFF")
     sheet["A1"].fill = PatternFill("solid", fgColor="1F4E78")
     sheet["A1"].alignment = Alignment(horizontal="center", vertical="center")
     sheet.row_dimensions[1].height = 26
     sheet.append(["导出时间", datetime.now().strftime("%Y-%m-%d %H:%M")])
     sheet.append([
-        "姓名", "账号", "角色", "试卷", "状态", "客观题", "主观题", "总分",
+        "姓名", "账号", "角色", "试卷", "状态", "客观题", "总分",
         "开始时间", "提交时间", "备注",
     ])
     header_fill = PatternFill("solid", fgColor="1F4E78")
@@ -194,9 +194,6 @@ def _exam_results_workbook(rows, include_history=False):
             row.get("paper_title") or "-",
             status_labels.get(status, status or "-"),
             row.get("objective_score"),
-            row.get("final_subjective_score")
-            if row.get("final_subjective_score") is not None
-            else row.get("suggested_subjective_score"),
             row.get("final_score"),
             row.get("started_at") or "-",
             row.get("submitted_at") or "-",
@@ -205,14 +202,14 @@ def _exam_results_workbook(rows, include_history=False):
 
     for column, width in {
         "A": 12, "B": 16, "C": 16, "D": 28, "E": 12, "F": 12,
-        "G": 12, "H": 12, "I": 20, "J": 20, "K": 24,
+        "G": 12, "H": 20, "I": 20, "J": 24,
     }.items():
         sheet.column_dimensions[column].width = width
     for row in sheet.iter_rows(min_row=2, max_row=sheet.max_row):
         for cell in row:
             cell.alignment = Alignment(vertical="center")
     sheet.freeze_panes = "A4"
-    sheet.auto_filter.ref = f"A3:K{max(sheet.max_row, 3)}"
+    sheet.auto_filter.ref = f"A3:J{max(sheet.max_row, 3)}"
 
     output = BytesIO()
     workbook.save(output)

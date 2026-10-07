@@ -17,6 +17,7 @@ import config
 from helpers.inquiry_nomination import default_item_nominations
 sys.path.insert(0, '.')
 from helpers.generate_inquiry_no import generate_inquiry_no_by_project
+from services.inquiry_price_service import add_historical_lowest_prices
 
 logger = logging.getLogger(__name__)
 
@@ -449,6 +450,7 @@ def get_inquiry(inquiry_id):
             legacy_params.append(supplier_id_for_response)
         cursor.execute(f"""
             SELECT pd.*, m.material_name, m.specification, m.material_code,
+                   m.detail_spec, 0 AS is_cash_price,
                    u.unit_name, s.supplier_name
             FROM purchase_inquiry_details pd
             LEFT JOIN materials m ON pd.material_id = m.id
@@ -458,6 +460,8 @@ def get_inquiry(inquiry_id):
             {legacy_supplier_filter}
         """, legacy_params)
         details = [dict(row) for row in cursor.fetchall()]
+        if user and not supplier_id_for_response:
+            add_historical_lowest_prices(cursor, inquiry, details)
         supplier_freights = _get_inquiry_supplier_freights(cursor, inquiry_id)
         conn.close()
         return jsonify({
@@ -469,6 +473,8 @@ def get_inquiry(inquiry_id):
             'supplier_summaries': [],
         })
 
+    if user and not supplier_id_for_response:
+        add_historical_lowest_prices(cursor, inquiry, items)
     supplier_freights = _get_inquiry_supplier_freights(cursor, inquiry_id)
     supplier_summaries = _get_inquiry_supplier_summaries(cursor, inquiry_id)
     conn.close()
