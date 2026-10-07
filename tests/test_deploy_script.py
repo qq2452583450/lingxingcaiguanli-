@@ -47,7 +47,8 @@ def test_production_workflow_transfers_bundle_and_does_not_fetch_github_on_serve
     assert 'actions/checkout@v4' in workflow
     assert 'fetch-depth: 0' in workflow
     assert 'git bundle create production.bundle HEAD' in workflow
-    assert 'OpenStandardInput().CopyTo' in workflow
+    assert 'timeout --foreground 120s scp' in workflow
+    assert 'OpenStandardInput' not in workflow
     assert 'git fetch --no-tags $Bundle HEAD:refs/remotes/origin/prod' in workflow
     assert 'git bundle verify $Bundle' in workflow
     assert 'git fetch origin prod' not in workflow

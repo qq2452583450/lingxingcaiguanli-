@@ -1,4 +1,3 @@
-import base64
 import shutil
 import subprocess
 from pathlib import Path
@@ -61,28 +60,6 @@ def test_windows_workflow_syncs_bundle_with_native_git_stderr(bundle_repositorie
     assert result.returncode == 0, result.stdout + result.stderr
     assert git(server, 'rev-parse', 'HEAD') == git(source, 'rev-parse', 'HEAD')
     assert not bundle.exists()
-
-
-def test_windows_bundle_upload_preserves_binary_bytes(bundle_repositories):
-    powershell = shutil.which('powershell.exe')
-    if not powershell:
-        pytest.skip('Windows PowerShell integration test')
-    yaml = pytest.importorskip('yaml')
-    source, server, bundle = bundle_repositories
-    workflow = yaml.safe_load(Path('.github/workflows/deploy-prod.yml').read_text(encoding='utf-8'))
-    step = next(step for step in workflow['jobs']['deploy']['steps'] if step['name'] == 'Transfer verified Git bundle')
-    target = server / 'uploaded.bundle'
-    script = step['env']['BUNDLE_UPLOAD_SCRIPT'].replace(
-        'C:\\wwwroot\\lxclgl\\deploy-production.bundle', str(target)
-    )
-    encoded = base64.b64encode(script.encode('utf-16-le')).decode('ascii')
-    result = subprocess.run(
-        [powershell, '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
-        input=bundle.read_bytes(), capture_output=True,
-    )
-    assert result.returncode == 0, result.stderr
-    assert target.read_bytes() == bundle.read_bytes()
-    git(server, 'bundle', 'verify', str(target))
 
 
 def test_bundle_transfer_shell_has_valid_bash_syntax():

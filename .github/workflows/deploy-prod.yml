@@ -30,10 +30,6 @@ jobs:
           PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
           PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
           PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT || 22 }}
-          BUNDLE_UPLOAD_SCRIPT: >-
-            $ErrorActionPreference = 'Stop';
-            $File = [System.IO.File]::Create('C:\wwwroot\lxclgl\deploy-production.bundle');
-            try { [Console]::OpenStandardInput().CopyTo($File) } finally { $File.Dispose() }
         run: |
           set -euo pipefail
           git bundle create production.bundle HEAD
@@ -45,10 +41,10 @@ jobs:
           printf '%s\n' "$PROD_SSH_KEY" | tr -d '\r' > "$key"
           ssh-keyscan -T 15 -p "$PROD_SSH_PORT" "$PROD_SSH_HOST" > "$known_hosts"
           test -s "$known_hosts"
-          encoded=$(python -c 'import base64, os; print(base64.b64encode(os.environ["BUNDLE_UPLOAD_SCRIPT"].encode("utf-16-le")).decode("ascii"))')
           uploaded=0
           for attempt in 1 2 3; do
-            if ssh -i "$key" -p "$PROD_SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$PROD_SSH_USER@$PROD_SSH_HOST" "powershell -NoProfile -NonInteractive -EncodedCommand $encoded" < production.bundle; then
+            echo "Uploading production bundle (attempt $attempt/3)"
+            if timeout --foreground 120s scp -i "$key" -P "$PROD_SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known_hosts" -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 production.bundle "$PROD_SSH_USER@$PROD_SSH_HOST:C:/wwwroot/lxclgl/deploy-production.bundle"; then
               uploaded=1
               break
             fi
