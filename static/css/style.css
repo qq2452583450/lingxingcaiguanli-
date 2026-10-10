@@ -247,6 +247,25 @@ tbody tr:hover { background: #eff6ff; }
 .modal-close:hover { color: var(--dng); }
 .modal-close svg { width: 20px; height: 20px; }
 
+/* Approval comparison fills the viewport; long content wraps instead of widening it. */
+#modal-approval .approval-modal-content {
+    width: calc(100vw - 24px); max-width: none; max-height: calc(100dvh - 24px);
+    padding: 16px; overflow-y: auto;
+}
+#modal-approval .approval-info-grid {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px;
+}
+#modal-approval .approval-info-item { min-width: 0; padding: 8px 10px; }
+#modal-approval .approval-info-item .value { overflow-wrap: anywhere; }
+#approvalDetailTableWrap { overflow: visible; }
+#approvalDetailTableWrap table { width: 100%; min-width: 0; table-layout: fixed; }
+#approvalDetailTableWrap th,
+#approvalDetailTableWrap td {
+    padding: 8px 6px; white-space: normal !important; overflow-wrap: anywhere;
+}
+#approvalDetailTableWrap .status { white-space: normal; max-width: 100%; padding: 3px 2px; }
+#modal-approval .approval-timeline-item .timeline-header { flex-wrap: wrap; }
+
 /* ============ Forms ============ */
 .form-group { margin-bottom: 16px; }
 .form-group label { display: block; margin-bottom: 5px; font-weight: 600; font-size: 13px; color: var(--txt); }
