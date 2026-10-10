@@ -380,3 +380,42 @@ def test_approval_print_does_not_expose_historical_prices_to_suppliers(client, t
     html = client.get(f'/api/purchase-inquiries/{current_id}/approval-print').get_data(as_text=True)
     assert '¥8.3456' not in html
     assert '<td class="num historical-price">—</td>' in html
+
+
+@pytest.mark.parametrize('rate,label', [(0.13, '税率 13%'), (0.01, '税率 1%'),
+                                     (0, '税率 0%'), (0.015, '税率 1.5%'),
+                                     (None, '税率未记录')])
+@pytest.mark.parametrize('legacy', [False, True])
+def test_display_tax_rate_uses_quote_with_library_reference(client, test_db, price_context, rate, label, legacy):
+    cursor, material_id, supplier_id, inquiry, item = price_context
+    current_id = inquiry('TAX-PRINT', status='草稿')
+    item_id = item(current_id, 10)
+    cursor.execute('UPDATE suppliers SET tax_rate=0.09 WHERE id=?', (supplier_id,))
+    cursor.execute('UPDATE purchase_inquiry_quotes SET tax_rate=? WHERE item_id=?', (rate, item_id))
+    if legacy:
+        cursor.execute('DELETE FROM purchase_inquiry_quotes WHERE item_id=?', (item_id,))
+        cursor.execute('DELETE FROM purchase_inquiry_items WHERE id=?', (item_id,))
+        cursor.execute('INSERT INTO purchase_inquiry_details (inquiry_id, material_id, supplier_id, this_price) VALUES (?, ?, ?, 10)', (current_id, material_id, supplier_id))
+    test_db.commit()
+    data = client.get(f'/api/purchase-inquiries/{current_id}').get_json()
+    quote = data['details'][0] if legacy else data['items'][0]['quotes'][0]
+    assert quote.get('tax_rate') == (None if legacy else rate)
+    assert quote['supplier_tax_rate'] == 0.09
+    html = client.get(f'/api/purchase-inquiries/{current_id}/approval-print').get_data(as_text=True)
+    expected = '税率未记录' if legacy else label
+    assert f'<span class="quote-tax-rate">本次{expected}；供应商库税率 9%' in html
+    assert ('（参考）' if legacy or rate is None else '（不一致）') in html
+
+
+def test_print_keeps_material_quote_rates_for_same_supplier(client, test_db, price_context):
+    cursor, _, supplier_id, inquiry, item = price_context
+    current_id = inquiry('MIXED-TAX', status='草稿')
+    first = item(current_id, 10)
+    second = item(current_id, 20)
+    cursor.execute('UPDATE purchase_inquiry_quotes SET tax_rate=0.13 WHERE item_id=?', (first,))
+    cursor.execute('UPDATE purchase_inquiry_quotes SET tax_rate=0.01 WHERE item_id=?', (second,))
+    cursor.execute('UPDATE suppliers SET tax_rate=0.03 WHERE id=?', (supplier_id,))
+    test_db.commit()
+    html = client.get(f'/api/purchase-inquiries/{current_id}/approval-print').get_data(as_text=True)
+    assert '<span class="quote-tax-rate">本次税率 13%；供应商库税率 3%（不一致）</span>' in html
+    assert '<span class="quote-tax-rate">本次税率 1%；供应商库税率 3%（不一致）</span>' in html

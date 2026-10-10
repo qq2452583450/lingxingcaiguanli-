@@ -19,6 +19,7 @@ sys.path.insert(0, '.')
 from helpers.generate_inquiry_no import generate_inquiry_no_by_project
 from services.inquiry_price_service import add_historical_lowest_prices, capture_inquiry_price_snapshots
 import json
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -432,7 +433,7 @@ def get_inquiry(inquiry_id):
             quote_supplier_filter = "AND pq.supplier_id = ?"
             quote_params.append(supplier_id_for_response)
         cursor.execute(f"""
-            SELECT pq.*, s.supplier_name
+            SELECT pq.*, s.supplier_name, s.tax_rate AS supplier_tax_rate
             FROM purchase_inquiry_quotes pq
             LEFT JOIN suppliers s ON pq.supplier_id = s.id
             WHERE pq.item_id = ?
@@ -452,7 +453,7 @@ def get_inquiry(inquiry_id):
         cursor.execute(f"""
             SELECT pd.*, m.material_name, m.specification, m.material_code,
                    m.detail_spec, 0 AS is_cash_price,
-                   u.unit_name, s.supplier_name
+                   u.unit_name, s.supplier_name, s.tax_rate AS supplier_tax_rate
             FROM purchase_inquiry_details pd
             LEFT JOIN materials m ON pd.material_id = m.id
             LEFT JOIN units u ON m.unit_id = u.id
@@ -1878,7 +1879,7 @@ def print_inquiry_approval(inquiry_id):
         item = dict(item_row)
         item_id = item['id']
         cursor.execute("""
-            SELECT pq.*, s.supplier_name
+            SELECT pq.*, s.supplier_name, s.tax_rate AS supplier_tax_rate
             FROM purchase_inquiry_quotes pq
             LEFT JOIN suppliers s ON pq.supplier_id = s.id
             WHERE pq.item_id = ?
@@ -1891,7 +1892,8 @@ def print_inquiry_approval(inquiry_id):
     if not items:
         cursor.execute("""
             SELECT pd.*, m.material_name, m.specification, m.material_code,
-                   m.detail_spec, 0 AS is_cash_price, u.unit_name, s.supplier_name
+                   m.detail_spec, 0 AS is_cash_price, u.unit_name, s.supplier_name,
+                   s.tax_rate AS supplier_tax_rate
             FROM purchase_inquiry_details pd
             LEFT JOIN materials m ON pd.material_id = m.id
             LEFT JOIN units u ON m.unit_id = u.id
@@ -1939,6 +1941,24 @@ def print_inquiry_approval(inquiry_id):
             return '—'
         whole, fraction = f"{float(value):,.4f}".split('.')
         return f"¥{whole}.{fraction.rstrip('0').ljust(2, '0')}"
+
+    def quote_tax_rate(value):
+        try:
+            rate = float(value)
+        except (TypeError, ValueError):
+            return '税率未记录'
+        if not math.isfinite(rate) or not 0 <= rate <= 1:
+            return '税率未记录'
+        return f'税率 {rate * 100:.4f}'.rstrip('0').rstrip('.') + '%'
+
+    def quote_tax_label(quote):
+        actual = quote_tax_rate(quote.get('tax_rate'))
+        library = quote_tax_rate(quote.get('supplier_tax_rate'))
+        label = f'本次{actual}'
+        if library != '税率未记录' and library != actual:
+            note = '参考' if actual == '税率未记录' else '不一致'
+            label += f'；供应商库{library}（{note}）'
+        return label
 
     project_display = format_project_display(
         inquiry.get('project_code'),
@@ -2031,7 +2051,7 @@ def print_inquiry_approval(inquiry_id):
                     f'<span class="quote-unit-price">{tax_price:.2f}</span>'
                     f'<span class="quote-separator">/</span>'
                     f'<span class="quote-total-amount">{float(total_amount or 0):.2f}</span>'
-                    f'{marker}</td>'
+                    f'{marker}<span class="quote-tax-rate">{quote_tax_label(quote)}</span></td>'
                 )
             rows_html += f"""
                     <tr>
@@ -2064,7 +2084,7 @@ def print_inquiry_approval(inquiry_id):
                         <td class="center">{detail.get('quantity', 1)}</td>
                         <td class="num">{money(detail.get('library_price'))}</td>
                         <td class="num historical-price">{historical_price(detail.get('historical_lowest_price'))}</td>
-                        <td>{text(detail.get('supplier_name'))}<br>{money(detail.get('this_price'))}</td>
+                        <td>{text(detail.get('supplier_name'))}<br>{money(detail.get('this_price'))}<span class="quote-tax-rate">{quote_tax_label(detail)}</span></td>
                         <td>{text(detail.get('supplier_name'), '')}</td>
                     </tr>
 """
@@ -2147,6 +2167,7 @@ def print_inquiry_approval(inquiry_id):
             .quote-unit-price {{ font-weight: 700; }}
             .quote-separator {{ color: #666; line-height: 1; }}
             .quote-total-amount {{ font-size: 9px; }}
+            .quote-tax-rate {{ display: block; font-size: 9px; font-weight: normal; color: #444; line-height: 1.4; }}
             .quote-lowest-mark {{ color: #111; font-weight: 700; line-height: 1; }}
             .lowest-cell {{ background-color: #eaf7ee !important; box-shadow: inset 0 0 0 9999px #eaf7ee; font-weight: 700; }}
             .selected-cell {{ background-color: #fff3bf !important; box-shadow: inset 0 0 0 9999px #fff3bf; font-weight: 700; }}

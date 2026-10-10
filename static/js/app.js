@@ -846,6 +846,24 @@ function safeRate(val) {
     return (num * 100).toFixed(0) + '%';
 }
 
+// 本次报价税率与报价金额对应，供应商库仅在不同或缺失时作参考。
+function formatInquiryQuoteTaxRate(value) {
+    if (value == null || String(value).trim() === '') return '税率未记录';
+    const rate = Number(value);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 1) return '税率未记录';
+    return `税率 ${Number((rate * 100).toFixed(4))}%`;
+}
+
+function renderInquiryQuoteTaxRate(quote) {
+    const actual = formatInquiryQuoteTaxRate(quote.tax_rate);
+    const library = formatInquiryQuoteTaxRate(quote.supplier_tax_rate);
+    let label = `本次${actual}`;
+    if (library !== '税率未记录' && library !== actual) {
+        label += `；供应商库${library}${actual === '税率未记录' ? '（参考）' : '（不一致）'}`;
+    }
+    return `<span class="inquiry-quote-tax-rate">${label}</span>`;
+}
+
 // 辅助函数：格式化是否国标
 function formatNationalStandard(val) {
     return val == 1 ? '是' : '否';
@@ -1930,7 +1948,7 @@ function renderMergedDetailTable(flatDetails, options = {}) {
                 html += `<td${rowspan} class="inquiry-historical-price" style="vertical-align:middle;">${renderInquiryHistoricalPrice(g.historical_context)}</td>`;
                 html += `<td${rowspan} style="vertical-align:middle;text-align:center;">${g.is_cash_price === 1 ? '是' : '否'}</td>`;
             }
-            html += `<td>${escapeHtml(d.supplier_name || '-')}</td>`;
+            html += `<td>${escapeHtml(d.supplier_name || '-')}${d.supplier_name && d.supplier_name !== '-' ? renderInquiryQuoteTaxRate(d) : ''}</td>`;
             html += `<td style="white-space:nowrap;">¥${quotePrice.toFixed(2)}${lowestTag}</td>`;
             html += `<td style="color:${diffColor};font-weight:500;">${priceDiff >= 0 ? '+' : ''}¥${priceDiff.toFixed(2)}</td>`;
             if (options.showSelected) {
@@ -2068,6 +2086,8 @@ async function viewInquiry(id) {
                                 quantity: item.quantity || 1,
                                 supplier_id: q.supplier_id,
                                 supplier_name: q.supplier_name || '-',
+                                supplier_tax_rate: q.supplier_tax_rate ?? null,
+                                tax_rate: q.tax_rate ?? null,
                                 library_price: item.library_price || 0,
                                 is_cash_price: item.is_cash_price,
                                 this_price: q.tax_price || 0,
@@ -2293,6 +2313,8 @@ async function approveInquiry(id) {
                             quantity: item.quantity || 1,
                             supplier_id: q.supplier_id,
                             supplier_name: q.supplier_name || '-',
+                            supplier_tax_rate: q.supplier_tax_rate ?? null,
+                            tax_rate: q.tax_rate ?? null,
                             library_price: item.library_price || 0,
                             is_cash_price: item.is_cash_price,
                             quote_price: q.tax_price || 0,
