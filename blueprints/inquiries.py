@@ -1936,11 +1936,14 @@ def print_inquiry_approval(inquiry_id):
         value = '' if value is None else str(value).strip()
         return escape(value if value else default)
 
-    def historical_price(value):
+    def historical_price(row):
+        value = row.get('historical_lowest_price')
         if value is None:
             return '—'
         whole, fraction = f"{float(value):,.4f}".split('.')
-        return f"¥{whole}.{fraction.rstrip('0').ljust(2, '0')}"
+        source = row.get('historical_price_source') or {}
+        rate = quote_tax_rate(source.get('tax_rate')).removeprefix('税率 ')
+        return f"¥{whole}.{fraction.rstrip('0').ljust(2, '0')}/{rate}"
 
     def quote_tax_rate(value):
         try:
@@ -2080,7 +2083,7 @@ def print_inquiry_approval(inquiry_id):
                         <td class="center">{text(item.get('unit_name'))}</td>
                         <td class="center">{item.get('quantity', 1)}</td>
                         <td class="num">{money(item.get('library_price'))}</td>
-                        <td class="num historical-price">{historical_price(item.get('historical_lowest_price'))}</td>
+                        <td class="num historical-price">{historical_price(item)}</td>
                         {quote_cells}
                         <td>{text(selected_supplier, '')}</td>
                     </tr>
@@ -2099,7 +2102,7 @@ def print_inquiry_approval(inquiry_id):
                         <td class="center">{text(detail.get('unit_name'))}</td>
                         <td class="center">{detail.get('quantity', 1)}</td>
                         <td class="num">{money(detail.get('library_price'))}</td>
-                        <td class="num historical-price">{historical_price(detail.get('historical_lowest_price'))}</td>
+                        <td class="num historical-price">{historical_price(detail)}</td>
                         <td>{text(detail.get('supplier_name'))}<br>含税 {money(detail.get('this_price'))}<span class="quote-untaxed-price">未税 {untaxed_quote_price(detail, float(detail.get('this_price') or 0))}</span><span class="quote-tax-rate">{quote_tax_label(detail)}</span></td>
                         <td>{text(detail.get('supplier_name'), '')}</td>
                     </tr>

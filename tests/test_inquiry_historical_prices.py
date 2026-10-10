@@ -117,7 +117,7 @@ def test_approval_print_matches_equivalent_dimension_notation(client, test_db, p
     item(current_id, 30.55, detail_spec='300×3')
     test_db.commit()
     html = client.get(f'/api/purchase-inquiries/{current_id}/approval-print').get_data(as_text=True)
-    assert '<td class="num historical-price">¥29.00</td>' in html
+    assert '<td class="num historical-price">¥29.00/13%</td>' in html
     assert '等价规格匹配；PRINT-STAR-OLD' not in html
     assert '历史价格来源与口径' not in html
 
@@ -360,10 +360,51 @@ def test_approval_print_shows_comparable_historical_price_after_library_price(
     html = response.get_data(as_text=True)
     (tmp_path / 'approval-print.html').write_text(html, encoding='utf-8')
     assert html.index('库内价</th>') < html.index('历史最低价</th>') < html.index('class="supplier-col"')
-    assert '<td class="num historical-price">¥8.3456</td>' in html
+    assert '<td class="num historical-price">¥8.3456/13%</td>' in html
     if not legacy:
-        assert '<td class="num historical-price">¥5.6789</td>' in html
+        assert '<td class="num historical-price">¥5.6789/13%</td>' in html
         assert '<td class="num historical-price">—</td>' in html
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+@pytest.mark.parametrize('rate,label', [
+    (0.13, '13%'), (0.01, '1%'), (0, '0%'), (0.015, '1.5%'),
+    (None, '税率未记录'), (-0.01, '税率未记录'), (2, '税率未记录'),
+])
+def test_signature_historical_rate_comes_from_historical_quote(
+    client, test_db, price_context, legacy, rate, label
+):
+    cursor, material_id, supplier_id, inquiry, item = price_context
+    historical_item = item(inquiry('HISTORY-TAX'), 27.5)
+    cursor.execute('UPDATE purchase_inquiry_quotes SET tax_rate=? WHERE item_id=?', (rate, historical_item))
+    cursor.execute('UPDATE suppliers SET tax_rate=0.09 WHERE id=?', (supplier_id,))
+    current_id = inquiry('CURRENT-TAX', date='2026-10-07', status='草稿')
+    if legacy:
+        cursor.execute(
+            'INSERT INTO purchase_inquiry_details (inquiry_id, material_id, supplier_id, this_price) VALUES (?, ?, ?, 30)',
+            (current_id, material_id, supplier_id),
+        )
+    else:
+        current_item = item(current_id, 30)
+        cursor.execute('UPDATE purchase_inquiry_quotes SET tax_rate=0.03 WHERE item_id=?', (current_item,))
+    test_db.commit()
+    response = client.get(f'/api/purchase-inquiries/{current_id}/approval-print')
+    assert response.status_code == 200
+    assert f'<td class="num historical-price">¥27.50/{label}</td>' in response.get_data(as_text=True)
+
+
+def test_signature_legacy_history_does_not_invent_tax_rate(client, test_db, price_context):
+    cursor, material_id, supplier_id, inquiry, item = price_context
+    old_id = inquiry('LEGACY-HISTORY')
+    cursor.execute(
+        'INSERT INTO purchase_inquiry_details (inquiry_id, material_id, supplier_id, this_price) VALUES (?, ?, ?, 27.5)',
+        (old_id, material_id, supplier_id),
+    )
+    current_id = inquiry('MODERN-CURRENT', date='2026-10-07', status='草稿')
+    item(current_id, 30)
+    test_db.commit()
+    html = client.get(f'/api/purchase-inquiries/{current_id}/approval-print').get_data(as_text=True)
+    assert '<td class="num historical-price">¥27.50/税率未记录</td>' in html
 
 
 def test_approval_print_does_not_expose_historical_prices_to_suppliers(client, test_db, price_context):
