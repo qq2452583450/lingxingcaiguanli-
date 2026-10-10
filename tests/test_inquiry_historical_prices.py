@@ -118,7 +118,8 @@ def test_approval_print_matches_equivalent_dimension_notation(client, test_db, p
     test_db.commit()
     html = client.get(f'/api/purchase-inquiries/{current_id}/approval-print').get_data(as_text=True)
     assert '<td class="num historical-price">¥29.00</td>' in html
-    assert '等价规格匹配；PRINT-STAR-OLD' in html
+    assert '等价规格匹配；PRINT-STAR-OLD' not in html
+    assert '历史价格来源与口径' not in html
 
 
 @pytest.mark.parametrize('a,b,name', [
@@ -419,3 +420,42 @@ def test_print_keeps_material_quote_rates_for_same_supplier(client, test_db, pri
     html = client.get(f'/api/purchase-inquiries/{current_id}/approval-print').get_data(as_text=True)
     assert '<span class="quote-tax-rate">本次税率 13%；供应商库税率 3%（不一致）</span>' in html
     assert '<span class="quote-tax-rate">本次税率 1%；供应商库税率 3%（不一致）</span>' in html
+
+
+@pytest.mark.parametrize('stored,rate,expected', [
+    (7.25, 0.13, '7.25'), (None, 0.13, '8.85'),
+    (0, 0.13, '8.85'), (None, 0, '10.00'),
+    (None, None, '—'), (None, -1, '—'),
+])
+def test_signature_sheet_untaxed_price_and_no_provenance(client, test_db, price_context, stored, rate, expected):
+    cursor, _, supplier_id, inquiry, item = price_context
+    current = inquiry('PRINT-UNTAXED', status='草稿')
+    item_id = item(current, 10)
+    cursor.execute('UPDATE suppliers SET tax_rate=0.09 WHERE id=?', (supplier_id,))
+    cursor.execute('UPDATE purchase_inquiry_quotes SET tax_exempt_price=?, tax_rate=? WHERE item_id=?', (stored, rate, item_id))
+    test_db.commit()
+    response = client.get(f'/api/purchase-inquiries/{current}/approval-print')
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert f'<span class="quote-untaxed-price">未税 {expected}</span>' in html
+    assert '<span class="quote-unit-price">含税 10.00</span>' in html
+    assert '历史价格来源与口径' not in html
+    assert '确认人：' not in html
+    assert '历史最低价</th>' in html
+
+
+def test_many_supplier_signature_sheet_layout(client, test_db, price_context, tmp_path):
+    cursor, _, supplier_id, inquiry, item = price_context
+    current = inquiry('多供应商签字单排版测试', status='草稿')
+    item_id = item(current, 10)
+    cursor.execute('UPDATE purchase_inquiry_quotes SET tax_rate=0.13, tax_exempt_price=8.85 WHERE item_id=?', (item_id,))
+    for i in range(7):
+        cursor.execute('INSERT INTO suppliers (supplier_name, tax_rate) VALUES (?, 0.13)', (f'测试供应商{i + 2}建筑材料有限公司',))
+        cursor.execute('INSERT INTO purchase_inquiry_quotes (item_id, supplier_id, tax_price, tax_exempt_price, tax_rate) VALUES (?, ?, 10, 8.85, 0.13)', (item_id, cursor.lastrowid))
+    test_db.commit()
+    response = client.get(f'/api/purchase-inquiries/{current}/approval-print')
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert '<table class="many-suppliers">' in html
+    assert html.count('<span class="quote-untaxed-price">未税 8.85</span>') == 8
+    (tmp_path / 'signature-sheet.html').write_text(html, encoding='utf-8')

@@ -854,12 +854,12 @@ def test_approval_print_uses_excel_like_supplier_columns_and_selected_totals(cli
     assert "项目名称：昆明 / KMJJYC / 京江隐翠" in html
     assert "时间：2026-06-11" in html
     assert "单号：CGXJ-260611-001" in html
-    assert "佩文筛网<br>单价 / 总价" in html
-    assert "捷阳五金<br>单价 / 总价" in html
+    assert "佩文筛网<br>含税 / 未税单价<br>含税总价" in html
+    assert "捷阳五金<br>含税 / 未税单价<br>含税总价" in html
     assert "lowest-cell" in html
     assert "selected-cell" in html
-    assert 'class="quote-unit-price">10.50</span>' in html
-    assert 'class="quote-total-amount">21.00</span>' in html
+    assert 'class="quote-unit-price">含税 10.50</span>' in html
+    assert 'class="quote-total-amount">总价 21.00</span>' in html
     assert "10.50 / 21.00" not in html
     assert 'class="quote-cell selected-cell lowest-cell"' in html
     assert 'class="selected-material-row"' not in html

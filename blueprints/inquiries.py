@@ -1960,6 +1960,22 @@ def print_inquiry_approval(inquiry_id):
             label += f'；供应商库{library}（{note}）'
         return label
 
+    def untaxed_quote_price(quote, tax_price):
+        value = quote.get('tax_exempt_price')
+        try:
+            price = float(value)
+            if math.isfinite(price) and price >= 0 and (price > 0 or tax_price == 0):
+                return f'{price:.2f}'
+        except (TypeError, ValueError):
+            pass
+        try:
+            rate = float(quote.get('tax_rate'))
+            if math.isfinite(rate) and 0 <= rate <= 1:
+                return f'{tax_price / (1 + rate):.2f}'
+        except (TypeError, ValueError):
+            pass
+        return '—'
+
     project_display = format_project_display(
         inquiry.get('project_code'),
         inquiry.get('project_name'),
@@ -1976,7 +1992,7 @@ def print_inquiry_approval(inquiry_id):
                     supplier_order.append(supplier_id)
 
     supplier_headers = ''.join(
-        f'<th class="supplier-col">{text(supplier_by_id[supplier_id])}<br>单价 / 总价</th>'
+        f'<th class="supplier-col">{text(supplier_by_id[supplier_id])}<br>含税 / 未税单价<br>含税总价</th>'
         for supplier_id in supplier_order
     )
 
@@ -2048,9 +2064,9 @@ def print_inquiry_approval(inquiry_id):
                 cls = ' '.join(cell_classes)
                 quote_cells += (
                     f'<td class="{cls}">'
-                    f'<span class="quote-unit-price">{tax_price:.2f}</span>'
-                    f'<span class="quote-separator">/</span>'
-                    f'<span class="quote-total-amount">{float(total_amount or 0):.2f}</span>'
+                    f'<span class="quote-unit-price">含税 {tax_price:.2f}</span>'
+                    f'<span class="quote-untaxed-price">未税 {untaxed_quote_price(quote, tax_price)}</span>'
+                    f'<span class="quote-total-amount">总价 {float(total_amount or 0):.2f}</span>'
                     f'{marker}<span class="quote-tax-rate">{quote_tax_label(quote)}</span></td>'
                 )
             rows_html += f"""
@@ -2084,7 +2100,7 @@ def print_inquiry_approval(inquiry_id):
                         <td class="center">{detail.get('quantity', 1)}</td>
                         <td class="num">{money(detail.get('library_price'))}</td>
                         <td class="num historical-price">{historical_price(detail.get('historical_lowest_price'))}</td>
-                        <td>{text(detail.get('supplier_name'))}<br>{money(detail.get('this_price'))}<span class="quote-tax-rate">{quote_tax_label(detail)}</span></td>
+                        <td>{text(detail.get('supplier_name'))}<br>含税 {money(detail.get('this_price'))}<span class="quote-untaxed-price">未税 {untaxed_quote_price(detail, float(detail.get('this_price') or 0))}</span><span class="quote-tax-rate">{quote_tax_label(detail)}</span></td>
                         <td>{text(detail.get('supplier_name'), '')}</td>
                     </tr>
 """
@@ -2111,21 +2127,6 @@ def print_inquiry_approval(inquiry_id):
                         <td colspan="4" class="pending">待审批</td>
                     </tr>
 """
-
-    provenance_rows = []
-    for entry in items or details or []:
-        source = entry.get('historical_price_source')
-        if source:
-            evidence = (f"{source['match_type']}；{source['inquiry_no']}；{source['inquiry_date']}；"
-                        f"{source.get('project_name') or '-'}；{source.get('supplier_name') or '-'}；"
-                        f"原规格：{source.get('detail_spec') or '未记录'}；"
-                        f"{'现金含税单价' if source['is_cash_price'] else '普通含税单价'}；"
-                        f"{source['price_basis']}；{source['parameter_source']}；"
-                        f"确认人：{source.get('confirmed_name') or '自动匹配'}")
-        else:
-            evidence = entry.get('historical_price_reason') or '无可比历史审批成交记录'
-        provenance_rows.append(f"<div>{text(entry.get('material_name'))} / {text(entry.get('detail_spec'))}：{text(evidence)}</div>")
-    provenance_html = ''.join(provenance_rows)
 
     html = f"""
     <!DOCTYPE html>
@@ -2165,9 +2166,21 @@ def print_inquiry_approval(inquiry_id):
             .quote-cell {{ text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; word-break: break-word; }}
             .quote-cell span {{ display: block; max-width: 100%; }}
             .quote-unit-price {{ font-weight: 700; }}
-            .quote-separator {{ color: #666; line-height: 1; }}
+            .quote-untaxed-price {{ display: block; font-size: 9px; font-weight: normal; color: #444; }}
             .quote-total-amount {{ font-size: 9px; }}
             .quote-tax-rate {{ display: block; font-size: 9px; font-weight: normal; color: #444; line-height: 1.4; }}
+            .many-suppliers .col-seq {{ width: 2%; }}
+            .many-suppliers .col-name {{ width: 7%; }}
+            .many-suppliers .col-spec {{ width: 6%; }}
+            .many-suppliers .col-detail {{ width: 8%; }}
+            .many-suppliers .col-brand {{ width: 3%; }}
+            .many-suppliers .col-standard {{ width: 4%; }}
+            .many-suppliers .col-unit {{ width: 3%; }}
+            .many-suppliers .col-qty {{ width: 4%; }}
+            .many-suppliers .col-lib {{ width: 5%; }}
+            .many-suppliers .col-historical {{ width: 5%; }}
+            .many-suppliers .col-selected {{ width: 6%; }}
+            .many-suppliers th, .many-suppliers td {{ padding-left: 2px; padding-right: 2px; }}
             .quote-lowest-mark {{ color: #111; font-weight: 700; line-height: 1; }}
             .lowest-cell {{ background-color: #eaf7ee !important; box-shadow: inset 0 0 0 9999px #eaf7ee; font-weight: 700; }}
             .selected-cell {{ background-color: #fff3bf !important; box-shadow: inset 0 0 0 9999px #fff3bf; font-weight: 700; }}
@@ -2202,7 +2215,7 @@ def print_inquiry_approval(inquiry_id):
                 <div>项目名称：{text(project_display)}</div>
                 <div>时间：{text(inquiry.get('inquiry_date'))}　单号：{text(inquiry.get('inquiry_no'))}</div>
             </div>
-            <table>
+            <table class="{'many-suppliers' if len(supplier_order) > 3 else 'comparison-table'}">
                 <thead>
                     <tr>
                         <th class="col-seq">序号</th>
@@ -2223,10 +2236,6 @@ def print_inquiry_approval(inquiry_id):
                     {rows_html}
                 </tbody>
             </table>
-            <div style="font-size:10px;line-height:1.5;margin:8px 0;">
-                <strong>历史价格来源与口径：</strong>本单之前已审批含税单价，现金价分开，不含运费；未确认的相似规格不计入。
-                {provenance_html}
-            </div>
             <div class="summary-grid">
                 <div>
                     <strong>各供应商拟定合计：</strong>{supplier_totals_html}
