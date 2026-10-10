@@ -891,6 +891,19 @@ td input[type="checkbox"] {
     .toast { min-width: auto; max-width: 90vw; font-size: 12px; padding: 10px 14px; }
 }
 
+.inquiry-historical-price small { display: block; font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
+.inquiry-historical-price .price-review-pending { color: #a66a00; }
+.inquiry-price-link { font-weight: 600; }
+.inquiry-price-review-modal { z-index: 1100; }
+.inquiry-price-review-content { width: calc(100vw - 32px); max-width: 1200px; max-height: 94vh; overflow-y: auto; }
+.inquiry-price-review-table { width: 100%; min-width: 0; table-layout: fixed; margin-bottom: 20px; }
+.inquiry-price-review-table td, .inquiry-price-review-table th { white-space: normal; overflow-wrap: anywhere; padding: 10px; vertical-align: top; }
+.inquiry-price-review-table small { color: var(--text-secondary); }
+.inquiry-price-review-table button { display: block; margin-top: 8px; }
+#inquiryPriceReviewBody p { margin: 12px 0; line-height: 1.6; }
+#inquiryPriceReviewBody h3 { margin: 20px 0 10px; }
+#inquiryPriceMatchReason { display: block; width: 100%; min-height: 70px; margin: 8px 0 14px; padding: 10px; }
+
 /* ============ Small phones ============ */
 @media (max-width: 400px) {
     .stat-cards { grid-template-columns: 1fr; }

@@ -577,6 +577,8 @@ def test_db():
 
     from database.exam_schema import init_exam_schema
     init_exam_schema(conn)
+    from database.inquiry_price_schema import init_inquiry_price_schema
+    init_inquiry_price_schema(conn)
     conn.commit()
     conn.close()
 

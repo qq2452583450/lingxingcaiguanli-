@@ -19,6 +19,8 @@ def get_connection():
 def init_database():
     """初始化数据库表"""
     conn = get_connection()
+    from database.inquiry_price_schema import init_inquiry_price_schema
+    init_inquiry_price_schema(conn)
     cursor = conn.cursor()
 
     # 用户表

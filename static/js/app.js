@@ -1883,7 +1883,7 @@ function renderMergedDetailTable(flatDetails, options = {}) {
         const key = [d.material_id || '', d.material_name || '-', d.specification || '-', d.detail_spec || '', d.is_cash_price || 0].join('||');
         let group = groups.find(g => g.key === key);
         if (!group) {
-            group = { key, material_name: d.material_name || '-', specification: d.specification || '-', detail_spec: d.detail_spec || '', unit_name: d.unit_name || '-', library_price: d.library_price || 0, historical_lowest_price: d.historical_lowest_price, is_cash_price: d.is_cash_price, rows: [] };
+            group = { key, material_name: d.material_name || '-', specification: d.specification || '-', detail_spec: d.detail_spec || '', unit_name: d.unit_name || '-', library_price: d.library_price || 0, historical_lowest_price: d.historical_lowest_price, historical_context: d.historical_price_context || d, is_cash_price: d.is_cash_price, rows: [] };
             groups.push(group);
         }
         group.rows.push(d);
@@ -1927,8 +1927,7 @@ function renderMergedDetailTable(flatDetails, options = {}) {
                 html += `<td${rowspan} style="vertical-align:middle;">${escapeHtml(g.unit_name)}</td>`;
                 html += `<td${rowspan} style="vertical-align:middle;text-align:center;">${quantity}</td>`;
                 html += `<td${rowspan} style="vertical-align:middle;">¥${g.library_price.toFixed(2)}</td>`;
-                const historicalPrice = g.historical_lowest_price == null ? '—' : `¥${Number(g.historical_lowest_price).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
-                html += `<td${rowspan} style="vertical-align:middle;white-space:nowrap;">${historicalPrice}</td>`;
+                html += `<td${rowspan} class="inquiry-historical-price" style="vertical-align:middle;">${renderInquiryHistoricalPrice(g.historical_context)}</td>`;
                 html += `<td${rowspan} style="vertical-align:middle;text-align:center;">${g.is_cash_price === 1 ? '是' : '否'}</td>`;
             }
             html += `<td>${escapeHtml(d.supplier_name || '-')}</td>`;
@@ -2042,6 +2041,7 @@ async function viewInquiry(id) {
                         flatDetails.push({
                             material_id: item.material_id,
                             historical_lowest_price: item.historical_lowest_price,
+                            historical_price_context: item,
                             material_name: item.material_name || '-',
                             specification: item.specification || '-',
                             detail_spec: item.detail_spec || '',
@@ -2060,6 +2060,7 @@ async function viewInquiry(id) {
                             flatDetails.push({
                                 material_id: item.material_id,
                                 historical_lowest_price: item.historical_lowest_price,
+                                historical_price_context: item,
                                 material_name: item.material_name || '-',
                                 specification: item.specification || '-',
                                 detail_spec: item.detail_spec || '',
@@ -2265,6 +2266,7 @@ async function approveInquiry(id) {
                     flatDetails.push({
                         material_id: item.material_id,
                         historical_lowest_price: item.historical_lowest_price,
+                        historical_price_context: item,
                         material_name: item.material_name || '-',
                         specification: item.specification || '-',
                         detail_spec: item.detail_spec || '',
@@ -2283,6 +2285,7 @@ async function approveInquiry(id) {
                         flatDetails.push({
                             material_id: item.material_id,
                             historical_lowest_price: item.historical_lowest_price,
+                            historical_price_context: item,
                             material_name: item.material_name || '-',
                             specification: item.specification || '-',
                             detail_spec: item.detail_spec || '',

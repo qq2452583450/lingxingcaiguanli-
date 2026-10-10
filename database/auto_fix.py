@@ -13,6 +13,8 @@ def auto_fix_database():
 
     conn = sqlite3.connect(config.DATABASE_PATH)
     init_exam_schema(conn)
+    from database.inquiry_price_schema import init_inquiry_price_schema
+    init_inquiry_price_schema(conn)
     cursor = conn.cursor()
 
     table_schemas = {

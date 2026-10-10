@@ -17,7 +17,8 @@ import config
 from helpers.inquiry_nomination import default_item_nominations
 sys.path.insert(0, '.')
 from helpers.generate_inquiry_no import generate_inquiry_no_by_project
-from services.inquiry_price_service import add_historical_lowest_prices
+from services.inquiry_price_service import add_historical_lowest_prices, capture_inquiry_price_snapshots
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -461,7 +462,7 @@ def get_inquiry(inquiry_id):
         """, legacy_params)
         details = [dict(row) for row in cursor.fetchall()]
         if user and not supplier_id_for_response:
-            add_historical_lowest_prices(cursor, inquiry, details)
+            add_historical_lowest_prices(cursor, inquiry, details, legacy=True)
         supplier_freights = _get_inquiry_supplier_freights(cursor, inquiry_id)
         conn.close()
         return jsonify({
@@ -1677,9 +1678,98 @@ def _approve_inquiry_impl(inquiry_id):
         VALUES (?, ?, ?, ?, ?, ?, ?)
     """, ('purchase_inquiry', inquiry_id, user['id'], user['real_name'], result_text, remark, now))
 
+    cursor.execute('SELECT approval_status FROM purchase_inquiries WHERE id=?', (inquiry_id,))
+    if cursor.fetchone()['approval_status'] == '已同意':
+        capture_inquiry_price_snapshots(cursor, inquiry_id, now)
     conn.commit()
     conn.close()
     return jsonify({'success': True})
+
+
+@inquiry_bp.route('/purchase-inquiries/<int:inquiry_id>/price-history/<int:item_id>', methods=['GET', 'POST'])
+def inquiry_comparable_price_history(inquiry_id, item_id):
+    """Show provenance and store explicit, scoped, revocable equivalence approvals."""
+    user = session.get('user')
+    if not user:
+        return jsonify(success=False, message='未登录'), 401
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""SELECT r.role_name FROM users u LEFT JOIN roles r ON r.id=u.role_id
+                          WHERE u.id=?""", (user['id'],))
+        role_row = cursor.fetchone()
+        role = role_row['role_name'] if role_row else None
+        can_confirm = role in ('系统管理员', '材料审批负责人')
+        if not role or role == '供应商' or (request.method == 'POST' and not can_confirm):
+            return jsonify(success=False, message='无权查看或确认历史价格匹配'), 403
+        if request.method == 'POST':
+            cursor.execute('BEGIN IMMEDIATE')
+        cursor.execute('SELECT * FROM purchase_inquiries WHERE id=?', (inquiry_id,))
+        inquiry_row = cursor.fetchone()
+        if not inquiry_row:
+            return jsonify(success=False, message='询价单不存在'), 404
+        legacy = request.args.get('legacy') == '1'
+        if legacy:
+            cursor.execute('SELECT 1 FROM purchase_inquiry_items WHERE inquiry_id=? LIMIT 1', (inquiry_id,))
+            if cursor.fetchone():
+                return jsonify(success=False, message='旧版明细已失效'), 409
+            cursor.execute("""
+                SELECT d.*, m.material_name, m.material_code, m.specification, m.detail_spec,
+                       m.brand, 0 AS is_cash_price, u.unit_name
+                FROM purchase_inquiry_details d JOIN materials m ON m.id=d.material_id
+                LEFT JOIN units u ON u.id=m.unit_id WHERE d.inquiry_id=? AND d.id=?
+            """, (inquiry_id, item_id))
+        else:
+            cursor.execute("""
+                SELECT i.*, m.material_name, m.material_code, m.specification, u.unit_name
+                FROM purchase_inquiry_items i JOIN materials m ON m.id=i.material_id
+                LEFT JOIN units u ON u.id=m.unit_id WHERE i.inquiry_id=? AND i.id=?
+            """, (inquiry_id, item_id))
+        item_row = cursor.fetchone()
+        if not item_row:
+            return jsonify(success=False, message='材料明细不存在'), 404
+        row = dict(item_row)
+        add_historical_lowest_prices(cursor, dict(inquiry_row), [row], legacy=legacy)
+        if request.method == 'GET':
+            return jsonify(success=True, data=row, can_confirm=can_confirm)
+        data = request.get_json(silent=True) or {}
+        if data.get('current_key') != row['historical_price_current_key']:
+            return jsonify(success=False, message='材料规格已变更，请刷新后重新核对'), 409
+        key = data.get('history_key')
+        histories = row['historical_price_matches'] + row['historical_price_candidates']
+        source = next((h for h in histories if h['history_key'] == key), None)
+        if not source:
+            return jsonify(success=False, message='无可确认的同地区、同单位、同口径历史记录'), 400
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        if data.get('action') == 'revoke':
+            if not source.get('rule_id'):
+                return jsonify(success=False, message='该匹配没有人工确认规则'), 400
+            cursor.execute("""UPDATE inquiry_price_match_rules SET revoked_at=?, revoked_by=?
+                              WHERE id=? AND revoked_at IS NULL""", (now, user['id'], source['rule_id']))
+        elif data.get('action') == 'confirm':
+            reason = str(data.get('reason') or '').strip()
+            if not reason or len(reason) > 500:
+                return jsonify(success=False, message='请填写500字以内的规格核对依据'), 400
+            if source['match_type'] != '待确认':
+                return jsonify(success=False, message='该记录已匹配，无需重复确认'), 409
+            cursor.execute("SELECT real_name, username FROM users WHERE id=?", (user['id'],))
+            actor = cursor.fetchone()
+            description = {k: source[k] for k in row['historical_price_current_description']}
+            cursor.execute("""
+                INSERT INTO inquiry_price_match_rules
+                (current_key, history_key, current_description, history_description,
+                 confirmed_by, confirmed_name, reason, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (row['historical_price_current_key'], key,
+                  json.dumps(row['historical_price_current_description'], ensure_ascii=False),
+                  json.dumps(description, ensure_ascii=False), user['id'],
+                  actor['real_name'] or actor['username'], reason, now))
+        else:
+            return jsonify(success=False, message='无效的匹配操作'), 400
+        conn.commit()
+        return jsonify(success=True, message='匹配规则已更新，原始单据和报价未改动')
+    finally:
+        conn.close()
 
 
 @inquiry_bp.route('/purchase-inquiries/<int:inquiry_id>/recall', methods=['POST'])
@@ -1821,7 +1911,7 @@ def print_inquiry_approval(inquiry_id):
         """, (user.get('id'),))
         role = cursor.fetchone()
         if role and role['role_name'] != '供应商':
-            add_historical_lowest_prices(cursor, inquiry, items or details or [])
+            add_historical_lowest_prices(cursor, inquiry, items or details or [], legacy=not bool(items))
 
     cursor.execute("""
         SELECT ar.*, u.real_name as approver_real_name
@@ -2002,6 +2092,21 @@ def print_inquiry_approval(inquiry_id):
                     </tr>
 """
 
+    provenance_rows = []
+    for entry in items or details or []:
+        source = entry.get('historical_price_source')
+        if source:
+            evidence = (f"{source['match_type']}；{source['inquiry_no']}；{source['inquiry_date']}；"
+                        f"{source.get('project_name') or '-'}；{source.get('supplier_name') or '-'}；"
+                        f"原规格：{source.get('detail_spec') or '未记录'}；"
+                        f"{'现金含税单价' if source['is_cash_price'] else '普通含税单价'}；"
+                        f"{source['price_basis']}；{source['parameter_source']}；"
+                        f"确认人：{source.get('confirmed_name') or '自动匹配'}")
+        else:
+            evidence = entry.get('historical_price_reason') or '无可比历史审批成交记录'
+        provenance_rows.append(f"<div>{text(entry.get('material_name'))} / {text(entry.get('detail_spec'))}：{text(evidence)}</div>")
+    provenance_html = ''.join(provenance_rows)
+
     html = f"""
     <!DOCTYPE html>
     <html>
@@ -2097,6 +2202,10 @@ def print_inquiry_approval(inquiry_id):
                     {rows_html}
                 </tbody>
             </table>
+            <div style="font-size:10px;line-height:1.5;margin:8px 0;">
+                <strong>历史价格来源与口径：</strong>本单之前已审批含税单价，现金价分开，不含运费；未确认的相似规格不计入。
+                {provenance_html}
+            </div>
             <div class="summary-grid">
                 <div>
                     <strong>各供应商拟定合计：</strong>{supplier_totals_html}
