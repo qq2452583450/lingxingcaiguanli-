@@ -18,3 +18,15 @@ def test_inquiry_list_preserves_approval_but_removes_online_quote_status():
     assert 'colspan="8"' in table
     html = Path("index.html").read_text(encoding="utf-8")
     assert "<th>报价状态</th>" not in html
+
+
+def test_inquiry_list_has_no_unused_column_after_hiding_quote_status():
+    html = Path("index.html").read_text(encoding="utf-8")
+    table = html.split('<table id="inquiryListTable">', 1)[1].split("</table>", 1)[0]
+    assert table.count("<col style=") == 8
+    assert table.count("<th>") == 8
+    assert 'width:220px' in table
+    assert 'width:240px' in table
+    css = Path("static/css/style.css").read_text(encoding="utf-8")
+    assert "#inquiryListTable td:nth-child(1)" in css
+    assert "#inquiryListTable td:nth-child(3)" in css

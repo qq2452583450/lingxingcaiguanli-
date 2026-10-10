@@ -201,6 +201,11 @@ tbody td {
 tbody tr:nth-child(even) { background: #f8fafc; }
 tbody tr:hover { background: #eff6ff; }
 
+#inquiryListTable th:nth-child(1), #inquiryListTable td:nth-child(1),
+#inquiryListTable th:nth-child(3), #inquiryListTable td:nth-child(3),
+#inquiryListTable th:nth-child(5), #inquiryListTable td:nth-child(5) { white-space: nowrap; }
+#inquiryListTable td:nth-child(2) { overflow-wrap: anywhere; }
+
 /* ============ Status Badges ============ */
 .status {
     display: inline-block; padding: 3px 10px; border-radius: 12px;
