@@ -14,7 +14,7 @@ def test_approval_tables_wrap_without_hiding_quote_columns():
     assert "width: calc(100vw - 24px)" in rules
     assert "max-width: none" in rules
     assert "table-layout: fixed" in rules
-    assert "min-width: 0" in rules
+    assert "min-width: 0 !important" in rules
     assert "white-space: normal !important" in rules
     assert "overflow-wrap: anywhere" in rules
     assert "overflow: hidden" not in rules
