@@ -2106,7 +2106,7 @@ async function viewInquiry(id) {
             const qsText = { draft: '未发布', collecting: '报价中', locked: '已锁定' }[qs] || qs;
             const qsClass = { draft: 'status-draft', collecting: 'status-pending', locked: 'status-agreed' }[qs] || '';
             document.getElementById('detailContent').innerHTML = `
-                <div class="card">
+                <div class="card inquiry-detail-info">
                     <p><strong>单号:</strong> ${i.inquiry_no}</p>
                     <p><strong>日期:</strong> ${i.inquiry_date || '-'}</p>
                     <p><strong>项目:</strong> ${escapeHtml(i.project_display_name || [i.project_city, i.project_code, i.project_name].filter(Boolean).join(' / ') || '-')}</p>
@@ -2127,7 +2127,7 @@ async function viewInquiry(id) {
                     ${i.approval_status === '草稿' && currentUser && i.applicant_id === currentUser.id ? `<button class="btn btn-secondary" onclick="importDraftQuoteSheet(${i.id})">询比价导入</button>` : ''}
                 </div>
                 <h4 style="margin:15px 0;">询价明细</h4>
-                <div class="table-container">
+                <div class="table-container inquiry-detail-table">
                     ${renderMergedDetailTable(flatDetails, {
                         showSelected: true,
                         supplierSummaries: data.supplier_summaries,
@@ -5779,6 +5779,9 @@ document.getElementById('stockInForm').addEventListener('submit', async (e) => {
 
 function openModal(id) {
     const modal = document.getElementById(id);
+    if (id === 'modal-detail') {
+        modal.classList.toggle('inquiry-detail-modal', !!modal.querySelector('.inquiry-detail-info'));
+    }
     modal.classList.add('show');
 
     // 打开询价单模态框时加载数据
