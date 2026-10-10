@@ -24,6 +24,11 @@ def deployment_repositories(tmp_path):
     git(tmp_path, 'clone', str(source), str(server))
     (source / 'app.txt').write_text('new', encoding='utf-8')
     git(source, 'commit', '-am', 'release')
+    git(source, 'branch', 'deploy-release')
+    sha = git(source, 'rev-parse', 'HEAD')
+    git(source, 'bundle', 'create', str(server / f'deploy-production-{sha}.bundle'), 'refs/heads/deploy-release')
+    # Server-side deployment must not need a reachable GitHub remote.
+    git(server, 'remote', 'set-url', 'origin', 'https://unreachable.example.invalid/repository.git')
     return source, server
 
 
@@ -61,6 +66,8 @@ def test_workflow_rejects_wrong_revision(deployment_repositories):
     workflow = yaml.safe_load(Path('.github/workflows/deploy-prod.yml').read_text(encoding='utf-8'))
     step = next(step for step in workflow['jobs']['deploy']['steps'] if step['name'] == 'Sync prod source')
     script = step['with']['script'].strip().split('-Command "', 1)[1].removesuffix('"')
+    sha = git(source, 'rev-parse', 'HEAD')
+    shutil.copy(server / f'deploy-production-{sha}.bundle', server / 'deploy-production-invalid-revision.bundle')
     script = script.replace('C:\\wwwroot\\lxclgl', str(server)).replace('${{ github.sha }}', 'invalid-revision')
     result = subprocess.run([powershell, '-NoProfile', '-NonInteractive', '-Command', script], capture_output=True, text=True)
     assert result.returncode != 0
@@ -75,7 +82,7 @@ def test_skip_sync_rejects_missing_or_wrong_revision_before_installing(expected,
     source, server = deployment_repositories
     monkeypatch.setenv('SECRET_KEY', 'test-only-not-a-production-secret')
     result = subprocess.run(
-        [powershell, '-NoProfile', '-NonInteractive', '-File', str(Path('deploy/deploy.ps1').resolve()),
+        [powershell, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(Path('deploy/deploy.ps1').resolve()),
          '-AppDir', str(server), '-SkipGitSync', '-ExpectedCommit', expected],
         capture_output=True, text=True,
     )

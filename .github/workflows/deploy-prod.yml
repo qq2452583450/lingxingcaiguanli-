@@ -18,6 +18,26 @@ jobs:
     if: github.ref == 'refs/heads/prod'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout verified deployment source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare and transfer deployment bundle
+        env:
+          DEPLOY_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          DEPLOY_SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          DEPLOY_SSH_PORT: ${{ secrets.PROD_SSH_PORT || 22 }}
+        run: |
+          set -euo pipefail
+          git branch deploy-release "$GITHUB_SHA"
+          git bundle create production.bundle refs/heads/deploy-release
+          key_file="$RUNNER_TEMP/lxclgl-deploy-key"
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$key_file"
+          chmod 600 "$key_file"
+          scp -i "$key_file" -P "$DEPLOY_SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=accept-new production.bundle "$DEPLOY_SSH_USER@$DEPLOY_SSH_HOST:C:/wwwroot/lxclgl/deploy-production-$GITHUB_SHA.bundle"
       - name: Sync prod source
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -28,7 +48,7 @@ jobs:
           script_stop: true
           command_timeout: 20m
           script: |
-            powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $ErrorActionPreference = 'Continue'; $AppDir = 'C:\wwwroot\lxclgl'; $Diag = Join-Path $AppDir 'deploy-diagnostic.txt'; Set-Location -LiteralPath $AppDir; 'deploy_sha=${{ github.sha }}' | Set-Content -LiteralPath $Diag; git status --short *>&1 | Add-Content -LiteralPath $Diag; git stash push -m 'deploy-autostash-${{ github.sha }}' *>&1 | Add-Content -LiteralPath $Diag; if ($LASTEXITCODE -ne 0) { throw 'Unable to preserve local changes' }; function Invoke-Retry($Name, [scriptblock]$Command) { for ($i = 1; $i -le 5; $i++) { ('{0}_attempt={1}' -f $Name, $i) | Add-Content -LiteralPath $Diag; & $Command *>&1 | Add-Content -LiteralPath $Diag; $Exit = $LASTEXITCODE; ('{0}_exit={1}' -f $Name, $Exit) | Add-Content -LiteralPath $Diag; if ($Exit -eq 0) { return }; Start-Sleep -Seconds 15 }; throw ($Name + ' failed after retrying') }; Invoke-Retry 'fetch' { git -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1 -c http.lowSpeedTime=60 fetch --no-tags origin prod }; Invoke-Retry 'checkout' { git checkout prod }; Invoke-Retry 'rebase' { git rebase origin/prod }; $Actual = (git rev-parse HEAD).Trim(); if ($LASTEXITCODE -ne 0 -or $Actual -ne '${{ github.sha }}') { throw 'Production revision mismatch' } }"
+            powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $ErrorActionPreference = 'Continue'; $AppDir = 'C:\wwwroot\lxclgl'; $Diag = Join-Path $AppDir 'deploy-diagnostic.txt'; Set-Location -LiteralPath $AppDir; 'deploy_sha=${{ github.sha }}' | Set-Content -LiteralPath $Diag; git status --short *>&1 | Add-Content -LiteralPath $Diag; git stash push -m 'deploy-autostash-${{ github.sha }}' *>&1 | Add-Content -LiteralPath $Diag; if ($LASTEXITCODE -ne 0) { throw 'Unable to preserve local changes' }; function Invoke-Retry($Name, [scriptblock]$Command) { for ($i = 1; $i -le 5; $i++) { ('{0}_attempt={1}' -f $Name, $i) | Add-Content -LiteralPath $Diag; & $Command *>&1 | Add-Content -LiteralPath $Diag; $Exit = $LASTEXITCODE; ('{0}_exit={1}' -f $Name, $Exit) | Add-Content -LiteralPath $Diag; if ($Exit -eq 0) { return }; Start-Sleep -Seconds 15 }; throw ($Name + ' failed after retrying') }; $Bundle = Join-Path $AppDir 'deploy-production-${{ github.sha }}.bundle'; git bundle verify $Bundle *>&1 | Add-Content -LiteralPath $Diag; if ($LASTEXITCODE -ne 0) { throw 'Invalid deployment bundle' }; Invoke-Retry 'fetch' { git fetch $Bundle 'refs/heads/deploy-release:refs/remotes/origin/prod' }; Invoke-Retry 'checkout' { git checkout prod }; Invoke-Retry 'rebase' { git rebase origin/prod }; $Actual = (git rev-parse HEAD).Trim(); if ($LASTEXITCODE -ne 0 -or $Actual -ne '${{ github.sha }}') { throw 'Production revision mismatch' } }"
       - name: Restart production service
         uses: appleboy/ssh-action@v1.0.3
         with:
