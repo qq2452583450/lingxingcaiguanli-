@@ -1827,9 +1827,6 @@ function renderInquiryTable(inquiries) {
         return;
     }
     tbody.innerHTML = inquiries.map(i => {
-        const qs = i.quote_status || 'draft';
-        const qsText = { draft: '未发布', collecting: '报价中', locked: '已锁定' }[qs] || qs;
-        const qsClass = { draft: 'status-draft', collecting: 'status-pending', locked: 'status-agreed' }[qs] || '';
         return `
         <tr>
             <td>${i.inquiry_no}</td>
@@ -1839,7 +1836,6 @@ function renderInquiryTable(inquiries) {
             <td>¥${(i.total_amount || 0).toFixed(2)}</td>
             <td>${i.is_below_library_price == 1 ? '是' : '否'}</td>
             <td><span class="status ${getStatusClass(i.approval_status)}">${i.approval_status}</span></td>
-            <td><span class="status ${qsClass}">${qsText}</span></td>
             <td style="white-space:nowrap;">
                 <button class="btn btn-secondary" style="padding:4px 8px;font-size:12px;" onclick="viewInquiry(${i.id})">查看</button>
                 ${i.approval_status === '已同意' ? `<button class="btn btn-primary" style="padding:4px 8px;font-size:12px;" onclick="printInquiryApproval(${i.id})">打印签字单</button>` : ''}
@@ -2102,9 +2098,6 @@ async function viewInquiry(id) {
                 .reduce((sum, summary) => sum + (Number(summary.tax_freight) || 0), 0);
             // Modern inquiries require nomination. Lowest is only a comparison marker.
             const displayTotal = isLegacy ? (i.total_amount || 0) : calcTotal + detailFreightTotal;
-            const qs = i.quote_status || 'draft';
-            const qsText = { draft: '未发布', collecting: '报价中', locked: '已锁定' }[qs] || qs;
-            const qsClass = { draft: 'status-draft', collecting: 'status-pending', locked: 'status-agreed' }[qs] || '';
             document.getElementById('detailContent').innerHTML = `
                 <div class="card inquiry-detail-info">
                     <p><strong>单号:</strong> ${i.inquiry_no}</p>
@@ -2114,15 +2107,10 @@ async function viewInquiry(id) {
                     <p><strong>运费:</strong> ¥${detailFreightTotal.toFixed(2)}</p>
                     <p><strong>总金额:</strong> ¥${displayTotal.toFixed(2)}</p>
                     <p><strong>状态:</strong> <span class="status ${getStatusClass(i.approval_status)}">${i.approval_status}</span></p>
-                    <p><strong>报价状态:</strong> <span class="status ${qsClass}">${qsText}</span>${i.quote_deadline ? ` (截止: ${i.quote_deadline})` : ''}</p>
                     <p><strong>低于库内价:</strong> ${i.is_below_library_price == 1 ? '是' : '否'}</p>
                     <p><strong>备注:</strong> ${i.remark || '-'}</p>
                 </div>
                 <div style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap;">
-                    ${qs === 'draft' ? `<button class="btn btn-primary" onclick="publishQuotes(${i.id})">发布给供应商报价</button>` : ''}
-                    ${qs === 'collecting' ? `<button class="btn btn-warning" onclick="lockQuotes(${i.id})">锁定报价</button>` : ''}
-                    ${qs === 'locked' ? '<span style="color:var(--scs);font-size:13px;">报价已锁定，供应商无法修改</span>' : ''}
-                    <a href="/supplier-portal" target="_blank" class="btn btn-secondary" style="text-decoration:none;">供应商报价入口</a>
                     ${i.approval_status === '草稿' && currentUser && i.applicant_id === currentUser.id ? `<button class="btn btn-secondary" onclick="exportDraftQuoteSheet(${i.id})">询比价导出</button>` : ''}
                     ${i.approval_status === '草稿' && currentUser && i.applicant_id === currentUser.id ? `<button class="btn btn-secondary" onclick="importDraftQuoteSheet(${i.id})">询比价导入</button>` : ''}
                 </div>
