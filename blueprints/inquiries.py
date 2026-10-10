@@ -1942,7 +1942,9 @@ def print_inquiry_approval(inquiry_id):
             return '—'
         whole, fraction = f"{float(value):,.4f}".split('.')
         source = row.get('historical_price_source') or {}
-        rate = quote_tax_rate(source.get('tax_rate')).removeprefix('税率 ')
+        rate = quote_tax_rate(source.get('tax_rate'))
+        if rate.startswith('税率 '):
+            rate = rate[len('税率 '):]
         return f"¥{whole}.{fraction.rstrip('0').ljust(2, '0')}/{rate}"
 
     def quote_tax_rate(value):
